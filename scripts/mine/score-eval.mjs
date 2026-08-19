@@ -128,21 +128,23 @@ async function runFts(queries) {
     const values = b.map((r, j) => `(${j}, '${sq(tsq(r.q))}', '${sq(r.gold)}')`).join(",");
     const sql = `
 WITH q(i, tq, gold) AS (VALUES ${values})
-SELECT q.i, q.gold, coalesce(r.pos, 0), coalesce(r.keys, '')
-FROM q LEFT JOIN LATERAL (
-  SELECT max(CASE WHEN t.key_number = q.gold THEN t.rn END) AS pos,
-         string_agg(t.key_number, ',' ORDER BY t.rn) AS keys
-  FROM (
-    SELECT p.key_number, row_number() OVER (ORDER BY ts_rank_cd(p.fts, tsq) DESC) AS rn
-    FROM preprints p, to_tsquery('english', q.tq) tsq
-    WHERE p.fts @@ tsq
-    ORDER BY ts_rank_cd(p.fts, tsq) DESC
-    LIMIT ${TOPN}
-  ) t
-) r ON true
-ORDER BY q.i;`;
+SELECT q.i, t.key_number
+FROM q, LATERAL (
+  SELECT p.key_number
+  FROM preprints p, to_tsquery('english', q.tq) tsq
+  WHERE p.fts @@ tsq
+  ORDER BY ts_rank_cd(p.fts, tsq) DESC
+  LIMIT ${TOPN}
+) t;`;
     const out = await psqlRows(sql);
-    for (const [j, , pos, keys] of out) { ranks[i + Number(j)] = Number(pos) || 0; if (CAPTURE) lists[i + Number(j)] = (keys || "").split(",").filter(Boolean); }
+    const acc = new Map();
+    for (const [j, key] of out) { const idx = i + Number(j); (acc.get(idx) ?? acc.set(idx, []).get(idx)).push(key); }
+    for (let z = i; z < i + b.length; z++) {
+      const list = acc.get(z) ?? [];
+      if (CAPTURE) lists[z] = list;
+      const pos = list.indexOf(queries[z].gold);
+      ranks[z] = pos < 0 ? 0 : pos + 1;
+    }
     if ((i / BATCH) % 5 === 0) log(`  fts ${i + b.length}/${queries.length}`);
   }
   return ranks;
@@ -186,26 +188,26 @@ async function encodeCloudflare(texts) {
 async function runDense(armName, queries, vectors) {
   const a = ARMS[armName];
   const ranks = [], lists = [];
-  const B = numArg("--dense-batch", 25);
+  // ONE STATEMENT PER QUERY, vector inlined as a literal — not a LATERAL over a
+  // VALUES list. Measured: with the vector coming from a VALUES row the planner
+  // will not use the HNSW index and a batch crawls; with a literal it is an
+  // Index Scan using idx_pp_emb_*_hnsw at ~2 ms. Statements are still sent in
+  // one psql session so the round-trip is amortised, which is where the batching
+  // win actually lives.
+  const B = numArg("--dense-batch", 100);
   for (let i = 0; i < queries.length; i += B) {
     const b = queries.slice(i, i + B);
-    const vs = vectors.slice(i, i + B);
-    const values = b.map((r, j) => `(${j}, '[${vs[j].join(",")}]'::vector(${a.dim}), '${sq(r.gold)}')`).join(",");
-    const sql = `SET hnsw.ef_search = ${EF_SEARCH};
-WITH q(i, v, gold) AS (VALUES ${values})
-SELECT q.i, q.gold, coalesce(r.pos, 0), coalesce(r.keys, '')
-FROM q LEFT JOIN LATERAL (
-  SELECT max(CASE WHEN t.key_number = q.gold THEN t.rn END) AS pos,
-         string_agg(t.key_number, ',' ORDER BY t.rn) AS keys
-  FROM (
-    SELECT e.key_number, row_number() OVER (ORDER BY e.embedding ${a.op} q.v) AS rn
-    FROM ${a.table} e ORDER BY e.embedding ${a.op} q.v LIMIT ${TOPN}
-  ) t
-) r ON true
-ORDER BY q.i;`;
-    const out = await psqlRows(sql);
-    for (const [j, , pos, keys] of out) { ranks[i + Number(j)] = Number(pos) || 0; if (CAPTURE) lists[i + Number(j)] = (keys || "").split(",").filter(Boolean); }
-    if ((i / B) % 10 === 0) log(`  ${armName} ${i + b.length}/${queries.length}`);
+    const stmts = b.map((r, j) => `SELECT ${i + j} AS qi, key_number FROM ${a.table} ORDER BY embedding ${a.op} '[${vectors[i + j].join(",")}]'::vector(${a.dim}) LIMIT ${TOPN};`);
+    const out = await psqlRows(`SET hnsw.ef_search = ${EF_SEARCH};\n` + stmts.join("\n"));
+    const acc = new Map();
+    for (const [qi, key] of out) { const idx = Number(qi); if (!Number.isFinite(idx)) continue; (acc.get(idx) ?? acc.set(idx, []).get(idx)).push(key); }
+    for (let z = i; z < i + b.length; z++) {
+      const list = acc.get(z) ?? [];
+      if (CAPTURE) lists[z] = list;
+      const pos = list.indexOf(queries[z].gold);
+      ranks[z] = pos < 0 ? 0 : pos + 1;
+    }
+    log(`  ${armName} ${i + b.length}/${queries.length}`);
   }
   if (CAPTURE) writeFileSync(`${OUT}/${armName}.lists.json`, JSON.stringify(lists));
   return ranks;

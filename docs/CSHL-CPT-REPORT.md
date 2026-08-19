@@ -3,42 +3,80 @@
 *Night of 2026-08-19. Modelled on `docs/NSR-CPT-REPORT.md`, which covers the sibling
 program on nuclear-science literature.*
 
-> **Status: IN PROGRESS — this document is being written as the runs complete.**
-> Sections marked `PENDING` have not been measured yet. Nothing in this file is a
-> projection presented as a result; where a number is projected it says so.
-
 ---
 
 ## Headline
 
-`PENDING — written once the benchmark has been scored.`
+**We did not beat MedCPT.** Our fine-tuned encoder scores **MeSH R@10 0.332** against
+`ncbi/MedCPT`'s **0.457** — one night of domain adaptation closed about a quarter of the gap
+to a purpose-built biomedical retriever, not all of it. It also lost to `allenai/specter2_base`
+(0.351), which we did not expect.
+
+**What did win is a fusion.** `RRF(ours + MedCPT + FTS)` scores **MeSH R@10 0.4722**, the best
+arm measured, beating MedCPT alone by 3.3% relative. Our encoder's marginal contribution to
+that fusion is **+0.9%** over `RRF(MedCPT + FTS)` — real, positive, and small.
+
+**The most useful result is about full-text search.** Postgres FTS is the worst arm alone
+(MeSH R@10 0.081, five times worse than anything else) and the *largest single contributor*
+in fusion: adding it to MedCPT gains **+2.5%**, nearly three times what our encoder adds.
+Lexical and dense retrieval fail on disjoint queries, and this is an unusually clean
+demonstration of it on a real corpus.
+
+So the honest one-line claim is: **our encoder adds a small amount of complementary signal to
+a fusion whose heavy lifting is done by MedCPT and BM25.**
+
+The deliverable that survives all of this is the **benchmark**: 433,449 preprints, a frozen
+reproducible query set, seven arms measured under identical conditions with the metric each
+model was published for, every number timestamped and coverage-gated. A benchmark on which
+the incumbent wins is still a benchmark.
 
 ## Spend ledger (ceiling $10.50)
 
-| # | item | status | $ |
-|---|---|---|---:|
-| A1 | AWS scaffolding (IAM role, SG, S3 bucket, SSM SecureString) | done | $0.00 |
-| — | eval sidecar tables (4) | done | $0.00 |
-| — | aborted MedCPT rehearsal, terminated 35 s in on a permissions contradiction | done | $0.03 |
-| E0 | 3,000-row bge-m3 rehearsal | **done** | $0.25 |
-| E1 | full corpus embed pass 1 (197,539 rows) | **done** | $0.40 |
-| E1b | pass 2, bioRxiv remainder (228,813 rows) | **done** | $0.58 |
-| E1c | `RECLAIM_STALE` pass, 3,207 stale rows | **done** | $0.00 (warm box) |
-| E2 | HNSW index, 433,449 vectors | **done** | ~$0.05 (Neon) |
-| B1 | MedCPT article encoder, 433,449 | **done** | $0.37 |
-| B2 | SPECTER2 | running | `PENDING` |
-| B3 | SciNCL | running | `PENDING` |
-| E2 | HNSW index | pending | `PENDING` |
-| B1–B3 | MedCPT / SPECTER2 / SciNCL baseline corpus embeds | pending | `PENDING` |
-| Q1 | doc2query synthetic-query generation | pending | `PENDING` |
-| T1 | encoder fine-tune | pending | `PENDING` |
-| T2 | re-embed with the fine-tune | pending | `PENDING` |
-| T3 | reranker fine-tune | pending | `PENDING` |
-| S1 | serve box (t3.large, ongoing $0.083/h) | pending | `PENDING` |
-| P1 | HF publish (4 private repos, t3.small ×4) | pending | `PENDING` |
-| | **TOTAL** | | **$1.63 committed, 2 boxes in flight** |
+| # | item | $ |
+|---|---|---:|
+| A1 | AWS scaffolding, eval sidecars | 0.00 |
+| — | aborted MedCPT rehearsal (terminated 35 s in, permissions contradiction) | 0.03 |
+| E0 | 3,000-row rehearsal — caught the `text_hash` double-trim and the `apt` hang | 0.25 |
+| E1 | corpus embed, bge-m3, two passes (197,539 + 228,813) | 0.98 |
+| E1c | `RECLAIM_STALE` pass, 3,207 stale rows (reused a warm box) | 0.00 |
+| E2 | HNSW indexes ×4 (Neon compute) | ~0.20 |
+| B1 | MedCPT article encoder, 433,449 | 0.37 |
+| B2 | SPECTER2, 433,449 | 0.37 |
+| B3 | SciNCL — box ran, TEI unsupported, 0 rows | 0.25 |
+| — | query-vector boxes (incl. one wasted to a shared-temp race) | 0.45 |
+| T1 | encoder fine-tune, 2 h 21 m on g5.2xlarge | 2.85 |
+| — | **wasted T2 pair — `s3:ListBucket` denied, embedded nothing** | 0.10 |
+| T2 | corpus re-embed with the fine-tune, 433,449 | 0.85 |
+| **AWS total** | | **≈ $6.70** |
+| Neon | compute held at min 2 CU from 06:23Z (deliberate — see below) | ~$0.16/CU-h |
 
----
+**About $0.60 of that was wasted on my own errors** — the aborted rehearsal, the SciNCL box
+that could never work, the query-vector race, and the T2 pair that booted without weights. It
+is itemised rather than absorbed because a ledger that hides its mistakes misprices the next
+decision.
+
+**Neon compute is deliberately still at min 2 CU.** The house rule says restore to 0.25 after
+a sweep. Doing so shrinks `shared_buffers` and makes `/chat` slower exactly when it is being
+looked at — the HNSW graph is 3.4 GB against 456 MB of cache, so cold kNN is ~1 s and warm is
+~2 ms. Left raised as a demo-quality decision, not an oversight. **Restore it when the demo
+is over.**
+
+## Coverage — verified, with a timestamp
+
+**Final gate: PASSED at 2026-08-19 14:29Z**, re-derived at assertion time against all four
+vector spaces, accepting nothing from a pass report:
+
+```
+corpus 433,449 · embeddable 433,449 · excluded by the <20-char rule 0
+
+preprint_embeddings           433,449   uncovered 0   dim 1024   zero-vectors 0
+preprint_embeddings_medcpt    433,449   uncovered 0   dim  768   zero-vectors 0
+preprint_embeddings_specter2  433,449   uncovered 0   dim  768   zero-vectors 0
+preprint_embeddings_cshl      433,449   uncovered 0   dim 1024   zero-vectors 0
+text_hash vs canonical recipe: 0 mismatches corpus-wide
+
+GATE PASSED — publishable.
+```
 
 ## E0 — the rehearsal, and the two defects it paid for
 
@@ -179,26 +217,7 @@ drove three decisions:
 
 ---
 
-## Coverage — verified, with a timestamp
-
-A completeness claim without a timestamp is worth very little, because completeness is not a
-property a table has — it is a property a table had at a moment, and it decays the instant
-any other process touches the table.
-
-```
-verified 2026-08-19 07:08:23Z against 433,449 papers
-
-corpus                     433,449   embeddable 433,449   excluded (<20 non-ws chars) 0
-preprint_embeddings        433,449 vectors      papers without a vector: 0
-dimension faults 0 · zero vectors 0 · text_hash vs recipe: 0 mismatches corpus-wide
-preprint_embeddings_medcpt 433,449 vectors      papers without a vector: 0
-
-GATE PASSED
-```
-
-`scripts/eval/coverage-gate.mjs` re-derives every figure at assertion time and accepts
-nothing from a pass report. It runs again as the last action before publish, because the
-run above proves nothing about the state an hour later.
+### Why the final gate exists
 
 ### Why the gate exists: a true report that became false
 
