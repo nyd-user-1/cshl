@@ -969,3 +969,21 @@ here, `md5(embed_text)` vs `preprint_embeddings.text_hash`, which is the only as
 file → SQL → worker → TEI.
 
 Found by a $0.25 rehearsal nobody was required to run, via a parity check nobody asked for.
+
+### DOCTRINE ADDENDUM — a rule's purpose is part of the rule (credit: lane-mine, 02:5x)
+
+> "Compliance that's cheaper for me than for the program isn't caution, it's deference."
+
+When you can see that a rule's **stated purpose** doesn't reach your case, say so in a message
+at the moment you notice — do not note it in a report and comply anyway. A live optimization
+filed in a document and left for someone to find is not raised; it is deferred at the program's
+expense. The correct artifact is one sentence, sent immediately: *"Rule X exists to prevent Y.
+My case doesn't produce Y. Requesting authorization to proceed — it's N minutes of otherwise
+idle time."*
+
+Worked example: the Phase-2 gate existed to prevent harvesting against an incomplete corpus.
+The OpenAlex citation walk never reads our corpus. The gate's purpose could not reach it, and
+~24 minutes of wall-clock were spent complying with a rule that wasn't about this. **The lane
+identified it correctly in its own Phase-1 report and filed it; the lead read that report and
+did not act on it.** Both halves are the failure — flagging into a document that the decider
+has already read is not escalation, and reading a flag without ruling on it is not review.

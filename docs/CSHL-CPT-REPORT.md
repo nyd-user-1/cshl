@@ -21,7 +21,8 @@ program on nuclear-science literature.*
 | — | eval sidecar tables (4) | done | $0.00 |
 | — | aborted MedCPT rehearsal, terminated 35 s in on a permissions contradiction | done | $0.03 |
 | E0 | 3,000-row bge-m3 rehearsal | **done** | $0.25 |
-| E1 | full corpus embed, bge-m3, cap 4000 (two launches — see note) | running | `PENDING` |
+| E1 | full corpus embed pass 1 (197,539 rows) | **done** | $0.40 |
+| E1b | pass 2, bioRxiv remainder | armed | `PENDING` |
 | E2 | HNSW index | pending | `PENDING` |
 | B1–B3 | MedCPT / SPECTER2 / SciNCL baseline corpus embeds | pending | `PENDING` |
 | Q1 | doc2query synthetic-query generation | pending | `PENDING` |
@@ -30,7 +31,7 @@ program on nuclear-science literature.*
 | T3 | reranker fine-tune | pending | `PENDING` |
 | S1 | serve box (t3.large, ongoing $0.083/h) | pending | `PENDING` |
 | P1 | HF publish (4 private repos, t3.small ×4) | pending | `PENDING` |
-| | **TOTAL** | | **$0.28 so far** |
+| | **TOTAL** | | **$0.68 so far** |
 
 ---
 
@@ -109,6 +110,33 @@ rather than to fix the one instance.
 
 Neither of these is exotic. Both are the ordinary consequence of a rig assembled by string
 interpolation and pointed at a moving target, and both are invisible to "did it exit zero?"
+
+### E1 pass 1 — measured
+
+| | |
+|---|---|
+| rows | 197,539 |
+| wall-clock (first to last `embedded_at`) | 235.2 s |
+| **throughput** | **840 rows/s** across 2 × g6e.xlarge (420/s per box) |
+| error lines in the worker log | **0** — no TEI failures, no skips, no reconnects |
+| dimension / model / zero-vector faults | 0 / 0 / 0 |
+| `text_hash` mismatches vs the recipe | **0 / 197,539** |
+| embeddable papers left uncovered | **0** |
+
+Against the pre-flight projection of 250–325 rows/s, the rig ran **~2.6× faster**. The
+projection was derived from NSR's measured token throughput on a corpus of much shorter
+inputs; it was conservative in the right direction, which is the direction to be wrong in
+when the number is being used to decide how much GPU to buy.
+
+The zero-mismatch `text_hash` result is the one worth pausing on: the E0 rehearsal produced
+2 mismatches in 3,000 rows, so the same defect would have produced roughly 130 here. It is
+the difference between a corpus whose staleness column can be trusted and one where it
+quietly cannot.
+
+Note the log evidence specifically. NSR could only offer *data-side parity* for its
+equivalent claim, because its box destroyed `/var/log/embed.log` on self-termination. Here
+the log was read off a live box mid-sweep, so "0 errors" is an observation rather than an
+inference.
 
 ## The corpus
 
