@@ -43,7 +43,10 @@ const EXTRACTQ = `${MINE}/queries-extract.jsonl`;
 mkdirSync(EVAL, { recursive: true });
 
 const HOLDOUT = numArg("--holdout", 0.25);      // NSR parity
-const TEXT_CAP = numArg("--text-cap", 2000);    // the embed rig's input recipe cap
+// Must match the embed rig's input recipe or the text a model trains on and the
+// text it embeds diverge. LANE-RIG-PORT's launch menu item E1 settled on 4000
+// (98.9% of documents left whole vs 69.2% at 2000, for +$0.11), so 4000 it is.
+const TEXT_CAP = numArg("--text-cap", 4000);
 const NEG_TARGET = numArg("--negs", 8);
 const POS_PER_ANCHOR = numArg("--pos", 2);
 const EVAL_CAP = numArg("--eval-cap", 10000);   // NSR froze 9,995 held-out queries

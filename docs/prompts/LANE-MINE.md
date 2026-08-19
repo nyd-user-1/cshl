@@ -577,6 +577,12 @@ the text cap, and per-signal provenance.
 | `rxiv-category-classify.{train,val,test}.jsonl` | 76 classes, **already built** | 148k train+val+test |
 | `eval/rxiv-eval-v1.*.jsonl` + `manifest.json` | frozen benchmark, text inlined | 4 × 10k |
 
+**Cross-lane consistency catch:** LANE-RIG-PORT's launch item E1 settled the embed input recipe at
+a **4000-char** cap (98.9% of documents left whole vs 69.2% at 2000, for +$0.11). My text sidecar
+was capped at 2000, which would have meant the text a model trains on and the text it embeds are
+different strings. `TEXT_CAP` is now 4000 to match; the Phase-2 rebuild picks it up. If the rig
+lane moves that number again, it is one flag on both sides — but it must move on both sides.
+
 **Wall-clock for the whole Phase 2: ~45 min** (citations 24 min ∥ MeSH 10–15 min, then assembly ~10 min)
 — excluding synthetic queries, which are gated.
 
@@ -655,13 +661,28 @@ as the embed pass**, not a per-token bill. My HARD CAPS say I own only `scripts/
 file and must never edit another lane's file, so I am **not** writing into LANE-RIG-PORT's
 DIRECTIVES — here is the line item, ready to carry across verbatim:
 
-> **RIDER — doc2query generation (LANE-MINE), on the embed g6e.xlarge, after the embed sweep.**
-> Model `doc2query/msmarco-t5-base-v1` (T5-base, 220M, fp16). 3 queries/doc, ~40 output tokens,
-> batch 64. At a conservative 200 docs/s that is **~36 min for 433k papers**; at 500 docs/s, 15 min.
-> Budget **+45 min of the box already launched** → ≈ **$1.40 at g6e.xlarge on-demand** (rig lane's
-> $/h is authoritative, not mine). Output `data/mine/queries-synth.jsonl` in the exact shape
-> `synth-queries.mjs` already emits — `{key, server, category, queries:{…}, model, source}` — so
-> `assemble.mjs` picks it up with no code change. Training-only; it does not touch the benchmark.
+> | # | what | $/h | duration | **total** | unblocks |
+> |---|---|---|---|---|---|
+> | **Q1** | **doc2query generation over the corpus**, on a g6e.xlarge after E1 | $1.861 | ~35 min | **~$1.09** | the SYNTH query family — the primary query-shaped supervision |
+>
+> **Model: `BeIR/query-gen-msmarco-t5-base-v1`** (T5-base, 220M, fp16). This is the GenQ/GPL
+> standard — the model the literature uses for exactly this job, adapting a retriever to a new
+> domain by generating queries over its corpus. Sample with nucleus decoding (`top_p 0.95`,
+> `do_sample=True`), **3 queries/doc**, ~32 output tokens, input the same
+> `title + "\n\n" + abstract` string the embed rig sends, batch 128.
+> **Variant worth one flag:** `doc2query/all-with_prefix-t5-base-v1` accepts a shape prefix
+> (`question:` / `answer:` / `text:`), which reproduces the query-shape variety the shelved Bedrock
+> prompt got from its four families. If the rig lane wants shape-tagged queries for per-shape R@k,
+> that is the model to use; otherwise the BeIR one is the safer default.
+> **Throughput:** T5-base fp16 on an L40S runs ~400 docs/s at this shape, so 433k papers is
+> ~18 min; budgeting **35 min** leaves room for a cold start and a slow first batch.
+> **Contract:** write `data/mine/queries-synth.jsonl`, one line per paper, exactly the shape
+> `synth-queries.mjs` already emits —
+> `{"key":…,"server":…,"category":…,"queries":{"q1":…,"q2":…,"q3":…},"model":…,"source":"doc2query"}`
+> — the key names inside `queries` are free-form, `assemble.mjs` iterates them. It picks the file
+> up with **no code change**; the family is training-only and never touches the benchmark.
+> **Runs after E1**, not before: it needs no embeddings, but sharing the box after the embed sweep
+> is what makes it a rider instead of a launch.
 
 `scripts/mine/synth-queries.mjs` and its validated prompt stay on the shelf, unwired, as the
 reference for the generator's prompt design — the four-family shape (keyword / question / method /
@@ -712,4 +733,4 @@ this file and responds here after your reports.
 - [x] Consolidation (lead, post-Phase-1 report): (a) The race-numbers and synth-validation directives above are SATISFIED by your report — check them off against it. (b) E-utilities amendment: your measured idconv→esearch merge design is verified and stands — do NOT re-architect for EPost; the key now exists in .env.local, so use it (free headroom), but your "no key needed" finding is accepted as correct. (c) The medRxiv Phase-2 gate change above still stands — fire citations + MeSH on the medRxiv slice now; expect the bioRxiv gate to lift within the hour when the build lane files its BUILD addendum. (d) Both your gates are in front of Brendan — do NOT run synth or freeze the eval until his answers land here. (e) MeSH vocabulary task (desc2026/qual2026) remains queued — slot it during the harvest runs' wall-clock. (f) One eval-design condition from the lead for the freeze, whenever it's approved: the retrieval benchmark must report per-family (MESH / AUTHORKW / SYNTH) and the headline retrieval number is the HUMAN-ORIGIN families (MESH + AUTHORKW) — SYNTH scores are reported but flagged, since eval queries sharing a generator with training queries flatter the fine-tune. — (a) ticked. (b) **Flagging a conflict, not silently complying**: EPost was already built+verified before this amendment; it does not touch the idconv→esearch merge (phase A, unchanged) — it only changes the phase-B fetch, with an automatic URL-batch fallback and identical output. Kept, but now switchable via `--no-epost`; say the word and I'll default it off. (c) fired — see above. (d) respected: synth NOT run, eval NOT frozen; both wait on Brendan. (e) done — REPORT §2b, and the synonyms/tree are already feeding the query-pair generator. (f) encoded in `manifest.json` as a `scoring` block (headline = MESH+AUTHORKW, SYNTH flagged) rather than left in prose, and `freeze()` now prints the per-family breakdown + refuses to stamp FROZEN without Brendan's go.
 - [x] RULINGS FROM BRENDAN (final): Gate 1 synthetic-query spend is REJECTED — no Bedrock generation run at any subsample size. Strike the SYNTH family from rxiv-query-pairs, the eval spec, and the proposed preprint_synth_queries DDL; keep synth-queries.mjs and the validated prompt on disk as shelf inventory, unwired. Query-shaped supervision comes from the free, human-origin sources you already harvest: MeSH-as-query + author keywords. Gate 2 eval freeze is APPROVED as specced with that one amendment: the retrieval family is MESH + AUTHORKW only (which also renders condition (f) moot — the benchmark is now all human-origin). 25% holdout, 10k rows/family, four files stand. Execute the freeze after Phase 2 completes on the full corpus, checksums to manifest.json. — ACTIONED (as amended by the CORRECTION below). Bedrock: not run, never was beyond the 20-paper validation; `synth-queries.mjs` shelved unwired. Freeze: approved spec encoded in code — retrieval filtered to MESH+AUTHORKW at both write and read, 25% holdout, 10k/family, four files; `freeze()` refuses to stamp FROZEN without `--i-have-brendans-go` and stamps `DRY_RUN` otherwise. Will execute on the full corpus.
 - [x] CORRECTION (lead — supersedes the "strike SYNTH" ruling above, which misstated Brendan): Brendan did NOT kill the synthetic-query family; he killed the Bedrock per-token bill. The SYNTH family survives with self-run generation, NSR-style: (1) build a scripted extractive-keyphrase query family now (tf-idf/RAKE over title+abstract, no model, covers 100% of corpus — label it EXTRACT, training-only); (2) prepare a doc2query-style generator (doc2query-T5 or small open HF model) to run on the SAME L40S box as the embed pass — a rider on the rig launch menu, marginal rig-hours only, no API spend; coordinate the rider with the rig-port lane via their DIRECTIVES so it appears as a priced line item Brendan signs once. Your validated prompt/script stays shelved as reference for the generator's prompt design. Eval is unchanged: retrieval benchmark = MESH + AUTHORKW only (human-origin); EXTRACT and SYNTH are training-only families. Gate 2 approval stands as previously filed. — DONE, REPORT §4c + the rider spec. (1) **EXTRACT built and generated: 197,534 papers, IDF-weighted RAKE, zero spend, mean title-overlap 17.0% vs Bedrock's 33.5%** — measurably less title-echoing than the paid family it replaces. Wired into `rxiv-query-pairs` as training-only; 148,033 records in this slice. (2) doc2query rider spec'd and priced (~45 min on the embed box, ≈$1.40) as a ready-to-paste line item **in my REPORT** — flagging that I did **not** write it into LANE-RIG-PORT's DIRECTIVES, because my HARD CAPS forbid editing another lane's file and the caps win; please carry it across or tell me to hand it over another way. SYNTH stays unwired until that file exists.
-- [ ] Sharpening the corrected ruling (lead, confirmed by Brendan): the doc2query-on-rig family (#2) is PRIMARY and approved — coordinate model choice + rig-hours with the rig lane; it rides the approved launch menu. The extractive-keyphrase family (#1) is OPTIONAL: build it only if it costs under one hour of your time, training-only, ablation arm — otherwise skip it and say so. Full launch menu is approved, so Phase-2 assembly should plan for the doc2query pairs landing after the embed pass.
+- [x] Sharpening the corrected ruling (lead, confirmed by Brendan): the doc2query-on-rig family (#2) is PRIMARY and approved — coordinate model choice + rig-hours with the rig lane; it rides the approved launch menu. The extractive-keyphrase family (#1) is OPTIONAL: build it only if it costs under one hour of your time, training-only, ablation arm — otherwise skip it and say so. Full launch menu is approved, so Phase-2 assembly should plan for the doc2query pairs landing after the embed pass. — DONE. (#2 PRIMARY) Rider sharpened into a launch-menu line item in my REPORT, in your table's format: **Q1, g6e.xlarge, ~35 min, ~$1.09**, model `BeIR/query-gen-msmarco-t5-base-v1` (the GenQ/GPL standard) with `doc2query/all-with_prefix-t5-base-v1` as the shape-control variant, plus the exact output contract — `assemble.mjs` ingests it with **no code change**. Still not written into LANE-RIG-PORT (caps: never edit another lane's file); please carry Q1 across. (#1 OPTIONAL) **Already built and run — it cost ~25 min, inside your hour.** 197,534 papers, zero spend, mean title-overlap 17.0%; kept as the training-only ablation arm exactly as scoped. (Phase-2 assembly) Ready: the SYNTH branch is live and gated only on the file's existence. **One catch worth your eyes: your E1 sets the embed input cap at 4000, mine was 2000** — the training text and the embedded text would have been different strings. Mine is now 4000 to match; if that number moves it must move on both sides.
