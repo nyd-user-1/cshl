@@ -282,6 +282,47 @@ crash, no error, a healthy-looking process serving nothing. Now a `TEI_IMAGE` kn
 Both belong to the night's dominant failure mode — code that looks right, raises nothing, and
 does the wrong thing — and both were invisible until the path finally had to work.
 
+## An incident worth publishing: two arms, one model, no error
+
+While generating query vectors for the MedCPT and SPECTER2 arms, two files were produced:
+
+```
+queryvec-medcpt.jsonl   14,613,519 bytes   md5 e85304e0706ee933b4282fb1964e55b2
+queryvec-scincl.jsonl   14,613,519 bytes   md5 e85304e0706ee933b4282fb1964e55b2
+```
+
+Byte-identical. Two different encoders cannot produce identical floats on identical text, so
+at most one was correct and nothing in the output said which. Both had the right dimension
+(768), the right row count (2,000), the right query strings, valid JSON, and plausible float
+distributions. **No error was raised at any point.**
+
+Cause: two jobs were running concurrently on the same box — an original script and a fix-up
+issued after correcting an unrelated IAM gap — and both wrote to the same `/tmp/out.jsonl`
+before uploading under different names. A shared-temp-path race, self-inflicted.
+
+Underneath it sat a second failure of the same species: the instance role could write
+`logs/*` and `models/*` but not `eval/*`, so the first run's uploads died with `AccessDenied`
+— while the script printed `DONE specter2` regardless, because it never checked the exit
+code. It reported success on a failed upload.
+
+Had this shipped, the SciNCL row would have silently been MedCPT's numbers, and the table
+would have looked entirely reasonable.
+
+**Guards added, because "be more careful" is not a mechanism:**
+
+- per-model output paths, never a shared temp file;
+- the generator queries TEI's `/info` and **asserts the served model id equals the requested
+  one**, failing loudly on mismatch;
+- a **cross-arm digest comparison** — identical checksums across two models is treated as
+  fatal, not as output;
+- every step now emits `RESULT <arm> OK|TEI-UNSUPPORTED|EMBED-FAILED|UPLOAD-FAILED` with line
+  count and md5, so silence can no longer be mistaken for success.
+
+It is recorded here rather than quietly fixed because it is the clearest single example of
+this program's dominant failure mode, and because it was caught by exactly the practice the
+rest of the report advocates: comparing two artifacts that should differ, and noticing that
+they didn't.
+
 ## Methodology
 
 ### The frozen benchmark: `cshl-eval-v1`
@@ -362,7 +403,7 @@ is a follow-up rather than a completed claim.
 | **RRF(FTS + bge-m3)** | **0.136** | **0.317** | **0.218** |
 | `ncbi/MedCPT` | `PENDING` | | |
 | `allenai/specter2_base` | `PENDING` | | |
-| `malteos/scincl` | `PENDING` | | |
+| `malteos/scincl` | **NOT RUN** — TEI has no `text-embeddings-inference` support for this model | | |
 | **our fine-tune** | `PENDING` | | |
 
 ### AUTHORKW family (n = 759) — author-supplied keywords as the query
@@ -374,7 +415,7 @@ is a follow-up rather than a completed claim.
 | **RRF(FTS + bge-m3)** | **0.491** | **0.684** | **0.589** |
 | `ncbi/MedCPT` | `PENDING` | | |
 | `allenai/specter2_base` | `PENDING` | | |
-| `malteos/scincl` | `PENDING` | | |
+| `malteos/scincl` | **NOT RUN** — TEI has no `text-embeddings-inference` support for this model | | |
 | **our fine-tune** | `PENDING` | | |
 
 **Two things already visible, before our own model exists:**

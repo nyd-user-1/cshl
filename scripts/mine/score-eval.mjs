@@ -152,7 +152,8 @@ ORDER BY q.i;`;
 const ARMS = {
   bge:      { table: "preprint_embeddings",           op: "<=>", dim: 1024, note: "cosine distance" },
   medcpt:   { table: "preprint_embeddings_medcpt",    op: "<#>", dim: 768,  note: "negative inner product — MedCPT ranks by dot product on raw [CLS], not cosine" },
-  specter2: { table: "preprint_embeddings_specter2",  op: "<=>", dim: 768,  note: "cosine distance" },
+  specter2: { table: "preprint_embeddings_specter2",  op: "<#>", dim: 768,  note: "negative inner product — SPECTER2 is dot-product over raw [CLS] too (rig-port correction; scored with cosine it looks weak and reads as a model result rather than an operator bug)" },
+  scincl:   { table: "preprint_embeddings_scincl",    op: "<#>", dim: 768,  note: "negative inner product — raw [CLS], same family" },
   cshl:     { table: "preprint_embeddings_cshl",      op: "<=>", dim: 1024, note: "our fine-tune — rig-port's number, not mine to publish" },
 };
 
