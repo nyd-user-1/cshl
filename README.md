@@ -1,8 +1,15 @@
 > **CSHL — cloned from `/Code/nsr` on 2026-08-18.** This repo is a 1-1 duplicate of
 > NSRgpt (nsr @ `8c1b05b`) with the BNL mark swapped for the CSH logo. Everything
-> below still describes the NSR app and its data, and stays true until the new Neon
-> database and the two CSHL APIs land and the content is swapped over 1-1. Production:
-> **https://cshl.nysgpt.com**.
+> below still describes the NSR app and its data, and stays true until the two CSHL
+> APIs land and the content is swapped over 1-1. Production: **https://cshl.nysgpt.com**.
+>
+> **Database.** CSHL's own Neon project `cshl` (`snowy-pine-70124980`, aws-us-east-1,
+> Postgres 17, autoscale 0.25–4 CU, `vector` + `pg_trgm` enabled) exists and is empty.
+> Local `.env.local` (`DATABASE_URL`, `DATABASE_URL_UNPOOLED`) points at it, so every
+> loader run from this repo writes to CSHL and never to NSR. Vercel production
+> `DATABASE_URL` still points at the NSR database so the deployed site keeps rendering;
+> the same cshl strings are staged there as `CSHL_DATABASE_URL[_UNPOOLED]`. Cutting over
+> is a one-variable rename once there is data to serve.
 
 # NSRgpt — Nuclear Data Center
 
