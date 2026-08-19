@@ -43,6 +43,10 @@ DIM=${DIM:-1024}          # 768 for the MedCPT/SPECTER2/SciNCL baseline arms
 # MODEL_S3 re-embeds the corpus with OUR fine-tuned weights instead of a Hub
 # model — this is the train rig's Phase 3, moved onto the rig that is already
 # sharded and resume-safe. Set it to s3://<bucket>/models/<name>/<run>/final .
+# TEI ships one image per CUDA compute capability. 89 = Ada (L40S, L4);
+# 86 = Ampere (A10G, on g5). Running the wrong one means the container starts
+# and the model never loads. g6e capacity vanished mid-night, so this is a knob.
+TEI_IMAGE=${TEI_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:89-1.8}
 MODEL_S3=${MODEL_S3:-}
 NORMALIZE=${NORMALIZE:-1}          # 0 = store raw encoder output (MedCPT: dot product, not cosine)
 RECLAIM_STALE=${RECLAIM_STALE:-}   # 1 = also re-embed rows whose text_hash no longer matches the recipe
@@ -175,7 +179,7 @@ shutdown -h +120   # watchdog: nothing runs past 2h
 export AWS_DEFAULT_REGION=$REGION
 DBURL=\$(aws ssm get-parameter --name $PARAM --with-decryption --query Parameter.Value --output text)
 ${MODEL_S3:+mkdir -p /models/enc && aws s3 sync --only-show-errors $MODEL_S3 /models/enc}
-docker run -d --gpus all -p 8080:80 ${MODEL_S3:+-v /models/enc:/data} --name tei ghcr.io/huggingface/text-embeddings-inference:89-1.8 \
+docker run -d --gpus all -p 8080:80 ${MODEL_S3:+-v /models/enc:/data} --name tei $TEI_IMAGE \
   --model-id $MODEL_ID --dtype float16 --max-client-batch-size 256 --max-batch-tokens 131072
 # Node from the official static tarball, NOT apt. The nodesource route wedged
 # apt-get update for 3+ minutes on E0 (2026-08-19) with the box billing at
@@ -233,7 +237,12 @@ EOF
   fi
   ID=""
   for sn in $CANDIDATES; do
-    OUT=$(launch_in "$sn")
+    # `|| true` is load-bearing: under `set -e`, a failing command substitution
+    # in an assignment exits the script — so without it the AZ-failover loop
+    # dies on the FIRST capacity error and never tries a second AZ, which is
+    # the entire reason the loop exists. Found the only way this kind of bug is
+    # ever found: when the fallback path finally had to run.
+    OUT=$(launch_in "$sn") || true
     case "$OUT" in
       i-*) ID="$OUT"; echo "box $i: $ID ($sn)"; break ;;
       *InsufficientInstanceCapacity*|*Unsupported*) echo "box $i: no capacity in $sn — next AZ" ;;
