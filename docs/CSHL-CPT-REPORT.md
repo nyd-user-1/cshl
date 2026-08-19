@@ -20,7 +20,7 @@ program on nuclear-science literature.*
 | A1 | AWS scaffolding (IAM role, SG, S3 bucket, SSM SecureString) | done | $0.00 |
 | — | eval sidecar tables (4) | done | $0.00 |
 | — | aborted MedCPT rehearsal, terminated 35 s in on a permissions contradiction | done | $0.03 |
-| E0 | 3,000-row bge-m3 rehearsal | running | `PENDING` |
+| E0 | 3,000-row bge-m3 rehearsal | **done** | $0.25 |
 | E1 | full corpus embed, bge-m3, cap 4000 | pending | `PENDING` |
 | E2 | HNSW index | pending | `PENDING` |
 | B1–B3 | MedCPT / SPECTER2 / SciNCL baseline corpus embeds | pending | `PENDING` |
@@ -30,9 +30,57 @@ program on nuclear-science literature.*
 | T3 | reranker fine-tune | pending | `PENDING` |
 | S1 | serve box (t3.large, ongoing $0.083/h) | pending | `PENDING` |
 | P1 | HF publish (4 private repos, t3.small ×4) | pending | `PENDING` |
-| | **TOTAL** | | **$0.03 so far** |
+| | **TOTAL** | | **$0.28 so far** |
 
 ---
+
+## E0 — the rehearsal, and the two defects it paid for
+
+The rehearsal exists to turn a projection into a measurement. It did that, and it also
+caught two things that would each have been far more expensive after the full sweep.
+
+**Throughput.** 3,000 rows embedded end-to-end in ~6 s on one g6e.xlarge (L40S, TEI,
+bge-m3 fp16, 4 lanes, cap 4000) — roughly **500 rows/s including worker startup**, against
+a projection of 250–325 rows/s derived from NSR's measured token throughput. So the
+projection was conservative by ~1.6×. Caveat, stated plainly: 6 seconds is too short to
+reach steady state, so treat 500 rows/s as a floor and E1's own number as the real one.
+
+**Vector quality: clean.** 3,000/3,000 at dim 1024, `model='bge-m3'` on every row, zero
+zero-vectors, L2 norms exactly 1.00000, 3,000 distinct text hashes, and a kNN self-probe
+returning the probe paper at cosine distance 0.0000 with sane neighbours (0.248, 0.308).
+
+**Defect 1 — `text_hash` did not mean what it says.** The parity check
+(`text_hash` vs `md5()` of the SQL recipe) returned **2 mismatches out of 3,000**, not 0.
+Cause: the worker applied a JavaScript `.trim()` to the string SQL had already built.
+JS `.trim()` strips all whitespace; SQL `trim()` strips spaces; and `left(..., 4000)` can
+leave a whitespace character sitting exactly on the truncation boundary, which only the JS
+side then removed. Both offending rows were 4,000 characters in SQL and 3,999 after a
+JS-style trim — the truncation-boundary case precisely.
+
+It is 0.07% of rows and it is not cosmetic. `text_hash` is the *only* mechanism that can
+detect a paper whose abstract was rewritten by a later version — `ON DELETE CASCADE`
+covers removal, not revision — and the ingest lane and this lane had just agreed that a
+`RECLAIM_STALE` pass is mandatory after every incremental walk. A row whose stored hash can
+never equal the recomputed hash is re-embedded on every pass, forever, and never converges.
+At 433k rows that is ~300 rows of silent churn per pass, in the one column whose job is to
+be trustworthy about staleness.
+
+Fixed by making the worker a pass-through: SQL is now the single author of the input
+string, and the hash is `md5()` of exactly what is sent to the encoder. The 3,000 rehearsal
+rows were deleted so the full sweep produces one internally consistent corpus.
+
+**Defect 2 — the rig hung on `apt`, not on anything it was doing.** Boot wedged for 3+
+minutes inside `apt-get update` from the NodeSource repository, with TEI already healthy
+and the box billing at $0.031/min. It would have run to the 2-hour watchdog and burned
+~$3.72 — a third of the night's ceiling — without embedding a row. Salvaged live over SSM
+(Node installed from the official static tarball, worker started by hand), which is where
+the throughput number above came from. The rig now installs Node from that tarball in
+user-data: no repository, no lock contention, no mirror to hang on. Node exists on that box
+to run one script; it never needed a package manager.
+
+The general lesson, which is worth more than either fix: **a rehearsal is not for
+confirming that the happy path works.** Both defects were invisible to "did it produce
+vectors?" and both were caught by checking an invariant and watching the clock.
 
 ## The corpus
 

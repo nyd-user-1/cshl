@@ -32,6 +32,7 @@
 #     slice's own passages. One less credential on the box.
 set -euo pipefail
 : "${MODE:?}" "${TRAIN_NAME:?}" "${RUN_ID:?}" "${BUCKET:?}"
+EVAL_VERSION=${EVAL_VERSION:-cshl-eval-v1}
 MODEL_NAME=${MODEL_NAME:-cshl-encoder-bge-m3}
 BASE_MODEL=${BASE_MODEL:-BAAI/bge-m3}
 EPOCHS=${EPOCHS:-1}
@@ -78,6 +79,7 @@ fi
 #    version's TrainingArguments (confirmed via --help on NSR): rm -rf instead,
 #    and compute --warmup_steps.
 OUT=/opt/train/out
+export OUT_DIR="$OUT"
 CKPT_FLAG=""
 T0=$(date +%s)
 while true; do
@@ -166,6 +168,32 @@ dt = time.time() - t0
 print(f"[rehearsal-embed] n={len(texts)} dims={e.shape[1]} nan={bool(np.isnan(e).any())} "
       f"norm_mean={np.linalg.norm(e,axis=1).mean():.4f} rows_per_s={len(texts)/dt:.1f}")
 PY
+fi
+
+# 5b. Embed the frozen benchmark's queries with the fresh checkpoint, HERE, while
+#     the model is already resident in GPU memory. This is what takes the serve
+#     box off the eval critical path: without it, scoring our own arm needs a TEI
+#     endpoint stood up, warmed and healthy before a single query can be encoded.
+#     With it, the scorer just reads a jsonl. Costs seconds on a box we are
+#     already paying for.
+if aws s3 cp "s3://$BUCKET/eval/$EVAL_VERSION/queries.jsonl" /opt/train/queries.jsonl 2>/dev/null; then
+  $PY - <<'QEMB'
+import json, os, numpy as np
+from sentence_transformers import SentenceTransformer
+qs = [json.loads(l) for l in open('/opt/train/queries.jsonl') if l.strip()]
+m = SentenceTransformer(os.environ['OUT_DIR'])
+texts = [q['text'][:2000] for q in qs]
+# normalize=True: our arm is a cosine model (registry metric 'cosine') and the
+# corpus side is embedded through TEI, which normalizes. Both sides must agree.
+E = np.asarray(m.encode(texts, normalize_embeddings=True, batch_size=128, show_progress_bar=False))
+with open('/opt/train/qemb.jsonl', 'w') as f:
+    for q, v in zip(qs, E):
+        f.write(json.dumps({"qid": q["qid"], "v": [round(float(x), 6) for x in v]}) + "\n")
+print(f"[train.sh] embedded {len(qs)} eval queries, dim {E.shape[1]}")
+QEMB
+  aws s3 cp /opt/train/qemb.jsonl "s3://$BUCKET/eval/$EVAL_VERSION/qemb-$RUN_ID.jsonl" || true
+else
+  echo "[train.sh] no frozen queries at s3://$BUCKET/eval/$EVAL_VERSION/queries.jsonl - skipping query embed"
 fi
 
 # 6. Upload weights + logs. Weights FIRST: NSR's reranker box terminated with a

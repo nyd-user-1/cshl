@@ -170,8 +170,15 @@ DBURL=\$(aws ssm get-parameter --name $PARAM --with-decryption --query Parameter
 ${MODEL_S3:+mkdir -p /models/enc && aws s3 sync --only-show-errors $MODEL_S3 /models/enc}
 docker run -d --gpus all -p 8080:80 ${MODEL_S3:+-v /models/enc:/data} --name tei ghcr.io/huggingface/text-embeddings-inference:89-1.8 \
   --model-id $MODEL_ID --dtype float16 --max-client-batch-size 256 --max-batch-tokens 131072
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs
-mkdir -p /opt/embed && cd /opt/embed && npm init -y >/dev/null && npm i pg >/dev/null
+# Node from the official static tarball, NOT apt. The nodesource route wedged
+# `apt-get update` for 3+ minutes on E0 (2026-08-19) with the box billing at
+# \$0.031/min and TEI already healthy — the rig sat there paying for nothing and
+# would have run to the 2h watchdog. A tarball has no repo, no lock contention
+# and no mirror to hang on; node is only here to run one script.
+curl -fsSL --max-time 180 https://nodejs.org/dist/v22.11.0/node-v22.11.0-linux-x64.tar.xz -o /tmp/node.tar.xz
+mkdir -p /opt/node && tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1
+export PATH=/opt/node/bin:\$PATH
+mkdir -p /opt/embed && cd /opt/embed && npm init -y >/dev/null && npm i pg --no-audit --no-fund >/dev/null
 aws s3 cp s3://$BUCKET/worker.mjs worker.mjs
 for t in \$(seq 1 60); do curl -sf http://127.0.0.1:8080/health && break; sleep 5; done
 export PART=$i PARTS=$N PAGE=${PAGE:-1024} LANES=$LANES_UD

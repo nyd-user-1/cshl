@@ -105,7 +105,7 @@ async function buildText() {
   for (;;) {
     const rows = await psqlRows(
       `SELECT json_build_object(
-                'key', p.key_number, 'server', p.server, 'year', p.pub_year,
+                'key', p.key_number, 'doi', p.doi, 'server', p.server, 'year', p.pub_year,
                 'category', p.categories[1],
                 'title', p.title,
                 'abstract', p.abstract,
@@ -133,8 +133,11 @@ async function buildText() {
   }
   await out.drain(); await out.close();
   log(`corpus-text.jsonl: ${n} papers · ${human(bytesOf(TEXT))}`);
-  log(`  embed recipe (worker.mjs:94, cap ${TEXT_CAP}): ${truncated} papers (${((truncated / n) * 100).toFixed(2)}%) truncated by the cap`);
+  log(`  embed recipe (shared, cap ${TEXT_CAP}): ${truncated} papers (${((truncated / n) * 100).toFixed(2)}%) truncated by the cap`);
   log(`  ${notEmbeddable} papers (${((notEmbeddable / n) * 100).toFixed(3)}%) fail the rig's ≥20-char predicate — they get NO embedding, so they are excluded as positives`);
+  // The benchmark card has to state the truncation rate, so it is measured here
+  // and carried forward rather than quoted from memory at freeze time.
+  writeFileSync(`${MINE}/raw/text-stats.json`, JSON.stringify({ papers: n, cap: TEXT_CAP, truncated, truncated_pct: (truncated / n) * 100, not_embeddable: notEmbeddable, at: new Date().toISOString() }, null, 2));
 }
 
 // Load only what a stage needs: keys + category, never the abstracts.
@@ -494,7 +497,12 @@ async function freeze() {
   // `abstract` alongside it doubles the size of a file we intend to publish for
   // no information. Keep `title` (what a human reads in a result list) and
   // `embed_text` (what a model encodes); the abstract is the tail of the latter.
-  for await (const r of readJsonl(TEXT)) if (need.has(r.key)) text.set(r.key, { title: r.title, embed_text: r.embed_text });
+  // `doi` and `server` are not decoration: shipping embed_text alone bakes OUR
+  // 4000-char recipe into a benchmark others will compare against, and a team
+  // with a longer-context model must be able to build a full-text variant. With
+  // the DOI and the server on every row they can re-fetch the untruncated text
+  // from the public API. That turns a silent limitation into a documented one.
+  for await (const r of readJsonl(TEXT)) if (need.has(r.key)) text.set(r.key, { doi: r.doi, server: r.server, title: r.title, embed_text: r.embed_text });
   const T = (k) => ({ slug: k, ...(text.get(k) || {}) });
 
   const written = {};
@@ -545,6 +553,30 @@ async function freeze() {
       field: "embed_text",
       note: "Anything that feeds a model must consume embed_text. `title` and `abstract` are display fields; the cap applies to the CONCATENATION, not the abstract alone. Papers failing the rig's >=20 non-whitespace-char predicate get no embedding and are excluded as positives.",
     },
+    // Stated properties of the benchmark. These are credibility lines for an
+    // outside reader, and they belong in the artifact rather than in a chat log.
+    properties: {
+      positives_guaranteed_embeddable: {
+        value: true,
+        predicate: "length(regexp_replace(coalesce(title,'') || coalesce(abstract,''), '\\s+', '', 'g')) >= 20",
+        why: "A paper the encoder refuses to embed has no vector, so it can never be retrieved, so a benchmark containing it as a positive is unwinnable by construction — and that failure reads as model weakness, not as a broken benchmark. Every positive in every family is guaranteed to satisfy the encoder's own exclusion predicate.",
+      },
+      splits_recomputable: "Any split can be re-derived from split_rule below without access to this lane; the seeds are declared, not remembered.",
+    },
+    limitations: {
+      text_is_truncated: {
+        cap_chars: TEXT_CAP,
+        applies_to: "the concatenation title + '\\n\\n' + abstract, not the abstract alone",
+        affected_share: null,          // filled from raw/text-stats.json below
+        why: "Rows ship the single canonical `embed_text` string so every arm scores on byte-identical input. The cost is that our 4000-char recipe is baked into a benchmark others will compare against.",
+        mitigation: "Every row carries `slug` (the business key), `doi` and `server`. Full untruncated text is re-fetchable from the public API — https://api.{server}.org/details/{server}/{doi}/na/json — so a long-context variant of this benchmark can be built by anyone without our cooperation.",
+      },
+      mesh_coverage: {
+        share_of_corpus: "~36%",
+        why: "MeSH descriptors are assigned by NLM indexers to MEDLINE-indexed journal articles. Preprints carry none of their own, so labels arrive only via a published DOI: ~49% have one, ~95% of those resolve to a PMID, ~78% of those carry descriptors. This is structural, not a harvest gap.",
+        bias: "The covered subset skews older (published) and toward MEDLINE-indexed clinical journals, so it under-covers the newest and the most basic-science material. Any number from cshl-mesh-classify must say 'on the MEDLINE-indexed subset'. cshl-category-classify is the only 100%-coverage classifier target.",
+      },
+    },
     // Scoring contract (lead directive, 2026-08-19). Encoded here rather than
     // left in prose so the harness reads it instead of a human remembering it.
     scoring: {
@@ -561,6 +593,9 @@ async function freeze() {
     },
     files: {},
   };
+  const ts = existsSync(`${MINE}/raw/text-stats.json`) ? JSON.parse(readFileSync(`${MINE}/raw/text-stats.json`, "utf8")) : null;
+  if (ts) manifest.limitations.text_is_truncated.affected_share =
+    `${ts.truncated} of ${ts.papers} papers (${ts.truncated_pct.toFixed(2)}%) exceed the cap and are truncated`;
   for (const f of Object.keys(written)) {
     const p = `${EVAL}/${f}`;
     manifest.files[f] = { rows: written[f], bytes: bytesOf(p), sha256: await sha256(p) };
@@ -634,7 +669,7 @@ async function verify() {
   for (const f of ["cshl-eval-v1.retrieval.jsonl", "cshl-eval-v1.docdoc.jsonl", "cshl-eval-v1.mesh-classify.jsonl", "cshl-eval-v1.category-classify.jsonl"]) {
     const path = `${EVAL}/${f}`;
     if (!existsSync(path)) continue;
-    let n = 0, noText = 0;
+    let n = 0, noText = 0, noProv = 0;
     for await (const r of readJsonl(path)) {
       n++;
       const k = qslug(r);
@@ -642,9 +677,11 @@ async function verify() {
       if (f.startsWith("cshl-eval-v1.retrieval")) evalFam[r.meta?.family ?? "?"] = (evalFam[r.meta?.family ?? "?"] || 0) + 1;
       const t = r.positive ?? r;
       if (!t.embed_text) noText++;                        // the benchmark must be self-contained
+      if (!t.doi || !t.slug) noProv++;                    // ...and full text must be re-fetchable
     }
     log(`  ${f.padEnd(38)} ${String(n).padStart(7)} rows`);
     ok(noText === 0, `${f}: every row carries the canonical embed_text (${noText} without)`);
+    ok(noProv === 0, `${f}: every row carries slug + doi, so full text is re-fetchable (${noProv} without)`);
   }
   ok([...evalKeys].every(isHeldOut), `every benchmark query paper is inside the held-out reservation`);
   ok(Object.keys(evalFam).every((f) => ["MESH", "AUTHORKW"].includes(f)),

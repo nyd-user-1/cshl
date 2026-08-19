@@ -23,4 +23,11 @@ if [ -n "$DRYRUN" ]; then
 fi
 aws s3 cp "$SRC/train.jsonl"    "s3://$BUCKET/train/$NAME/train.jsonl"    --region $REGION
 aws s3 cp "$SRC/manifest.json"  "s3://$BUCKET/train/$NAME/manifest.json"  --region $REGION
+EVAL_VERSION=${EVAL_VERSION:-cshl-eval-v1}
+if [ -f "data/eval/$EVAL_VERSION/queries.jsonl" ]; then
+  aws s3 cp "data/eval/$EVAL_VERSION/queries.jsonl" "s3://$BUCKET/eval/$EVAL_VERSION/queries.jsonl" --region $REGION
+  echo "uploaded frozen queries for $EVAL_VERSION (the train box embeds them with the fresh checkpoint)"
+else
+  echo "NOTE: data/eval/$EVAL_VERSION/queries.jsonl absent - train box will skip the query embed"
+fi
 echo "uploaded s3://$BUCKET/train/$NAME/"

@@ -203,8 +203,17 @@ async function runRange(job, connOrMk, lo, hi, tag) {
     if (!rows.length) break
     cursor = rows[rows.length - 1].id
     pending = fetchPage() // prefetch: DB leg overlaps the GPU leg
+    // Pass-through, deliberately: SQL is the single author of the input string.
+    // This used to call .trim() in JS, which broke the documented invariant
+    // "text_hash is md5 of the EXACT string sent to the encoder" — JS .trim()
+    // strips all whitespace, SQL trim() strips spaces, and left(...,CAP) can
+    // expose a whitespace character at the truncation boundary that only JS
+    // then removed. Measured on the E0 rehearsal: 2 of 3,000 rows (both exactly
+    // 4,000 chars in SQL, 3,999 after a JS-style trim). Small, but it makes
+    // RECLAIM_STALE re-claim those rows on every pass forever, and the whole
+    // point of text_hash is to be the thing you can trust about staleness.
     const prepped = rows
-      .map((r) => ({ id: r.id, text: (r.text || '').trim() }))
+      .map((r) => ({ id: r.id, text: r.text ?? '' }))
       .filter((r) => r.text.length >= 3)
     if (prepped.length) {
       const done = await embedBatch(prepped)
