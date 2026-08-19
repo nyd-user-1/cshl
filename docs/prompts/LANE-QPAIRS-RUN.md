@@ -219,6 +219,51 @@ legitimately training near the wall I will extend it by hand rather than let a h
 killed — there is no checkpointing in this rig (rig doctrine §4, still an open gap), so a
 watchdog kill loses the entire run.
 
+### 2026-08-19T23:27Z — training is actually running, at the batch we asked for
+
+```
+[train.sh] 39999 training pairs in qpairs
+[train.sh] manifest disjointness: {"pass": true, ... "emitted_references_to_gold_papers": 0}
+[train.sh] attempt: batch=16 warmup_steps=250 gradient_checkpointing=off
+```
+
+**`batch=16` held — the OOM guard did not fire.** That is the second lever, and on the CITE
+run it was lost silently: the guard halved 8 → 4 on a 24 GB A10G and nobody named it until the
+next day. 2,500 steps (39,999 / 16), warmup 250. If it OOMs later the marker
+`OOM — halving batch to 8` is one of the strings the poller emits, so a quiet downgrade cannot
+happen twice.
+
+### 2026-08-19T23:30Z — the re-embed priced from measurement, not from the estimate
+
+The report estimated the re-embed at ~$0.85. Re-derived from the tables themselves rather than
+from a log — how long the previous sweeps actually took to write every row:
+
+```
+preprint_embeddings_medcpt   433,449 rows   embedded_at span  4.5 min
+preprint_embeddings_cshl     433,449 rows   embedded_at span 15.0 min   <- the CITE run
+```
+
+That span is embedding time only; a box also pays ~8-10 min of fixed overhead (boot, TEI model
+load, the node tarball, `npm i pg`) before it writes its first row. Priced against the rates
+pulled from the AWS pricing API — `g6e.xlarge $1.861/hr`, `g6e.2xlarge $2.24208/hr`,
+`g5.xlarge $1.006/hr`, `g5.2xlarge $1.212/hr`:
+
+| plan | wall-clock | $ |
+|---|---|---:|
+| `N=2` g6e.xlarge — 2 × (10 + 15) min | ~25 min | **1.55** |
+| `N=1` g6e.xlarge — 1 × (10 + 30) min | ~40 min | 1.24 |
+
+The fixed per-box overhead is why two boxes are not half the price of one. **Going with `N=2`
+as staged** — $0.31 buys back 15 minutes, and the doctrine's rule is time first, cost second,
+priced together. This is the priced-together part. If the train box overruns and threatens the
+$5.00 cap, `N=1` is the cheaper rung and the decision moves.
+
+Not switching to g5 for the embed: A10G is roughly 0.55× an L40S here, so `g5.xlarge` at
+$1.006/hr costs about the same *per document* as `g6e.xlarge` at $1.861/hr while taking nearly
+twice the wall-clock. Same money, more waiting. (It would also need `TEI_IMAGE=…:86-1.8` —
+the default `89` image is Ada-only, and the wrong one starts a container that never loads a
+model.)
+
 ---
 
 ## Spend ledger (revised — the train box is now live)
