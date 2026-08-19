@@ -475,7 +475,8 @@ inner product (`<#>`) over raw `[CLS]` for MedCPT and SPECTER2.
 | **ours — `cshl-encoder-bge-m3`** | **0.3320** | **0.2367** | **0.6693** | **0.5625** |
 | RRF(FTS + bge-m3) | 0.3167 | 0.2179 | 0.6838 | 0.5888 |
 | stock `BAAI/bge-m3` | 0.2861 | 0.1942 | 0.6522 | 0.5524 |
-| Postgres FTS | 0.0806 | 0.0626 | 0.2398 | 0.2286 |
+| Postgres FTS — `websearch_to_tsquery` (AND) | 0.0806 | 0.0626 | 0.2398 | 0.2286 |
+| Postgres FTS — OR + high-DF pruning *(variant)* | 0.0951 | — | 0.3544 | — |
 | `malteos/scincl` | **NOT RUN** — TEI has no `text-embeddings-inference` support | — | — | — |
 
 R@1 for the two headline arms: ours 0.157 (MeSH) / 0.461 (AUTHORKW); MedCPT 0.235 / 0.573.
@@ -531,6 +532,35 @@ Secondary levers, all unpulled: 40,000 of 132,793 available triplets, one epoch,
 
 A second run on `cshl-query-pairs` against this same frozen benchmark either closes the gap or
 refutes the hypothesis. **Both outcomes are publishable.** Staged and priced below; not fired.
+
+## Independent verification of the baseline arms
+
+The miner lane scored the baseline arms against the same frozen subsample using **their own
+scorer**, written without reference to this harness — deliberately, so that agreement would be
+evidence rather than a shared bug. All four arms agree **to four decimal places**:
+
+| arm | this harness | independent scorer |
+|---|---|---|
+| FTS (AND) | 0.0806 / 0.2398 | 8.06% / 23.98% |
+| stock bge-m3 | 0.2861 / 0.6522 | 28.61% / 65.22% |
+| SPECTER2 | 0.3513 / 0.7260 | 35.13% / 72.60% |
+| MedCPT | 0.4569 / 0.8076 | 45.69% / 80.76% |
+
+Their run also produced a **second lexical arm** we had not measured: `websearch_to_tsquery`
+with OR semantics plus pruning of terms appearing in >2% of documents — **MeSH R@10 0.0951,
+AUTHORKW R@10 0.3544**, materially above the standard AND path (0.0806 / 0.2398), and
+~10× faster in their implementation.
+
+It is reported as a **variant, not the headline baseline**, because a baseline whose value
+depends on a bespoke optimisation is not the thing an outside reader reproduces when they type
+"Postgres full-text search." The conventional AND path is the published number; this row exists
+so nobody mistakes the conventional number for the ceiling of lexical retrieval. On author
+keywords the pruned variant is **+48% relative** over the standard path — a large enough gap
+that anyone building on this should start from the variant, not the baseline.
+
+*Provenance note from that lane, recorded because it affects reproducibility:* their committed
+scorer has since been edited and no longer reproduces the table unchanged; the `.json` and
+`.ranks.json` files in their `data/mine/results/` are the artifacts of record.
 
 ## Method worth reusing: the served-model parity check
 
