@@ -28,6 +28,7 @@
 
 import { psqlRows, readJsonl, log, has, numArg, strArg, h32 } from "./lib.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 // Corpus document frequency, already computed for the EXTRACT family. Used here
 // to prune the tsquery: OR-ing every token of a MeSH query drags in terms like
@@ -83,6 +84,40 @@ async function loadQueries() {
     .sort((a, b) => a[0] - b[0]).slice(0, N).map(([, r]) => r);
 }
 
+// ── freeze the scoring subsample as its own artifact ─────────────────────────
+// The moment two arms score different query sets the cross-arm comparison is
+// meaningless — and a benchmark table whose arms are not comparable is worse
+// than no table, because it still looks authoritative. So the subsample is
+// frozen with its selection rule and a checksum, exactly like the benchmark, and
+// every arm (including rig-port's number for our own encoder) scores this file.
+async function freezeSubsample() {
+  const n = numArg("--n", 2000);
+  const all = [];
+  for await (const r of readJsonl(EVALF)) if (r.query && r.positive?.slug) all.push(r);
+  const picked = all.map((r) => [h32(`scoresample:${r.positive.slug}:${r.query}`), r])
+    .sort((a, b) => a[0] - b[0]).slice(0, n).map(([, r]) => r);
+  const path = `data/mine/eval/cshl-eval-v1.subsample-${n}.jsonl`;
+  writeFileSync(path, picked.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  const sha = createHash("sha256").update(readFileSync(path)).digest("hex");
+  const fam = {};
+  for (const r of picked) fam[r.meta?.family ?? "?"] = (fam[r.meta?.family ?? "?"] || 0) + 1;
+  const manifest = {
+    name: `cshl-eval-v1.subsample-${n}`,
+    parent: "cshl-eval-v1.retrieval.jsonl",
+    parent_rows: all.length,
+    rows: picked.length,
+    sha256: sha,
+    selection_rule: "lowest N by md5('scoresample:' + positive.slug + ':' + query)[0:8] / 0xffffffff — deterministic, reproducible without this lane",
+    families: fam,
+    why: "Full-10k FTS scoring measured at 104 min/arm; the subsample makes the five-arm table achievable tonight. EVERY arm must score THIS file — cross-arm comparison is void otherwise. Absolute numbers will differ on the full 10,000; that is a stated follow-up, not a hidden caveat.",
+    at: new Date().toISOString(),
+  };
+  writeFileSync(`data/mine/eval/subsample-manifest.json`, JSON.stringify(manifest, null, 2));
+  log(`froze ${path}`);
+  log(`  rows ${picked.length} · families ${JSON.stringify(fam)} · sha256 ${sha}`);
+  return manifest;
+}
+
 // ── FTS arm ──────────────────────────────────────────────────────────────────
 async function runFts(queries) {
   const ranks = [];
@@ -105,6 +140,65 @@ ORDER BY q.i;`;
     const out = await psqlRows(sql);
     for (const [j, , pos] of out) ranks[i + Number(j)] = Number(pos) || 0;
     if ((i / BATCH) % 5 === 0) log(`  fts ${i + b.length}/${queries.length}`);
+  }
+  return ranks;
+}
+
+// ── dense arms ───────────────────────────────────────────────────────────────
+// One implementation, parameterised by (table, operator), so MedCPT and SPECTER2
+// slot in the moment their query-side vectors exist. The operator is NOT
+// cosmetic: MedCPT ranks by dot product over raw [CLS] vectors, not cosine, and
+// using the wrong one silently reorders every result list.
+const ARMS = {
+  bge:      { table: "preprint_embeddings",           op: "<=>", dim: 1024, note: "cosine distance" },
+  medcpt:   { table: "preprint_embeddings_medcpt",    op: "<#>", dim: 768,  note: "negative inner product — MedCPT ranks by dot product on raw [CLS], not cosine" },
+  specter2: { table: "preprint_embeddings_specter2",  op: "<=>", dim: 768,  note: "cosine distance" },
+  cshl:     { table: "preprint_embeddings_cshl",      op: "<=>", dim: 1024, note: "our fine-tune — rig-port's number, not mine to publish" },
+};
+
+const EF_SEARCH = numArg("--ef-search", 100);   // HNSW recall knob; default 40 is too tight for R@10
+
+async function encodeCloudflare(texts) {
+  const acct = process.env.CF_ACCOUNT_ID, tok = process.env.CF_AI_TOKEN;
+  if (!acct || !tok) throw new Error("CF_ACCOUNT_ID / CF_AI_TOKEN not set");
+  const url = `https://api.cloudflare.com/client/v4/accounts/${acct}/ai/run/@cf/baai/bge-m3`;
+  const out = [];
+  for (let i = 0; i < texts.length; i += 50) {
+    const chunk = texts.slice(i, i + 50);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: chunk }),
+    });
+    const j = await res.json();
+    if (!j.success) throw new Error("cloudflare: " + JSON.stringify(j.errors).slice(0, 200));
+    out.push(...(j.result?.data ?? []));
+    if (i % 500 === 0) log(`  encoded ${i + chunk.length}/${texts.length}`);
+  }
+  return out;
+}
+
+async function runDense(armName, queries, vectors) {
+  const a = ARMS[armName];
+  const ranks = [];
+  const B = numArg("--dense-batch", 25);
+  for (let i = 0; i < queries.length; i += B) {
+    const b = queries.slice(i, i + B);
+    const vs = vectors.slice(i, i + B);
+    const values = b.map((r, j) => `(${j}, '[${vs[j].join(",")}]'::vector(${a.dim}), '${sq(r.gold)}')`).join(",");
+    const sql = `SET hnsw.ef_search = ${EF_SEARCH};
+WITH q(i, v, gold) AS (VALUES ${values})
+SELECT q.i, q.gold, coalesce(r.pos, 0)
+FROM q LEFT JOIN LATERAL (
+  SELECT rn AS pos FROM (
+    SELECT e.key_number, row_number() OVER (ORDER BY e.embedding ${a.op} q.v) AS rn
+    FROM ${a.table} e ORDER BY e.embedding ${a.op} q.v LIMIT ${KMAX}
+  ) t WHERE t.key_number = q.gold
+) r ON true
+ORDER BY q.i;`;
+    const out = await psqlRows(sql);
+    for (const [j, , pos] of out) ranks[i + Number(j)] = Number(pos) || 0;
+    if ((i / B) % 10 === 0) log(`  ${armName} ${i + b.length}/${queries.length}`);
   }
   return ranks;
 }
@@ -145,13 +239,34 @@ async function probe() {
 
 // ── main ─────────────────────────────────────────────────────────────────────
 const arm = strArg("--arm", "");
-if (has("--probe")) { await probe(); }
+if (has("--freeze-subsample")) { await freezeSubsample(); }
+else if (has("--probe")) { await probe(); }
 else if (arm === "fts") {
   const queries = await loadQueries();
   log(`${arm}: ${queries.length} queries from frozen cshl-eval-v1.retrieval.jsonl`);
   const t0 = Date.now();
   const ranks = await runFts(queries);
   report("fts", queries, ranks, { wall_clock_s: (Date.now() - t0) / 1000, subsample: N || null });
+} else if (ARMS[arm]) {
+  const queries = await loadQueries();
+  log(`${arm}: ${queries.length} queries · table ${ARMS[arm].table} · operator ${ARMS[arm].op} (${ARMS[arm].note}) · hnsw.ef_search=${EF_SEARCH}`);
+  const t0 = Date.now();
+  let vectors;
+  if (arm === "bge") {
+    log("  encoding queries via Cloudflare @cf/baai/bge-m3 (the path the app already uses in production)");
+    vectors = await encodeCloudflare(queries.map((r) => r.q));
+  } else {
+    const vf = strArg("--query-vectors", "");
+    if (!vf) { console.log(`${arm} needs --query-vectors <file.jsonl> ({q, vector}) — no local torch, so the query encoder must come from the rig lane`); process.exit(1); }
+    const byQ = new Map();
+    for await (const r of readJsonl(vf)) byQ.set(r.q ?? r.query, r.vector ?? r.embedding);
+    vectors = queries.map((r) => byQ.get(r.q));
+    const missing = vectors.filter((v) => !v).length;
+    if (missing) { console.log(`${missing} of ${queries.length} queries have no vector in ${vf} — refusing to score a partial set`); process.exit(1); }
+  }
+  if (vectors.length !== queries.length) { console.log(`encoder returned ${vectors.length} vectors for ${queries.length} queries — refusing`); process.exit(1); }
+  const ranks = await runDense(arm, queries, vectors);
+  report(arm, queries, ranks, { wall_clock_s: (Date.now() - t0) / 1000, subsample: N || null, table: ARMS[arm].table, operator: ARMS[arm].op, ef_search: EF_SEARCH });
 } else {
-  console.log("usage: score-eval.mjs --probe | --arm fts [--n N]");
+  console.log("usage: score-eval.mjs --probe | --arm fts|bge|medcpt|specter2 [--n N] [--query-vectors f.jsonl]");
 }

@@ -158,7 +158,7 @@ export const DatasetCard = memo(function DatasetCard({ d, variant, searchQuery }
           <button
             onClick={handleSendToChat}
             className="flex h-10 w-10 items-center justify-center rounded-full bg-foreground text-background shadow-lg transition-all hover:scale-110"
-            title="Ask NSRgpt about this dataset"
+            title="Ask RxivGPT about this dataset"
           >
             <ArrowUp className="h-4 w-4" />
           </button>

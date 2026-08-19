@@ -57,7 +57,7 @@ const CATEGORIES: FeatureCategory[] = [
           "Every claim cites NSR keynumbers and/or DOIs",
           "Sample prompts for new users",
           "Session history saved per user",
-          "One-click \u201CAsk NSRgpt about this\u201D from any record card",
+          "One-click \u201CAsk RxivGPT about this\u201D from any record card",
         ],
       },
     ],
@@ -277,7 +277,7 @@ function CategorySection({ category }: { category: FeatureCategory }) {
               )}
             </div>
 
-            {/* NSRgpt column */}
+            {/* RxivGPT column */}
             <div className="px-5 py-4 border-l border-border bg-nuclear/[0.03]">
               <ul className="space-y-1.5">
                 {row.nsrgpt.map((item, i) => (
@@ -319,10 +319,10 @@ function CategorySection({ category }: { category: FeatureCategory }) {
               )}
             </div>
 
-            {/* NSRgpt */}
+            {/* RxivGPT */}
             <div className="px-4 py-3 bg-nuclear/[0.03]">
               <p className="text-[10px] font-semibold uppercase tracking-widest text-nuclear mb-2">
-                NSRgpt
+                RxivGPT
               </p>
               <ul className="space-y-1">
                 {row.nsrgpt.map((item, i) => (
@@ -351,10 +351,10 @@ export default function Features() {
         {/* Header */}
         <div className="text-center mb-10">
           <h1 className="text-2xl md:text-4xl font-bold tracking-tight">
-            NSRgpt — Specs & Features Comparison
+            RxivGPT — Specs & Features Comparison
           </h1>
           <p className="mt-2 text-sm md:text-base text-muted-foreground max-w-[600px] mx-auto">
-            NNDC NSR Interface vs. NSRgpt | Side-by-Side Technical Specification
+            NNDC NSR Interface vs. RxivGPT | Side-by-Side Technical Specification
           </p>
         </div>
 
@@ -369,7 +369,7 @@ export default function Features() {
               <span className="text-xs font-bold uppercase tracking-wider">NNDC NSR (Existing)</span>
             </div>
             <div className="px-5 py-3 border-l border-background/20">
-              <span className="text-xs font-bold uppercase tracking-wider">NSRgpt</span>
+              <span className="text-xs font-bold uppercase tracking-wider">RxivGPT</span>
             </div>
           </div>
 
@@ -381,7 +381,7 @@ export default function Features() {
 
         {/* Footer */}
         <p className="text-center text-xs text-muted-foreground mt-8 max-w-[600px] mx-auto leading-relaxed">
-          NSRgpt is an independent project and is not affiliated with, endorsed by, or sponsored by Brookhaven National Laboratory, the National Nuclear Data Center (NNDC), or the U.S. Department of Energy. NSR data is publicly available and sourced from nndc.bnl.gov/nsr.
+          RxivGPT is an independent project and is not affiliated with, endorsed by, or sponsored by Cold Spring Harbor Laboratory, bioRxiv, or medRxiv. Preprint metadata is publicly available from the bioRxiv and medRxiv APIs. Preprints are not peer reviewed.
         </p>
         <p className="text-center text-xs text-muted-foreground mt-2">
           nsr.nysgpt.com | February 2026
@@ -393,7 +393,7 @@ export default function Features() {
             href="/search"
             className="inline-flex items-center gap-2 rounded-lg bg-foreground text-background px-5 py-2.5 text-sm font-medium hover:bg-foreground/85 transition-colors"
           >
-            Try NSRgpt Search
+            Try RxivGPT Search
             <ArrowRight className="h-4 w-4" />
           </a>
         </div>

@@ -89,10 +89,10 @@ export function AppLayout() {
                 </button>
               </div>
               <p className="text-sm text-muted-foreground leading-relaxed">
-                NSRgpt is an independent project and is not affiliated with, endorsed by, or sponsored by Brookhaven National Laboratory, the National Nuclear Data Center (NNDC), or the U.S. Department of Energy.
+                RxivGPT is an independent project and is not affiliated with, endorsed by, or sponsored by Cold Spring Harbor Laboratory, bioRxiv, or medRxiv.
               </p>
               <p className="text-sm text-muted-foreground leading-relaxed mt-3">
-                NSR data is publicly available and sourced from nndc.bnl.gov/nsr. This application is provided as-is for research and educational purposes.
+                Preprint metadata is publicly available from the bioRxiv and medRxiv APIs. Preprints are not peer reviewed. This application is provided as-is for research and educational purposes.
               </p>
               <button
                 onClick={() => setDisclaimerOpen(false)}

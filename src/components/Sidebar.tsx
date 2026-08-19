@@ -1,18 +1,14 @@
 import { useNavigate, useLocation } from "react-router-dom";
-import { STRUCTURE_DATA_V } from "@/lib/structure";
 import {
   SquarePen,
-  Atom,
   FileText,
   Search,
   ChevronDown,
+  Share2,
   MoreHorizontal,
   Pencil,
   Trash2,
   MessageSquare,
-  Grid3x3,
-  Share2,
-  Layers,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { useChatSessions } from "@/hooks/useChatSessions";
@@ -168,26 +164,12 @@ interface SidebarProps {
 }
 
 /** ENSDF sub-nav — indented, one size down from the top-level items. */
-const ENSDF_ITEMS: { label: string; path: string; prefetch: () => Promise<unknown> }[] = [
-  { label: "Chart", path: "/ensdf/chart", prefetch: () => Promise.all([import("@/pages/Structure"), fetch(`/data/structure/index.json?v=${STRUCTURE_DATA_V}`).catch(() => {})]) },
-  { label: "About", path: "/ensdf/about", prefetch: () => import("@/pages/ensdf/About") },
-  { label: "Help", path: "/ensdf/help", prefetch: () => import("@/pages/ensdf/Help") },
-  { label: "Evaluation index", path: "/ensdf/evaluation", prefetch: () => Promise.all([import("@/pages/ensdf/Evaluation"), fetch(`/data/structure/index.json?v=${STRUCTURE_DATA_V}`).catch(() => {})]) },
-  { label: "Policies", path: "/ensdf/docs", prefetch: () => import("@/pages/ensdf/Docs") },
-  { label: "Archive", path: "/ensdf/archive", prefetch: () => Promise.all([import("@/pages/ensdf/Archive"), fetch("/data/ensdf-archivals.json").catch(() => {})]) },
-];
 
 /** NSR sub-nav. */
-const NSR_ITEMS: { label: string; path: string; prefetch: () => Promise<unknown> }[] = [
-  { label: "Archive", path: "/nsr/archive", prefetch: () => Promise.all([import("@/pages/nsr/Archive"), fetch("/data/nsr-archivals.json").catch(() => {})]) },
-];
 
 /** Workspace sub-nav — a–z. */
 const WORKSPACE_ITEMS: { label: string; path: string; prefetch: () => Promise<unknown> }[] = [
-  { label: "Code", path: "/code", prefetch: () => Promise.all([import("@/pages/CodePage"), fetch("/data/nsdd-repos.json").catch(() => {})]) },
   { label: "Community", path: "/community", prefetch: () => import("@/pages/Community") },
-  { label: "Graph", path: "/graph/137", prefetch: () => import("@/pages/GraphPage") },
-  { label: "Tools", path: "/tools", prefetch: () => import("@/pages/Tools") },
 ];
 
 /** A collapsible nav group: the label opens its landing (or toggles when there is none); the chevron only toggles. */
@@ -235,30 +217,15 @@ function Group({ label, icon, active, expanded, onToggle, onOpen, onHover, items
 }
 
 /** XUNDL sub-nav — same shape as ENSDF's. */
-const XUNDL_ITEMS: { label: string; path: string; prefetch: () => Promise<unknown> }[] = [
-  { label: "Chart", path: "/xundl/chart", prefetch: () => Promise.all([import("@/pages/Structure"), fetch(`/data/structure/index.json?v=${STRUCTURE_DATA_V}`).catch(() => {})]) },
-  { label: "About", path: "/xundl/about", prefetch: () => import("@/pages/xundl/About") },
-  { label: "Archive", path: "/xundl/archive", prefetch: () => Promise.all([import("@/pages/xundl/Archive"), fetch("/data/xundl-archivals.json").catch(() => {})]) },
-];
 
 export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const [chatsExpanded, setChatsExpanded] = useState(true);
-  const onEnsdf = location.pathname.startsWith("/ensdf");
-  const onXundl = location.pathname.startsWith("/xundl");
-  const [ensdfExpanded, setEnsdfExpanded] = useState(onEnsdf);
-  const [xundlExpanded, setXundlExpanded] = useState(onXundl);
-  const onNsr = location.pathname === "/references" || location.pathname.startsWith("/nsr");
-  const [nsrExpanded, setNsrExpanded] = useState(onNsr);
-  const onWorkspace = ["/graph", "/tools", "/code", "/community"].some((p) => location.pathname.startsWith(p));
+  const onWorkspace = ["/community"].some((p) => location.pathname.startsWith(p));
   const [workspaceExpanded, setWorkspaceExpanded] = useState(onWorkspace);
   const { data: sessions, refresh } = useChatSessions();
 
-  // Landing on an ENSDF page from anywhere else opens the group.
-  useEffect(() => { if (onEnsdf) setEnsdfExpanded(true); }, [onEnsdf]);
-  useEffect(() => { if (onXundl) setXundlExpanded(true); }, [onXundl]);
-  useEffect(() => { if (onNsr) setNsrExpanded(true); }, [onNsr]);
   useEffect(() => { if (onWorkspace) setWorkspaceExpanded(true); }, [onWorkspace]);
 
   // Only close sidebar on mobile (< md breakpoint)
@@ -303,56 +270,21 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             New Search
           </button>
 
-          {/* ENDF */}
+          {/* Preprints — the References browser over bioRxiv + medRxiv.
+              The NSR-era sections (ENDF, ENSDF, XUNDL, NSR archive) are removed from
+              the nav: they query nuclear tables that no longer exist in this database
+              and error when clicked. Their routes still exist in App.tsx — unreachable
+              dead code, harmless, and wanting a proper removal pass. */}
           <button
-            onClick={() => { navigate("/endf"); closeMobile(); }}
-            onMouseEnter={() => { import("@/pages/Endf"); fetch("/data/endf.json").catch(() => {}); }}
+            onClick={() => { navigate("/references"); closeMobile(); }}
+            onMouseEnter={() => { import("@/pages/References"); }}
             className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-              location.pathname === "/endf" ? "bg-muted" : "hover:bg-muted"
+              location.pathname === "/references" || location.pathname.startsWith("/nsr") ? "bg-muted" : "hover:bg-muted"
             }`}
           >
             <FileText className="h-4 w-4" />
-            ENDF
+            Preprints
           </button>
-
-          <Group
-            label="ENSDF"
-            icon={<Layers className="h-4 w-4" />}
-            active={onEnsdf}
-            expanded={ensdfExpanded}
-            onToggle={() => setEnsdfExpanded((v) => !v)}
-            onOpen={() => { navigate("/ensdf"); closeMobile(); }}
-            onHover={() => { import("@/pages/Structure"); fetch(`/data/structure/index.json?v=${STRUCTURE_DATA_V}`).catch(() => {}); }}
-            items={ENSDF_ITEMS}
-            pathname={location.pathname}
-            go={(p) => { navigate(p); closeMobile(); }}
-          />
-
-          <Group
-            label="NSR"
-            icon={<Atom className="h-4 w-4" />}
-            active={location.pathname === "/references" || location.pathname.startsWith("/nsr")}
-            expanded={nsrExpanded}
-            onToggle={() => setNsrExpanded((v) => !v)}
-            onOpen={() => { navigate("/nsr"); closeMobile(); }}
-            onHover={() => { import("@/pages/References"); }}
-            items={NSR_ITEMS}
-            pathname={location.pathname}
-            go={(p) => { navigate(p); closeMobile(); }}
-          />
-
-          <Group
-            label="XUNDL"
-            icon={<Grid3x3 className="h-4 w-4" />}
-            active={onXundl}
-            expanded={xundlExpanded}
-            onToggle={() => setXundlExpanded((v) => !v)}
-            onOpen={() => { navigate("/xundl"); closeMobile(); }}
-            onHover={() => { import("@/pages/Structure"); fetch(`/data/structure/index.json?v=${STRUCTURE_DATA_V}`).catch(() => {}); }}
-            items={XUNDL_ITEMS}
-            pathname={location.pathname}
-            go={(p) => { navigate(p); closeMobile(); }}
-          />
 
           {/* Workspace — no landing page yet; the label toggles the group */}
           <Group
