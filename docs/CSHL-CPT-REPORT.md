@@ -186,9 +186,11 @@ inference.
 Both preprint servers operated by Cold Spring Harbor Laboratory, harvested from the
 public bioRxiv/medRxiv APIs.
 
-`PENDING — final counts land with the ingest lane's last upsert.` At the time the embed
-rig was prepared: 197,539 papers committed (bioRxiv 117,069 + medRxiv 80,470), walk at
-137/154 months, headed for ~433k.
+**Final: 433,449 papers** — bioRxiv 345,882 (2013–2026) + medRxiv 87,567 (2019–2026), with
+584,553 version rows behind them. Verified two independent ways by the ingest lane: the
+loader's own close-out and a re-derivation of distinct `(server, doi)` straight from the
+walked ndjson, which agreed exactly. That second check is what caught an earlier upsert that
+had silently under-counted by 7,097 papers while reporting success.
 
 **What makes this corpus different from NSR's, and why it changed the rigs.** NSR was
 mostly title-only rows — 93,579 of 277,068 had an abstract at all. This corpus has
@@ -346,7 +348,8 @@ they didn't.
 
 ### The frozen benchmark: `cshl-eval-v1`
 
-`PENDING — freeze happens when the miner lane's harvest lands.` Design, fixed in advance:
+**Frozen 2026-08-19 07:38Z**, four files, all invariants asserted at freeze time and
+re-verified byte-identical after a later regeneration of unrelated training data. Design:
 
 - **Split by paper, not by query**, so a paper's queries cannot straddle the boundary.
   25% held out by `md5("holdout:" || key_number) < 0.25`. Measured on the live corpus:
@@ -404,72 +407,67 @@ blended into a headline number. Measured with FTS on a draft freeze: R@1 0.9933.
 
 **Scored on the frozen 2,000-query subsample of `cshl-eval-v1`**
 (`sha256 32433e4d95099b964d2d571ab2389ad0a1cc1eeba29670fe5a87e30683cf4594`,
-MESH 1,241 · AUTHORKW 759), retrieved against the **full 433,449-paper corpus** —
-not against each row's own negatives, which would measure reranking and flatter every arm.
-`hnsw.ef_search=100`, single gold per query, so R@k is hit-rate@k.
+MESH 1,241 · AUTHORKW 759), retrieved against the **full 433,449-paper corpus** — not against
+each row's own negatives, which would measure reranking and flatter every arm.
+`hnsw.ef_search=100`, single gold per query so R@k is hit-rate@k. Each model is scored with
+the similarity function it was published for: cosine (`<=>`) for bge-m3 and our fine-tune,
+inner product (`<#>`) over raw `[CLS]` for MedCPT and SPECTER2.
 
-Why a subsample: the miner lane measured full-10k FTS at ~104 min/arm. Five arms on the full
-set was not available in the time. The subsample is deterministic and documented, so it is
-reproducible — but **absolute numbers will differ on the full 10,000**, and full-set scoring
-is a follow-up rather than a completed claim.
+| arm | MeSH R@10 | MeSH nDCG@10 | AUTHORKW R@10 | AUTHORKW nDCG@10 |
+|---|---:|---:|---:|---:|
+| **RRF(ours + MedCPT + FTS)** | **0.4722** | **0.3454** | **0.8235** | **0.6915** |
+| RRF(MedCPT + FTS) | 0.4682 | 0.3461 | 0.8208 | 0.7123 |
+| RRF(ours + MedCPT) | 0.4641 | 0.3390 | 0.8169 | 0.6781 |
+| `ncbi/MedCPT` | 0.4569 | 0.3373 | 0.8076 | 0.6885 |
+| RRF(ours + FTS) | 0.3610 | 0.2589 | 0.6877 | 0.5886 |
+| `allenai/specter2_base` | 0.3513 | 0.2471 | 0.7260 | 0.6103 |
+| RRF(ours + bge-m3) | 0.3328 | 0.2335 | 0.6917 | 0.5685 |
+| **ours — `cshl-encoder-bge-m3`** | **0.3320** | **0.2367** | **0.6693** | **0.5625** |
+| RRF(FTS + bge-m3) | 0.3167 | 0.2179 | 0.6838 | 0.5888 |
+| stock `BAAI/bge-m3` | 0.2861 | 0.1942 | 0.6522 | 0.5524 |
+| Postgres FTS | 0.0806 | 0.0626 | 0.2398 | 0.2286 |
+| `malteos/scincl` | **NOT RUN** — TEI has no `text-embeddings-inference` support | — | — | — |
 
-### MESH family (n = 1,241) — NLM controlled vocabulary as the query
-
-| arm | R@1 | R@10 | nDCG@10 |
-|---|---|---|---|
-| Postgres FTS | 0.047 | 0.081 | 0.063 |
-| stock `BAAI/bge-m3` | 0.118 | 0.286 | 0.194 |
-| **RRF(FTS + bge-m3)** | **0.136** | **0.317** | **0.218** |
-| **`ncbi/MedCPT`** | **0.235** | **0.457** | **0.337** |
-| `allenai/specter2_base` | 0.153 | 0.351 | 0.247 |
-| `malteos/scincl` | **NOT RUN** — TEI has no `text-embeddings-inference` support for this model | | |
-| **our fine-tune** | `PENDING` | | |
-
-### AUTHORKW family (n = 759) — author-supplied keywords as the query
-
-| arm | R@1 | R@10 | nDCG@10 |
-|---|---|---|---|
-| Postgres FTS | 0.217 | 0.240 | 0.229 |
-| stock `BAAI/bge-m3` | 0.457 | 0.652 | 0.552 |
-| **RRF(FTS + bge-m3)** | **0.491** | **0.684** | **0.589** |
-| **`ncbi/MedCPT`** | **0.573** | **0.808** | **0.689** |
-| `allenai/specter2_base` | 0.497 | 0.726 | 0.610 |
-| `malteos/scincl` | **NOT RUN** — TEI has no `text-embeddings-inference` support for this model | | |
-| **our fine-tune** | `PENDING` | | |
-
-**MedCPT is the bar, and it is a high one.** On MeSH it scores R@10 **0.457** against stock
-bge-m3's 0.286 — a **60% lead** — and on author keywords 0.808 against 0.652. That is the
-in-domain biomedical retrieval model doing exactly what it was built to do on exactly the
-literature it was built for. It also reframes the claim this program can honestly make:
-*"we beat stock bge-m3"* would be a near-tautology, since our encoder is a fine-tune of it on
-in-domain data. **The question that matters is whether a one-night domain adaptation of a
-general multilingual model can close a 60% gap to a purpose-built biomedical one.** If it
-cannot, that is the finding and it will be reported as such.
-
-**Three things already visible, before our own model exists:**
-
-**Dense retrieval dominates lexical on this corpus, by 3.5× on MeSH.** FTS R@10 0.081 against
-bge-m3's 0.286. MeSH descriptors are controlled vocabulary assigned by an indexer — they often
-never appear verbatim in the paper, so lexical matching has little to match. This is the
-strongest argument in the report for the whole dense-retrieval program, and it comes from a
-baseline rather than from our model.
-
-**The two families measure different things and must never be blended into one headline.**
-Every arm scores roughly 2–3× higher on AUTHORKW than on MESH. Author keywords are written by
-the authors of the paper being retrieved, so they plausibly share vocabulary with its abstract;
-MeSH descriptors are assigned externally and do not. A single blended number would move with
-the family mix rather than with retrieval quality.
-
-**RRF beats both of its inputs on every metric in both families** — consistent with the NSR
-program's finding, and it is the configuration production should serve regardless of how our
-fine-tune scores.
+R@1 for the two headline arms: ours 0.157 (MeSH) / 0.461 (AUTHORKW); MedCPT 0.235 / 0.573.
 
 ### Where our model loses
 
-`PENDING — this section is mandatory and will be filled in even if it is long. A report
-that only reports wins is worthless.`
+This section is mandatory and it is the important one.
 
----
+**Against MedCPT: −27% on MeSH** (0.332 vs 0.457) and **−17% on author keywords** (0.669 vs
+0.808). MedCPT is a purpose-built biomedical retrieval model; ours is one night of domain
+adaptation on a general multilingual encoder. The gap is large and the direction is not close.
+
+**Against SPECTER2 on MeSH: −5%** (0.332 vs 0.351). Unexpected — SPECTER2 is a general
+scholarly encoder, not a biomedical one. On author keywords we lose by more (0.669 vs 0.726).
+
+**Against our own base model we win, but only just, and it is the least interesting claim
+available.** +16% on MeSH (0.332 vs 0.286), +2.6% on author keywords. Improving on the model
+you fine-tuned from, using in-domain data, is closer to a floor than an achievement.
+
+**In fusion, plain BM25 beats us as a contributor.** `RRF(MedCPT+FTS)` 0.4682 against
+`RRF(ours+MedCPT)` 0.4641. Our marginal contribution on top of `RRF(MedCPT+FTS)` is
+**+0.9%** (0.4682 → 0.4722); FTS's contribution on top of MedCPT alone is **+2.5%**
+(0.4569 → 0.4682). Postgres full-text search — the worst arm alone by a factor of five —
+adds nearly three times what our fine-tuned encoder does.
+
+### The leading hypothesis, and it is testable
+
+**We trained on the wrong objective.** The training set was 100% `meta.family = CITE` —
+citation-based **document→document** pairs. The benchmark is **query→document**: MeSH
+descriptors and author keywords as queries. We trained document similarity and evaluated
+query retrieval.
+
+**`cshl-query-pairs` existed and was not used.** The miner lane built **424,753 query-shaped
+training pairs** (MESH / AUTHORKW / EXTRACT) and they went untouched while we trained on
+citation triplets. That is the single most useful sentence in this report for whoever picks it
+up next.
+
+Secondary levers, all unpulled: 40,000 of 132,793 available triplets, one epoch, batch 4
+(after OOM halving on a 24 GB A10G), `passage_max_len` 384 rather than 512.
+
+A second run on `cshl-query-pairs` against this same frozen benchmark either closes the gap or
+refutes the hypothesis. **Both outcomes are publishable.** Staged and priced below; not fired.
 
 ## Licensing — measured, for the record
 
