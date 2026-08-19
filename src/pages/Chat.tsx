@@ -124,14 +124,15 @@ export default function Chat() {
         "\n\nProvide a detailed, expert-level analysis. Explain the significance of the " +
         "research and its methodology, and highlight connections to related work in the field.";
 
-      // The inline PDF viewer must be pointed at our own /api/pdf proxy, not the DOI link.
-      // bioRxiv and medRxiv send `x-frame-options: SAMEORIGIN` on their PDFs, so framing
-      // their URL directly yields a blank panel with no error. The key is the DOI suffix,
-      // which is our business key, so it derives from the DOI without touching the caller.
+      // Point the PDF viewer at /api/pdf, which resolves the canonical URL and the
+      // Google-viewer wrapper. Prefer an explicit ?key= from the caller; fall back to the
+      // DOI suffix, which is our business key. Deriving is the fallback rather than the
+      // rule because only the caller knows the key for certain — a DOI link could be to
+      // the published journal article, whose suffix is not ours.
+      const keyParam = searchParams.get("key")?.trim();
       const keyFromDoi = url?.includes("/") ? url.split("/").pop()!.trim() : "";
-      const viewerUrl = keyFromDoi
-        ? `/api/pdf?key=${encodeURIComponent(keyFromDoi)}`
-        : url || undefined;
+      const pdfKey = keyParam || keyFromDoi;
+      const viewerUrl = pdfKey ? `/api/pdf?key=${encodeURIComponent(pdfKey)}` : url || undefined;
 
       sendMessage(prompt, systemContext, viewerUrl);
       navigate("/", { replace: true });
