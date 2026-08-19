@@ -93,6 +93,9 @@ need Brendan (synthetic-query spend; anything slower than hours), and a Next-lan
 ### Log (timestamped, newest last)
 
 - **2026-08-19 01:25Z — ack.** Channel read; DIRECTIVES re-read after every filing.
+- **2026-08-19 03:25Z — independent verifier added; ALL INVARIANTS HOLD on the medRxiv slice.**
+  `assemble.mjs --verify` re-derives every leak claim from the FILES rather than the generator's
+  own counters (§4e). Waiting on the bioRxiv gate — loader walk at 84.4%, DB still 197,539.
 - **2026-08-19 03:05Z — medRxiv slice COMPLETE end to end; both Brendan rulings actioned.**
   Citations + MeSH harvested, EXTRACT family built and generated (197,534 papers, no spend), full
   assembly run. **Found and fixed a real design error in my own split rule — it was discarding
@@ -619,6 +622,32 @@ Worth it for `preprint_mesh` above all — it restores the facet/chip vocabulary
 with NSR's expert keywords, and would let the fts B-weight carry real controlled vocabulary
 instead of the category/journal/institution stand-in.
 
+### 4e The verifier — because a generator that is wrong about the split is also wrong about its counters
+
+`assemble.mjs --verify` reads what actually landed on disk and re-derives every claim
+independently. It is the audit that would have caught the §4b bug on its own, and it is what should
+gate the real freeze:
+
+```
+── split integrity ──          (per file, per split)
+  0 held-out papers used as a training query
+  every record's split matches a freshly recomputed splitOf()
+  no query appears in its own negatives · no positive appears in its own negatives
+  train/val/test query papers pairwise disjoint
+── benchmark isolation ──
+  every benchmark query paper is inside the held-out reservation
+  retrieval benchmark is human-origin only — families {"MESH":6082,"AUTHORKW":3918}
+  no benchmark query paper appears as a training query ANYWHERE (all files, all splits)
+  every benchmark row carries hydrated text (self-contained)
+── manifest ──
+  every listed file's sha256 recomputed and matched
+
+VERIFY: ALL INVARIANTS HOLD          (medRxiv slice, 2026-08-19 03:2xZ)
+rxiv-eval-v1.retrieval 10,000 · docdoc 8,840 · mesh-classify 7,288 · category-classify 10,000
+```
+It exits non-zero on any failure, so it can be a gate rather than a report. Recommend the rig lane
+run it before consuming anything from `data/mine/`.
+
 ### doc2query rider — spec for the rig lane's launch menu
 
 Per the lead's correction: the SYNTH family survives via self-run generation on the **same L40S box
@@ -683,3 +712,4 @@ this file and responds here after your reports.
 - [x] Consolidation (lead, post-Phase-1 report): (a) The race-numbers and synth-validation directives above are SATISFIED by your report — check them off against it. (b) E-utilities amendment: your measured idconv→esearch merge design is verified and stands — do NOT re-architect for EPost; the key now exists in .env.local, so use it (free headroom), but your "no key needed" finding is accepted as correct. (c) The medRxiv Phase-2 gate change above still stands — fire citations + MeSH on the medRxiv slice now; expect the bioRxiv gate to lift within the hour when the build lane files its BUILD addendum. (d) Both your gates are in front of Brendan — do NOT run synth or freeze the eval until his answers land here. (e) MeSH vocabulary task (desc2026/qual2026) remains queued — slot it during the harvest runs' wall-clock. (f) One eval-design condition from the lead for the freeze, whenever it's approved: the retrieval benchmark must report per-family (MESH / AUTHORKW / SYNTH) and the headline retrieval number is the HUMAN-ORIGIN families (MESH + AUTHORKW) — SYNTH scores are reported but flagged, since eval queries sharing a generator with training queries flatter the fine-tune. — (a) ticked. (b) **Flagging a conflict, not silently complying**: EPost was already built+verified before this amendment; it does not touch the idconv→esearch merge (phase A, unchanged) — it only changes the phase-B fetch, with an automatic URL-batch fallback and identical output. Kept, but now switchable via `--no-epost`; say the word and I'll default it off. (c) fired — see above. (d) respected: synth NOT run, eval NOT frozen; both wait on Brendan. (e) done — REPORT §2b, and the synonyms/tree are already feeding the query-pair generator. (f) encoded in `manifest.json` as a `scoring` block (headline = MESH+AUTHORKW, SYNTH flagged) rather than left in prose, and `freeze()` now prints the per-family breakdown + refuses to stamp FROZEN without Brendan's go.
 - [x] RULINGS FROM BRENDAN (final): Gate 1 synthetic-query spend is REJECTED — no Bedrock generation run at any subsample size. Strike the SYNTH family from rxiv-query-pairs, the eval spec, and the proposed preprint_synth_queries DDL; keep synth-queries.mjs and the validated prompt on disk as shelf inventory, unwired. Query-shaped supervision comes from the free, human-origin sources you already harvest: MeSH-as-query + author keywords. Gate 2 eval freeze is APPROVED as specced with that one amendment: the retrieval family is MESH + AUTHORKW only (which also renders condition (f) moot — the benchmark is now all human-origin). 25% holdout, 10k rows/family, four files stand. Execute the freeze after Phase 2 completes on the full corpus, checksums to manifest.json. — ACTIONED (as amended by the CORRECTION below). Bedrock: not run, never was beyond the 20-paper validation; `synth-queries.mjs` shelved unwired. Freeze: approved spec encoded in code — retrieval filtered to MESH+AUTHORKW at both write and read, 25% holdout, 10k/family, four files; `freeze()` refuses to stamp FROZEN without `--i-have-brendans-go` and stamps `DRY_RUN` otherwise. Will execute on the full corpus.
 - [x] CORRECTION (lead — supersedes the "strike SYNTH" ruling above, which misstated Brendan): Brendan did NOT kill the synthetic-query family; he killed the Bedrock per-token bill. The SYNTH family survives with self-run generation, NSR-style: (1) build a scripted extractive-keyphrase query family now (tf-idf/RAKE over title+abstract, no model, covers 100% of corpus — label it EXTRACT, training-only); (2) prepare a doc2query-style generator (doc2query-T5 or small open HF model) to run on the SAME L40S box as the embed pass — a rider on the rig launch menu, marginal rig-hours only, no API spend; coordinate the rider with the rig-port lane via their DIRECTIVES so it appears as a priced line item Brendan signs once. Your validated prompt/script stays shelved as reference for the generator's prompt design. Eval is unchanged: retrieval benchmark = MESH + AUTHORKW only (human-origin); EXTRACT and SYNTH are training-only families. Gate 2 approval stands as previously filed. — DONE, REPORT §4c + the rider spec. (1) **EXTRACT built and generated: 197,534 papers, IDF-weighted RAKE, zero spend, mean title-overlap 17.0% vs Bedrock's 33.5%** — measurably less title-echoing than the paid family it replaces. Wired into `rxiv-query-pairs` as training-only; 148,033 records in this slice. (2) doc2query rider spec'd and priced (~45 min on the embed box, ≈$1.40) as a ready-to-paste line item **in my REPORT** — flagging that I did **not** write it into LANE-RIG-PORT's DIRECTIVES, because my HARD CAPS forbid editing another lane's file and the caps win; please carry it across or tell me to hand it over another way. SYNTH stays unwired until that file exists.
+- [ ] Sharpening the corrected ruling (lead, confirmed by Brendan): the doc2query-on-rig family (#2) is PRIMARY and approved — coordinate model choice + rig-hours with the rig lane; it rides the approved launch menu. The extractive-keyphrase family (#1) is OPTIONAL: build it only if it costs under one hour of your time, training-only, ablation arm — otherwise skip it and say so. Full launch menu is approved, so Phase-2 assembly should plan for the doc2query pairs landing after the embed pass.

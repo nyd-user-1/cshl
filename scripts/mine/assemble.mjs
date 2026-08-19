@@ -520,12 +520,109 @@ async function freeze() {
   }
 }
 
+// ── verify: prove the invariants from the FILES, not from the generator ──────
+// The generator prints its own counters, and a generator that is wrong about the
+// split is also wrong about its counters. This reads what actually landed on
+// disk and re-derives every claim independently — the leak audit NSR ran, in the
+// same spirit: assert it, do not trust it.
+async function verify() {
+  const fail = [];
+  const ok = (cond, msg) => { log(`  ${cond ? "PASS" : "FAIL"}  ${msg}`); if (!cond) fail.push(msg); };
+  const qslug = (r) => (typeof r.query === "object" ? r.query?.slug : null) ?? r.positive?.slug ?? r.slug;
+
+  const sets = {};
+  const files = [
+    ["rxiv-triplets", ["train", "val", "test"]],
+    ["rxiv-query-pairs", ["train", "val", "test"]],
+    ["rxiv-category-classify", ["train", "val", "test"]],
+    ["rxiv-mesh-classify", ["train", "val", "test"]],
+  ];
+
+  log("── split integrity ──");
+  for (const [base, splits] of files) {
+    for (const sp of splits) {
+      const path = `${MINE}/${base}.${sp}.jsonl`;
+      if (!existsSync(path)) continue;
+      const keys = new Set();
+      let n = 0, heldLeak = 0, wrongSplit = 0, selfNeg = 0, posInNeg = 0, badFamily = 0;
+      for await (const r of readJsonl(path)) {
+        n++;
+        const k = qslug(r);
+        if (!k) continue;
+        keys.add(k);
+        if (isHeldOut(k)) heldLeak++;                     // a benchmark paper training
+        if (splitOf(k) !== sp) wrongSplit++;              // the file disagrees with the hash
+        const negs = (r.negatives || []).map((x) => x.slug);
+        if (negs.includes(k)) selfNeg++;                  // query is its own distractor
+        if (r.positive?.slug && negs.includes(r.positive.slug)) posInNeg++;
+        if (base === "rxiv-query-pairs" && !["MESH", "AUTHORKW", "EXTRACT", "SYNTH"].includes(r.meta?.family)) badFamily++;
+      }
+      sets[`${base}.${sp}`] = keys;
+      log(`  ${(base + "." + sp).padEnd(34)} ${String(n).padStart(8)} records, ${String(keys.size).padStart(7)} distinct query papers`);
+      ok(heldLeak === 0, `${base}.${sp}: 0 held-out papers used as a training query (found ${heldLeak})`);
+      ok(wrongSplit === 0, `${base}.${sp}: every record's split matches splitOf() (mismatches ${wrongSplit})`);
+      ok(selfNeg === 0, `${base}.${sp}: no query appears in its own negatives (found ${selfNeg})`);
+      ok(posInNeg === 0, `${base}.${sp}: no positive appears in its own negatives (found ${posInNeg})`);
+      if (badFamily) ok(false, `${base}.${sp}: ${badFamily} records with an unknown meta.family`);
+    }
+    const [a, b, c] = splits.map((sp) => sets[`${base}.${sp}`]).filter(Boolean);
+    if (a && b && c) {
+      const inter = (x, y) => [...x].filter((k) => y.has(k)).length;
+      ok(inter(a, b) === 0 && inter(a, c) === 0 && inter(b, c) === 0,
+        `${base}: train/val/test query papers are pairwise disjoint (${inter(a, b)}/${inter(a, c)}/${inter(b, c)})`);
+    }
+  }
+
+  log("── benchmark isolation ──");
+  const evalKeys = new Set();
+  let evalFam = {};
+  for (const f of ["rxiv-eval-v1.retrieval.jsonl", "rxiv-eval-v1.docdoc.jsonl", "rxiv-eval-v1.mesh-classify.jsonl", "rxiv-eval-v1.category-classify.jsonl"]) {
+    const path = `${EVAL}/${f}`;
+    if (!existsSync(path)) continue;
+    let n = 0, noText = 0;
+    for await (const r of readJsonl(path)) {
+      n++;
+      const k = qslug(r);
+      if (k) evalKeys.add(k);
+      if (f.startsWith("rxiv-eval-v1.retrieval")) evalFam[r.meta?.family ?? "?"] = (evalFam[r.meta?.family ?? "?"] || 0) + 1;
+      const t = r.positive ?? r;
+      if (!t.title && !t.abstract) noText++;              // the benchmark must be self-contained
+    }
+    log(`  ${f.padEnd(38)} ${String(n).padStart(7)} rows`);
+    ok(noText === 0, `${f}: every row carries hydrated text (${noText} without)`);
+  }
+  ok([...evalKeys].every(isHeldOut), `every benchmark query paper is inside the held-out reservation`);
+  ok(Object.keys(evalFam).every((f) => ["MESH", "AUTHORKW"].includes(f)),
+    `retrieval benchmark is human-origin only — families ${JSON.stringify(evalFam)}`);
+  let crossover = 0;
+  for (const [name, keys] of Object.entries(sets)) for (const k of keys) if (evalKeys.has(k)) crossover++;
+  ok(crossover === 0, `no benchmark query paper appears as a training query anywhere (found ${crossover})`);
+
+  log("── manifest ──");
+  const mp = `${EVAL}/manifest.json`;
+  if (existsSync(mp)) {
+    const m = JSON.parse(readFileSync(mp, "utf8"));
+    log(`  status: ${m.status}`);
+    for (const [f, meta] of Object.entries(m.files || {})) {
+      const path = `${EVAL}/${f}`;
+      if (!existsSync(path)) { ok(false, `manifest lists ${f} but it is not on disk`); continue; }
+      ok((await sha256(path)) === meta.sha256, `${f}: sha256 matches the manifest`);
+    }
+  } else log("  (no manifest yet — freeze has not run)");
+
+  log("");
+  log(fail.length ? `VERIFY: ${fail.length} FAILURE(S)` : "VERIFY: ALL INVARIANTS HOLD");
+  for (const f of fail) log(`  ✗ ${f}`);
+  if (fail.length) process.exitCode = 1;
+}
+
 const t = Date.now();
 if (has("--text") || has("--all")) await buildText();
 if (has("--triplets") || has("--all")) await triplets();
 if (has("--classify") || has("--all")) await classify();
 if (has("--pairs") || has("--all")) await pairs();
 if (has("--eval") || has("--all")) await freeze();
-if (!["--text", "--triplets", "--classify", "--pairs", "--eval", "--all"].some(has))
-  console.log("usage: assemble.mjs --text | --triplets | --classify | --pairs | --eval | --all");
+if (has("--verify") || has("--all")) await verify();
+if (!["--text", "--triplets", "--classify", "--pairs", "--eval", "--verify", "--all"].some(has))
+  console.log("usage: assemble.mjs --text | --triplets | --classify | --pairs | --eval | --verify | --all");
 log(`done in ${((Date.now() - t) / 1000).toFixed(1)}s`);
