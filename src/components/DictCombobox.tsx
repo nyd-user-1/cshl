@@ -60,7 +60,13 @@ export function DictCombobox({ label, dictType, placeholder, value, onChange, on
     return () => document.removeEventListener("keydown", handleEsc);
   }, [value, onChange]);
 
-  useEffect(() => { setInputValue(value || ""); }, [value]);
+  // Sync when the parent changes `value` (URL params, clear-all). React's
+  // adjust-state-during-render pattern, not an effect.
+  const [lastValue, setLastValue] = useState(value);
+  if (value !== lastValue) {
+    setLastValue(value);
+    setInputValue(value || "");
+  }
 
   const select = (v: string) => {
     onChange(v); setInputValue(v); setOpen(false); onSubmit(v);

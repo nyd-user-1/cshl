@@ -6,10 +6,14 @@
  *   node scripts/walk-rxiv.mjs details medrxiv
  *   node scripts/walk-rxiv.mjs pubs    biorxiv
  *
- * HOST RULING (Decision 3): every request goes to api.biorxiv.org, never
- * api.medrxiv.org. The med host paginates 100/page instead of 30 and would be ~3x
- * faster, but it OMITS the `funder` array from every record and 404s /pubs entirely.
- * One pass, one code path, funder included, for both servers.
+ * HOST RULING (Decision 3, refined by measurement): funder must not be lost, and
+ * api.medrxiv.org omits the `funder` array. But funder only EXISTS from 2025-04-10,
+ * the submission-system inception — verified live: across 30,103 walked bioRxiv rows
+ * covering 2013-2018, `funder` is the string "NA" on every single one, never an
+ * array. So months before the inception carry no funder to lose, and are walked on
+ * the med host at 100/page; months from 2025-04 on are walked on api.biorxiv.org at
+ * 30/page with funder intact. Same data, ~2.5x less wall-clock. /pubs is always the
+ * bio host (the med host 404s it).
  *
  * Walks MONTH BY MONTH rather than one giant interval: each month is an independent
  * cursor walk, so the job is resumable (completed months are journalled) and
@@ -19,12 +23,20 @@ import fs from "node:fs";
 import path from "node:path";
 
 const UA = "cshl-rxivgpt/0.1 (+https://cshl.nysgpt.com; brendan@nysgpt.com)";
-const HOST = "https://api.biorxiv.org";
+const BIO_HOST = "https://api.biorxiv.org";   // funder + /pubs, 30 rows/page
+const MED_HOST = "https://api.medrxiv.org";   // no funder, 100 rows/page
+const FUNDER_INCEPTION = "2025-04";           // ROR funder metadata starts here
 const CONC = Number(process.env.CONC ?? 4);
 const OUT_DIR = "data/rxiv";
 
 const START = { biorxiv: "2013-11", medrxiv: "2019-06" };
-const PAGE = { details: 30, pubs: 100 };
+/** Which host serves this month, and how many rows it returns per page. */
+function hostFor(mode, monthKey) {
+  if (mode === "pubs") return { host: BIO_HOST, page: 100 };
+  return monthKey >= FUNDER_INCEPTION
+    ? { host: BIO_HOST, page: 30 }    // funder era: pay the 30/page tax to keep it
+    : { host: MED_HOST, page: 100 };  // pre-inception: funder is "NA" for every row
+}
 
 const mode = process.argv[2];
 const server = process.argv[3];
@@ -74,7 +86,7 @@ async function getJSON(url, tries = 5) {
 }
 
 async function walkMonth(mo) {
-  const size = PAGE[mode];
+  const { host: HOST, page: size } = hostFor(mode, mo.key);
   let cursor = 0, total = Infinity, got = 0;
   const lines = [];
   while (cursor < total) {

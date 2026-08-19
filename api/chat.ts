@@ -18,7 +18,6 @@
 //      SEMANTIC_SCHOLAR_API_KEY (optional).
 
 import { neon } from "@neondatabase/serverless";
-import { activeEncoder, embedQueryCached, toVectorLiteral, vectorTable } from "./_lib/embed.js";
 import {
   BedrockRuntimeClient,
   ConverseStreamCommand,
@@ -26,10 +25,11 @@ import {
 
 export const config = { maxDuration: 120 };
 
-const SYSTEM_PROMPT_BASE = `You are NSRgpt, an AI research assistant for nuclear science, grounded in the complete Nuclear Science References corpus plus arXiv and open-access literature.
+const SYSTEM_PROMPT_BASE = `You are RxivGPT, an AI research assistant grounded in the complete bioRxiv and medRxiv preprint corpora operated by Cold Spring Harbor Laboratory.
 
 INSTRUCTIONS:
-- Always use the retrieved records below to inform your answer. Even when no record is an exact match, discuss what the retrieved records reveal about the topic — related isotopes, nearby nuclides, the same element, or similar reactions are all highly relevant.
+- Always use the retrieved preprints below to inform your answer. Even when no record is an exact match, discuss what the retrieved preprints reveal about the topic — the same subject category, adjacent clinical or biological questions, and later versions of the same work are all highly relevant.
+- These are PREPRINTS: most have not been peer reviewed. Say so when it matters. When a record shows a publishing journal it has since appeared in the peer-reviewed literature; when its status says withdrawn, never present its findings as standing.
 - Cite NSR records by key number (e.g., 2024SM01). Cite arXiv/OA additions by their identifier. Reference specific findings, and use the abstracts provided.
 - Cite Semantic Scholar papers by title/author with their URL.
 - Only say "no relevant records" if the retrieved list is truly empty or entirely unrelated.
@@ -40,34 +40,7 @@ const DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
 
 /* ── entity extraction (ported from the edge function) ─────────────────── */
 
-function extractNuclides(text: string): string[] {
-  const patterns = [/\b(\d{1,3})([A-Z][a-z]?)\b/g, /\b([A-Z][a-z]?)-?(\d{1,3})\b/g];
-  const found = new Set<string>();
-  for (const pat of patterns) {
-    let m;
-    while ((m = pat.exec(text)) !== null) {
-      const isNumFirst = /^\d/.test(m[1]);
-      const mass = isNumFirst ? m[1] : m[2];
-      const sym = isNumFirst ? m[2] : m[1];
-      found.add(`${mass}${sym[0].toUpperCase()}${sym.slice(1).toLowerCase()}`);
-    }
-  }
-  return [...found];
-}
-
 // canonical NSR reaction codes are uppercase with G/A for γ/α
-function extractReactions(text: string): string[] {
-  const found = new Set<string>();
-  let m;
-  const pat = /\(([a-zA-Z0-9'γα,]+)\)/g;
-  while ((m = pat.exec(text)) !== null) {
-    if (m[1].includes(",")) {
-      found.add(`(${m[1].toUpperCase().replaceAll("Γ", "G").replaceAll("γ", "G").replaceAll("Α", "A").replaceAll("α", "A")})`);
-    }
-  }
-  return [...found];
-}
-
 function extractAuthorQuery(text: string): string | null {
   const patterns = [
     /(?:papers?|publications?|work|research|articles?)\s+(?:by|from|of)\s+(.+?)(?:\?|$|\.|\bin\b|\bfrom\b|\babout\b)/i,
@@ -84,26 +57,37 @@ function extractAuthorQuery(text: string): string | null {
   return null;
 }
 
+/** Which subject categories does this question mention? Matched against the live
+ *  `categories` dictionary (76 values across both servers) rather than a regex, so
+ *  the vocabulary can never drift from what the corpus actually holds. */
+let CATEGORY_CACHE: string[] | null = null;
+async function extractCategories(sql: { query: (t: string, p: unknown[]) => Promise<{ category: string }[]> }, text: string): Promise<string[]> {
+  try {
+    if (!CATEGORY_CACHE) CATEGORY_CACHE = (await sql.query("SELECT category FROM categories", [])).map((r) => r.category);
+    const t = text.toLowerCase();
+    return CATEGORY_CACHE.filter((c) => c.length > 4 && t.includes(c)).slice(0, 3);
+  } catch { return []; }
+}
+
 /* ── context building ──────────────────────────────────────────────────── */
 
 interface Rec {
   key_number: string; title: string | null; authors: string | null;
-  pub_year: number; doi: string | null; keywords: string | null;
-  abstract: string | null; nuclides: string[] | null; reactions: string[] | null;
-  citation_count: number | null; is_nsr: boolean; similarity: number;
+  pub_year: number; doi: string | null; abstract: string | null;
+  categories: string[] | null; status_tags: string[] | null;
+  server: string | null; published_journal: string | null; similarity: number;
 }
 
 function formatNsrContext(records: Rec[]): string {
   if (records.length === 0) return "\n## Retrieved Records\nNo relevant records found.";
   const lines = records.map((r, i) => {
     const parts = [
-      `[${i + 1}] ${r.key_number}${r.is_nsr ? "" : " (non-NSR addition)"} — "${r.title ?? "Untitled"}"`,
-      `    Authors: ${r.authors ?? "N/A"} | Year: ${r.pub_year}${r.doi ? ` | DOI: ${r.doi}` : ""}${r.citation_count ? ` | ${r.citation_count} citations` : ""}`,
+      `[${i + 1}] ${r.key_number} (${r.server ?? "preprint"}) — "${r.title ?? "Untitled"}"`,
+      `    Authors: ${r.authors ?? "N/A"} | Year: ${r.pub_year}${r.doi ? ` | DOI: ${r.doi}` : ""}${r.published_journal ? ` | published in ${r.published_journal}` : " | not yet published"}`,
     ];
-    if (r.nuclides?.length) parts.push(`    Nuclides: ${r.nuclides.slice(0, 12).join(", ")}`);
-    if (r.reactions?.length) parts.push(`    Reactions: ${r.reactions.slice(0, 8).join(", ")}`);
+    if (r.categories?.length) parts.push(`    Category: ${r.categories.join(", ")}`);
+    if (r.status_tags?.length) parts.push(`    Status: ${r.status_tags.join(", ")}`);
     if (r.abstract) parts.push(`    Abstract: ${r.abstract.slice(0, 500)}`);
-    else if (r.keywords) parts.push(`    Keywords: ${r.keywords.slice(0, 250)}`);
     return parts.join("\n");
   });
   return `\n## Retrieved Records\n${lines.join("\n\n")}`;
@@ -127,8 +111,8 @@ function formatS2Context(papers: S2Paper[]): string {
 
 /* ── handler ───────────────────────────────────────────────────────────── */
 
-const SELECT = `key_number, title, authors, pub_year, doi, keywords, abstract,
-  nuclides, reactions, citation_count, is_nsr`;
+const SELECT = `key_number, title, authors, pub_year, doi, abstract,
+  categories, status_tags, server, published_journal`;
 
 // Classic Vercel Node signature — the Web-handler form hung in production
 // (the builder invoked (req, res) and ignored a returned Response).
@@ -154,25 +138,22 @@ export default async function handler(req: any, res: any) {
     const t0 = Date.now();
 
     const sql = neon(process.env.DATABASE_URL!);
-    const nuclides = extractNuclides(userMessage);
-    const reactions = extractReactions(userMessage);
+    const categories = await extractCategories(sql as never, userMessage);
     const authorQuery = extractAuthorQuery(userMessage);
 
     const q = (text: string, params: unknown[]) => (sql as unknown as { query: (t: string, p: unknown[]) => Promise<Rec[]> }).query(text, params);
 
-    const structuredP: Promise<Rec[]> =
-      nuclides.length || reactions.length
-        ? q(
-            `SELECT ${SELECT}, 1.0 AS similarity FROM nsr
-             WHERE (cardinality($1::text[]) > 0 AND nuclides && $1::text[])
-                OR (cardinality($2::text[]) > 0 AND reactions && $2::text[])
-             ORDER BY is_nsr DESC, citation_count DESC NULLS LAST, pub_year DESC LIMIT 10`,
-            [nuclides, reactions],
-          )
-        : Promise.resolve([]);
+    const structuredP: Promise<Rec[]> = categories.length
+      ? q(
+          `SELECT ${SELECT}, 1.0 AS similarity FROM preprints
+           WHERE categories && $1::text[]
+           ORDER BY pub_year DESC, posted_date DESC LIMIT 10`,
+          [categories],
+        )
+      : Promise.resolve([]);
     const authorP: Promise<Rec[]> = authorQuery
       ? q(
-          `SELECT ${SELECT}, 1.0 AS similarity FROM nsr
+          `SELECT ${SELECT}, 1.0 AS similarity FROM preprints
            WHERE authors ILIKE $1 ORDER BY pub_year DESC LIMIT 8`,
           ["%" + authorQuery + "%"],
         )
@@ -181,7 +162,7 @@ export default async function handler(req: any, res: any) {
       q(
         `SELECT ${SELECT},
                 least(ts_rank_cd(fts, websearch_to_tsquery('english', $1)) / 4.0, 0.99)::float AS similarity
-         FROM nsr
+         FROM preprints
          WHERE fts @@ websearch_to_tsquery('english', $1)
          ORDER BY ts_rank_cd(fts, websearch_to_tsquery('english', $1)) DESC
          LIMIT 8`,
@@ -197,26 +178,10 @@ export default async function handler(req: any, res: any) {
       )
       .catch(() => []);
 
-    // Dense arm — nsr-eval-v1 measured stock bge-m3 R@1 .87 on EXFOR-style
-    // queries where FTS gets .02, and RRF of the two best-or-tied everywhere;
-    // encoder + table follow SEARCH_ENCODER (bge → nsr_embeddings, nsr →
-    // nsr_embeddings_nsr). Any failure here degrades to FTS-only, never errors.
-    const denseP: Promise<Rec[]> = (async () => {
-      try {
-        const enc = activeEncoder();
-        const { vector } = await embedQueryCached(sql as never, userMessage, enc);
-        const [, rows] = (await sql.transaction([
-          sql.query(`SET LOCAL hnsw.ef_search = 60`),
-          sql.query(
-            `SELECT ${SELECT}, (1 - (e.embedding <=> $1::vector))::float AS similarity
-             FROM ${vectorTable(enc)} e JOIN nsr n USING (key_number)
-             ORDER BY e.embedding <=> $1::vector LIMIT 8`,
-            [toVectorLiteral(vector)],
-          ),
-        ])) as [unknown, Rec[]];
-        return rows;
-      } catch { return []; }
-    })();
+    // Dense arm: retired for now. This corpus has no embeddings yet (no encoder,
+    // no vector sidecar), so retrieval is FTS + structured + author only. Restoring
+    // it means populating preprint_embeddings and reinstating the kNN arm here.
+    const denseP: Promise<Rec[]> = Promise.resolve([]);
 
     const [structured, authorRecs, ftsRecs, denseRecs, s2Papers] = await Promise.all([
       structuredP,
