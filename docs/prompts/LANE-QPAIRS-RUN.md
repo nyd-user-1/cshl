@@ -15,9 +15,16 @@ Budget: **hard cap $5.00 AWS**, approved by Brendan. Every box self-terminates o
 
 ## Status
 
-**PHASE: upload — running.** Started 2026-08-19T23:18Z. 601 MB at ~2.3 MB/s, expected ~4-5 min.
-Next: probe `g6e.2xlarge` capacity by launching. Train is the long pole — ~45-75 min on g6e,
-~2 h 20 m on g5.
+**PHASE: train — running.** Instance `i-09938e30bd1f42c3d`, `g6e.2xlarge`, `us-east-1c`,
+run id `20260819-192100-train`, launched 2026-08-19T23:21Z.
+**Expected: ~10-15 min setup + ~45-75 min training, so DONE BY ~2026-08-20T00:50Z.**
+Watchdog hard-stops the box at 120 min (2026-08-20T01:21Z). If this file has not moved past
+this line by 01:30Z, the run died silently and the box is gone — that is the deadline the
+silence is measured against.
+
+State polling is armed on: instance state, the box's own `/var/log/train.log` via SSM, and the
+S3 weight prefix — three independent signals, because a log that stops printing and a job that
+stopped working look the same from one of them.
 
 ---
 
@@ -154,3 +161,75 @@ ends in `|| true` — would have failed silently and left the arm unscoreable.
 | — | convert, local | 0.00 | free |
 | — | quota/capacity/IAM checks | 0.00 | free, API reads only |
 | | **running total** | **0.00** | cap $5.00 |
+
+### 2026-08-19T23:15Z — slice uploaded and verified in S3
+```
+s3://cshl-embed-rxiv/train/qpairs/train.jsonl    630,710,633 bytes  (byte-exact with local)
+s3://cshl-embed-rxiv/train/qpairs/manifest.json  pairs 39,999 · families_emitted
+                                                 {MESH 9668, AUTHORKW 5854, EXTRACT 24477}
+                                                 · disjointness.pass true
+```
+The frozen `cshl-eval-v1/queries.jsonl` is re-uploaded by `upload-slice.sh` as a side effect.
+Checked local md5 against the S3 ETag **before** letting it run — `4f1f4a26f113db8da0701f3a3539fbfe`
+both sides, so the overwrite of a frozen artifact was a genuine no-op rather than an assumed one.
+
+### 2026-08-19T23:19Z — free independent check: the report's McNemar table reproduces
+
+The report publishes a paired McNemar table and a bootstrap CI for the doc→doc arms, but the
+analysis was ad-hoc and never committed — so this run could not have reproduced the comparison
+it is supposed to be measured against. Rewrote it (`scripts/eval/paired-test.mjs`), from the
+method description rather than the original code, and it lands on the published row exactly:
+
+```
+cshl vs medcpt · paired on 2,000 queries (same keys, same order — asserted, not assumed)
+  both hit 252 · neither 1,470 · cshl-only 172 · medcpt-only 106
+  ΔR@10 +0.0330 · exact McNemar p = 9.03e-5
+  bootstrap 95% CI [+0.0170, +0.0495]   vs published [+0.0165, +0.0495]
+```
+The 0.0005 on the lower bound is the bootstrap seed. Two independent implementations agreeing
+is evidence; recovering the original would have been worth nothing.
+
+### 2026-08-19T23:21Z — TRAIN LAUNCHED. The capacity probe answered: g6e is available tonight
+
+The report recorded `g6e` at **zero capacity in every AZ throughout** the previous night, and
+the rig doctrine's rule is that an unexercised limit produces no error — so the launch attempt
+is the probe. It succeeded on the first try:
+
+```
+i-09938e30bd1f42c3d   g6e.2xlarge   running   us-east-1c   2026-08-19T23:21:09Z
+run_id 20260819-192100-train
+MODE=train TRAIN_NAME=qpairs EVAL_VERSION=cshl-eval-v1 EPOCHS=1
+BATCH=16 QUERY_MAX_LEN=128 PASSAGE_MAX_LEN=384 GROUP_SIZE=8 WATCHDOG_MIN=120
+```
+
+**This run pulls BOTH untested levers at once, and that is a deliberate trade.** The report
+named two independent candidate causes for the 0.332: the objective mismatch, and batch 4
+chosen by the OOM guard on a 24 GB A10G. The L40S has 48 GB, so `BATCH=16` — four times the
+CITE run's effective batch, i.e. ~15 in-batch negatives per example against ~3. If the number
+moves, this run cannot say which lever moved it. Pulling one at a time would need two runs and
+about $6, which does not fit under the $5.00 cap; a single run that answers "does query-shaped
+supervision at a healthy batch size close the gap" is worth more than half of a cleaner
+experiment. Stated here so the result is not over-read later.
+
+`WATCHDOG_MIN=120` rather than the 360 default: g6e.2xlarge is **$2.242/hr**, so the stock
+watchdog would permit a $13.45 hang — 2.7× the entire lane budget. 120 min caps the worst case
+at $4.48 and still leaves ~35 min of headroom over the ~85 min expectation. The box also
+self-terminates on success, so the normal path costs only what it uses. If it is still
+legitimately training near the wall I will extend it by hand rather than let a healthy run be
+killed — there is no checkpointing in this rig (rig doctrine §4, still an open gap), so a
+watchdog kill loses the entire run.
+
+---
+
+## Spend ledger (revised — the train box is now live)
+
+| when | item | rate | $ | note |
+|---|---|---|---:|---|
+| 23:14Z | convert, local | — | 0.00 | free |
+| 23:14Z | quota / capacity / IAM checks | — | 0.00 | free, API reads only |
+| 23:15Z | S3 PUT 601 MB + storage | — | ~0.01 | negligible, counted anyway |
+| 23:21Z | train `g6e.2xlarge` | $2.242/hr | **in flight** | expected ~$3.20, hard ceiling $4.48 |
+| — | re-embed 433,449 × 2 boxes | — | pending | ~$0.85 estimated |
+| | **committed so far** | | **~0.01** | cap $5.00 |
+
+Waste this lane, itemised: **none yet.**
