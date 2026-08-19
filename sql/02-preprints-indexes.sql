@@ -13,6 +13,13 @@ ALTER TABLE preprints ADD COLUMN IF NOT EXISTS fts tsvector
     -- NB: array_to_string() is STABLE, not IMMUTABLE, so it cannot appear in a
     -- generated column. The source assigns exactly one category per preprint, so
     -- the scalar subscript carries the same information and is immutable.
+    --
+    -- WARNING: this reads categories[1] ONLY. `categories` is a text[] and the GIN
+    -- index on it matches every element, but the fts B-weight sees the first one.
+    -- If a future source (or a multi-category enrichment) ever puts more than one
+    -- value in the array, elements 2..n drop out of full-text search SILENTLY —
+    -- no error, just unfindable terms. If that day comes, maintain a plain
+    -- `categories_text` column alongside the array and weight that instead.
     setweight(to_tsvector('english',
         coalesce(categories[1], '') || ' ' ||
         coalesce(published_journal, '') || ' ' ||

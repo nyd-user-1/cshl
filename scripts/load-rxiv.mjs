@@ -19,6 +19,11 @@ import { spawnSync } from "node:child_process";
 import { normalizeAuthors } from "./lib/names.mjs";
 
 const CHUNK = Number(process.env.CHUNK ?? 50_000);
+// Line window, so staging can overlap a still-running walk: stage what has landed
+// so far, then stage the remainder later. The sql/04 upsert is latest-version-wins
+// and idempotent, so a window that overlaps a previous one is harmless.
+const FROM_LINE = Number(process.env.FROM_LINE ?? 1);
+const TO_LINE = Number(process.env.TO_LINE ?? Infinity);
 const TMP = "data/rxiv/_chunk.csv";
 const EXPECT = "ep-orange-water-aut2eymf";
 
@@ -59,7 +64,11 @@ async function loadDetails(file) {
     buf = [];
   };
   const rl = readline.createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity });
+  let lineNo = 0;
   for await (const line of rl) {
+    lineNo++;
+    if (lineNo < FROM_LINE) continue;
+    if (lineNo > TO_LINE) break;
     if (!line.trim()) continue;
     let r; try { r = JSON.parse(line); } catch { skipped++; continue; }
     if (!r.doi || !r.date || !r.version) { skipped++; continue; }
@@ -85,7 +94,7 @@ async function loadDetails(file) {
   }
   flush();
   fs.rmSync(TMP, { force: true });
-  console.log(`\n  staged ${rows} rows in ${chunks} chunks, ${skipped} skipped, ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+  console.log(`\n  staged ${rows} rows (lines ${FROM_LINE}..${Math.min(lineNo, TO_LINE)}) in ${chunks} chunks, ${skipped} skipped, ${((Date.now() - t0) / 1000).toFixed(0)}s`);
   return rows;
 }
 
@@ -114,15 +123,21 @@ async function loadPubs(file) {
   return rows;
 }
 
+// Optional explicit file list: `load-rxiv.mjs details data/rxiv/details-biorxiv.ndjson`
+// stages just that file. The upsert in sql/04 is latest-version-wins and keyed on
+// key_number, so staging one server at a time is safe and skips re-uploading rows
+// already in `preprints` — which matters when a full re-stage is 1.4 GB over the wire.
 const which = process.argv[2] ?? "all";
+const explicit = process.argv.slice(3).filter((a) => a.endsWith(".ndjson"));
+
 if (which === "details" || which === "all") {
   psql(["-c", "TRUNCATE stage_preprints"]);
-  for (const f of ["data/rxiv/details-medrxiv.ndjson", "data/rxiv/details-biorxiv.ndjson"])
-    if (fs.existsSync(f)) await loadDetails(f);
+  const files = explicit.length ? explicit : ["data/rxiv/details-medrxiv.ndjson", "data/rxiv/details-biorxiv.ndjson"];
+  for (const f of files) if (fs.existsSync(f)) await loadDetails(f);
 }
 if (which === "pubs" || which === "all") {
   psql(["-c", "TRUNCATE stage_pubs"]);
-  for (const f of ["data/rxiv/pubs-biorxiv.ndjson", "data/rxiv/pubs-medrxiv.ndjson"])
-    if (fs.existsSync(f)) await loadPubs(f);
+  const files = explicit.length ? explicit : ["data/rxiv/pubs-biorxiv.ndjson", "data/rxiv/pubs-medrxiv.ndjson"];
+  for (const f of files) if (fs.existsSync(f)) await loadPubs(f);
 }
 console.log("\nstaged. next: sql/04-upsert.sql");

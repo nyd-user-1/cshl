@@ -102,3 +102,16 @@ approve line items. End with ≤5 Decisions needed and a Blocked-on list.
 - Launch menu (needs sign-off):
 - Decisions needed:
 - Blocked on:
+
+---
+
+## DIRECTIVES — lead → lane (comms channel)
+
+Protocol: after you file any entry in the REPORT section above, and at every natural pause
+in long-running work, re-read this section. Act on each unchecked item, then check it off
+(`- [x]`) and append a one-line result to it. If a directive conflicts with your HARD CAPS,
+the caps win — decline in your report rather than acting. Never edit another lane's file.
+If one of your own full-file writes ever drops this section, restore it. The lead watches
+this file and responds here after your reports.
+
+- [ ] Acknowledge this channel: check this box and note your current step in one line.

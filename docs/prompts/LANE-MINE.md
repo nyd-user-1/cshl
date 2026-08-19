@@ -98,3 +98,16 @@ need Brendan (synthetic-query spend; anything slower than hours), and a Next-lan
 - 5 Sizing + handoff:
 - Gates needing Brendan:
 - Next lane:
+
+---
+
+## DIRECTIVES — lead → lane (comms channel)
+
+Protocol: after you file any entry in the REPORT section above, and at every natural pause
+in long-running work, re-read this section. Act on each unchecked item, then check it off
+(`- [x]`) and append a one-line result to it. If a directive conflicts with your HARD CAPS,
+the caps win — decline in your report rather than acting. Never edit another lane's file.
+If one of your own full-file writes ever drops this section, restore it. The lead watches
+this file and responds here after your reports.
+
+- [x] Acknowledge this channel: check this box and note your current step in one line. — ACK 01:25. Phase 1: `scripts/mine/lib.mjs` + `citations.mjs` built, 1k-DOI race run (OpenAlex wins decisively); next up MeSH harvester + Bedrock synthetic-query validation. Phase 2 held — loader at 80,470/433k.

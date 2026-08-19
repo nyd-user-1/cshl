@@ -1,9 +1,23 @@
-// embed-nsr worker — runs ON a GPU box beside a local TEI (bge-m3) server.
-// Adapted from 44b scripts/embed-v2/worker.mjs (single table, sidecar upsert).
-// Env: DATABASE_URL (direct/unpooled), PART (0..PARTS-1), PARTS, BOUNDS_NSR,
-// LANES, PAGE, TEI url.
-// Resume-safe by construction: claims come from nsr LEFT JOIN nsr_embeddings
-// WHERE e.key_number IS NULL — done rows never re-claim.
+// embed worker (CSHL / RxivGPT) — runs ON a GPU box beside a local TEI
+// (bge-m3) server. Ported from the NSR worker at 8c1b05b (itself adapted from
+// 44b scripts/embed-v2/worker.mjs).
+//
+// CHANGED vs the NSR original:
+//   - TABLE / EMB_TABLE / KEY / CAP / EMB_MODEL are env knobs (CSHL defaults:
+//     preprints, preprint_embeddings, key_number, 4000, bge-m3). The SQL is
+//     built from them once at startup instead of being hardcoded to nsr.
+//   - the upsert writes `model` explicitly (the sidecar has a model column and
+//     a fine-tuned run must not silently masquerade as stock bge-m3).
+//   - BOUNDS_NSR -> BOUNDS_KEYS.
+//   - CHUNK defaults to 64, not 128: rxiv inputs are ~4x longer than NSR's
+//     (measured mean 1,754 chars at cap 2000 / 2,034 at cap 4000 vs NSR's
+//     mostly title-only rows), so 128 long texts per TEI call would push a
+//     single request past --max-batch-tokens.
+//
+// Env: DATABASE_URL (direct/unpooled), PART (0..PARTS-1), PARTS, BOUNDS_KEYS,
+// LANES, PAGE, CHUNK, TEI url.
+// Resume-safe by construction: claims come from preprints LEFT JOIN
+// preprint_embeddings WHERE e.key_number IS NULL — done rows never re-claim.
 import pg from 'pg'
 import { createHash } from 'crypto'
 
@@ -11,14 +25,26 @@ const PART = Number(process.env.PART ?? 0)
 const PARTS = Number(process.env.PARTS ?? 1)
 const TEI = process.env.TEI ?? 'http://127.0.0.1:8080'
 const PAGE = Number(process.env.PAGE ?? 1024)
-const CHUNK = 128 // texts per TEI call
-const CAP = 2000  // chars per input
-const CONC = 4    // parallel TEI calls in flight
+const CHUNK = Number(process.env.CHUNK ?? 64) // texts per TEI call
+const CAP = Number(process.env.CAP ?? 4000)   // chars per input
+const CONC = Number(process.env.CONC ?? 4)    // parallel TEI calls in flight
+
+const TABLE = process.env.TABLE ?? 'preprints'
+const EMB_TABLE = process.env.EMB_TABLE ?? 'preprint_embeddings'
+const KEY = process.env.KEY ?? 'key_number'
+const EMB_MODEL = process.env.EMB_MODEL ?? 'bge-m3'
+
+// Identifiers come from the launcher, not from user input, but they are still
+// interpolated into SQL — so validate their shape rather than trusting them.
+for (const [n, v] of Object.entries({ TABLE, EMB_TABLE, KEY })) {
+  if (!/^[a-z_][a-z0-9_]*$/.test(v)) throw new Error(`${n}=${v} is not a plain identifier`)
+}
 
 const B = (env) => (process.env[env] || '').split(',').filter(Boolean)
 
-// Sessions only ever want index probes on key_number — the 44b fleet measured
-// what happens when a big unnest write flips the planner: turn seq scans off.
+// Sessions only ever want index probes on the business key — the 44b fleet
+// measured what happens when a big unnest write flips the planner: turn seq
+// scans off.
 async function mkClient() {
   const c = new pg.Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } })
   // Background socket errors must not crash the process (Neon law: an
@@ -30,23 +56,25 @@ async function mkClient() {
   return c
 }
 
-// Input recipe (deterministic, matches sql/23-embeddings.sql):
-// trim(title \n\n abstract), capped at 2000 chars. Exclusion in SQL, not
-// JS-skip: under 20 usable (non-whitespace) chars never claims.
+// Input recipe (deterministic): trim(title \n\n abstract), capped at CAP chars.
+// Exclusion in SQL, not JS-skip: under 20 usable (non-whitespace) chars never
+// claims. text_hash is md5 of the EXACT string sent to TEI, so a cap change
+// makes stale rows visibly stale.
 const JOB = {
-  table: 'nsr',
-  id: 'key_number',
-  bounds: B('BOUNDS_NSR'),
-  page: `SELECT n.key_number AS id,
-                left(trim(coalesce(n.title,'') || E'\n\n' || coalesce(n.abstract,'')), ${CAP}) AS text
-           FROM nsr n LEFT JOIN nsr_embeddings e ON e.key_number = n.key_number
-          WHERE e.key_number IS NULL AND n.key_number > $1 AND ($3::text IS NULL OR n.key_number <= $3)
-            AND length(regexp_replace(coalesce(n.title,'') || coalesce(n.abstract,''), '\\s+', '', 'g')) >= 20
-          ORDER BY n.key_number LIMIT $2`,
-  upd: `INSERT INTO nsr_embeddings (key_number, embedding, text_hash)
-        SELECT unnest($1::text[]), unnest($2::text[])::vector(1024), unnest($3::text[])
-            ON CONFLICT (key_number) DO UPDATE
-           SET embedding = EXCLUDED.embedding, text_hash = EXCLUDED.text_hash, embedded_at = now()`,
+  table: TABLE,
+  id: KEY,
+  bounds: B('BOUNDS_KEYS'),
+  page: `SELECT p.${KEY} AS id,
+                left(trim(coalesce(p.title,'') || E'\n\n' || coalesce(p.abstract,'')), ${CAP}) AS text
+           FROM ${TABLE} p LEFT JOIN ${EMB_TABLE} e ON e.${KEY} = p.${KEY}
+          WHERE e.${KEY} IS NULL AND p.${KEY} > $1 AND ($3::text IS NULL OR p.${KEY} <= $3)
+            AND length(regexp_replace(coalesce(p.title,'') || coalesce(p.abstract,''), '\\s+', '', 'g')) >= 20
+          ORDER BY p.${KEY} LIMIT $2`,
+  upd: `INSERT INTO ${EMB_TABLE} (${KEY}, embedding, model, text_hash)
+        SELECT unnest($1::text[]), unnest($2::text[])::vector(1024), $4::text, unnest($3::text[])
+            ON CONFLICT (${KEY}) DO UPDATE
+           SET embedding = EXCLUDED.embedding, model = EXCLUDED.model,
+               text_hash = EXCLUDED.text_hash, embedded_at = now()`,
 }
 
 // ── embed one chunk via TEI, with one retry then per-item fallback ───────────
@@ -92,7 +120,7 @@ async function embedBatch(rows) {
 
 // ── main loop ────────────────────────────────────────────────────────────────
 // LANES>1 splits this box's slice into LANES concurrent sub-ranges, each on
-// its own connection — IO parallelism against Neon. BOUNDS_NSR carries
+// its own connection — IO parallelism against Neon. BOUNDS_KEYS carries
 // PARTS*LANES upper-boundary keys (last entry = global cap for a rehearsal;
 // beyond the array = unbounded).
 const LANES = Number(process.env.LANES ?? 1)
@@ -100,8 +128,11 @@ let grand = 0
 const t0 = Date.now()
 
 // LO_CAP floors lane 0 — without it a bounded rehearsal silently claims the
-// entire corpus below its first boundary key (learned the hard way, 2026-08-16:
-// the "3,000-row" rehearsal swept 232,802 rows because lane 0 started at '').
+// entire corpus below its first boundary key (learned the hard way on NSR,
+// 2026-08-16: the "3,000-row" rehearsal swept 232,802 rows because lane 0
+// started at ''). It matters MORE here: rxiv's pre-2019 keys are bare
+// integers ('001891', '19000109') that sort below every dotted key, so an
+// unfloored lane 0 sweeps the whole legacy tail.
 const laneRange = (bounds, lane) => ({
   lo: lane === 0 ? (process.env.LO_CAP ?? '') : bounds[lane - 1],
   hi: lane >= bounds.length ? null : bounds[lane],
@@ -148,7 +179,7 @@ async function runRange(job, connOrMk, lo, hi, tag) {
         // error here is exactly how the first 44b sweeper died with work left.
         for (let a = 1; ; a++) {
           try {
-            await conn.query(job.upd, [sl.map((d) => d.id), sl.map((d) => d.emb), sl.map((d) => d.hash)])
+            await conn.query(job.upd, [sl.map((d) => d.id), sl.map((d) => d.emb), sl.map((d) => d.hash), EMB_MODEL])
             break
           } catch (e) {
             if (!mk || a >= 5) throw e
