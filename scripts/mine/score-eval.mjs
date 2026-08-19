@@ -27,7 +27,7 @@
 //     more of them, which is the behaviour a search box actually has.
 
 import { psqlRows, readJsonl, log, has, numArg, strArg, h32 } from "./lib.mjs";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
 // Corpus document frequency, already computed for the EXTRACT family. Used here
@@ -52,6 +52,8 @@ mkdirSync(OUT, { recursive: true });
 
 const K = [1, 5, 10];
 const KMAX = Math.max(...K);
+const CAPTURE = numArg("--capture", 0);   // store top-N key lists per query for RRF fusion
+const TOPN = CAPTURE || KMAX;
 const N = numArg("--n", 0);            // 0 = all 10,000
 const BATCH = numArg("--batch", 100);
 
@@ -120,25 +122,27 @@ async function freezeSubsample() {
 
 // ── FTS arm ──────────────────────────────────────────────────────────────────
 async function runFts(queries) {
-  const ranks = [];
+  const ranks = [], lists = [];
   for (let i = 0; i < queries.length; i += BATCH) {
     const b = queries.slice(i, i + BATCH);
     const values = b.map((r, j) => `(${j}, '${sq(tsq(r.q))}', '${sq(r.gold)}')`).join(",");
     const sql = `
 WITH q(i, tq, gold) AS (VALUES ${values})
-SELECT q.i, q.gold, coalesce(r.pos, 0)
+SELECT q.i, q.gold, coalesce(r.pos, 0), coalesce(r.keys, '')
 FROM q LEFT JOIN LATERAL (
-  SELECT rn AS pos FROM (
+  SELECT max(CASE WHEN t.key_number = q.gold THEN t.rn END) AS pos,
+         string_agg(t.key_number, ',' ORDER BY t.rn) AS keys
+  FROM (
     SELECT p.key_number, row_number() OVER (ORDER BY ts_rank_cd(p.fts, tsq) DESC) AS rn
     FROM preprints p, to_tsquery('english', q.tq) tsq
     WHERE p.fts @@ tsq
     ORDER BY ts_rank_cd(p.fts, tsq) DESC
-    LIMIT ${KMAX}
-  ) t WHERE t.key_number = q.gold
+    LIMIT ${TOPN}
+  ) t
 ) r ON true
 ORDER BY q.i;`;
     const out = await psqlRows(sql);
-    for (const [j, , pos] of out) ranks[i + Number(j)] = Number(pos) || 0;
+    for (const [j, , pos, keys] of out) { ranks[i + Number(j)] = Number(pos) || 0; if (CAPTURE) lists[i + Number(j)] = (keys || "").split(",").filter(Boolean); }
     if ((i / BATCH) % 5 === 0) log(`  fts ${i + b.length}/${queries.length}`);
   }
   return ranks;
@@ -181,7 +185,7 @@ async function encodeCloudflare(texts) {
 
 async function runDense(armName, queries, vectors) {
   const a = ARMS[armName];
-  const ranks = [];
+  const ranks = [], lists = [];
   const B = numArg("--dense-batch", 25);
   for (let i = 0; i < queries.length; i += B) {
     const b = queries.slice(i, i + B);
@@ -189,17 +193,51 @@ async function runDense(armName, queries, vectors) {
     const values = b.map((r, j) => `(${j}, '[${vs[j].join(",")}]'::vector(${a.dim}), '${sq(r.gold)}')`).join(",");
     const sql = `SET hnsw.ef_search = ${EF_SEARCH};
 WITH q(i, v, gold) AS (VALUES ${values})
-SELECT q.i, q.gold, coalesce(r.pos, 0)
+SELECT q.i, q.gold, coalesce(r.pos, 0), coalesce(r.keys, '')
 FROM q LEFT JOIN LATERAL (
-  SELECT rn AS pos FROM (
+  SELECT max(CASE WHEN t.key_number = q.gold THEN t.rn END) AS pos,
+         string_agg(t.key_number, ',' ORDER BY t.rn) AS keys
+  FROM (
     SELECT e.key_number, row_number() OVER (ORDER BY e.embedding ${a.op} q.v) AS rn
-    FROM ${a.table} e ORDER BY e.embedding ${a.op} q.v LIMIT ${KMAX}
-  ) t WHERE t.key_number = q.gold
+    FROM ${a.table} e ORDER BY e.embedding ${a.op} q.v LIMIT ${TOPN}
+  ) t
 ) r ON true
 ORDER BY q.i;`;
     const out = await psqlRows(sql);
-    for (const [j, , pos] of out) ranks[i + Number(j)] = Number(pos) || 0;
+    for (const [j, , pos, keys] of out) { ranks[i + Number(j)] = Number(pos) || 0; if (CAPTURE) lists[i + Number(j)] = (keys || "").split(",").filter(Boolean); }
     if ((i / B) % 10 === 0) log(`  ${armName} ${i + b.length}/${queries.length}`);
+  }
+  if (CAPTURE) writeFileSync(`${OUT}/${armName}.lists.json`, JSON.stringify(lists));
+  return ranks;
+}
+
+// ── RRF fusion ───────────────────────────────────────────────────────────────
+// Reciprocal Rank Fusion: score(d) = Σ_arms 1/(k + rank_arm(d)), k=60 (Cormack
+// et al.'s default, unchanged so the arm is reproducible without tuning).
+// Genuine fusion over the captured top-50 lists — a fused rank cannot be derived
+// from each arm's gold position alone, which is why every arm was re-run with
+// list capture rather than reusing the first pass.
+const RRF_K = numArg("--rrf-k", 60);
+
+function runRrf(queries, armNames) {
+  const lists = armNames.map((a) => {
+    const p = `${OUT}/${a}.lists.json`;
+    if (!existsSync(p)) throw new Error(`${p} missing — run --arm ${a} --capture 50 first`);
+    const l = JSON.parse(readFileSync(p, "utf8"));
+    if (l.length !== queries.length) throw new Error(`${a}.lists.json has ${l.length} rows for ${queries.length} queries — refusing to fuse misaligned arms`);
+    return l;
+  });
+  const ranks = [];
+  for (let i = 0; i < queries.length; i++) {
+    const score = new Map();
+    for (const l of lists) {
+      const arr = l[i] || [];
+      for (let r = 0; r < arr.length; r++) score.set(arr[r], (score.get(arr[r]) || 0) + 1 / (RRF_K + r + 1));
+    }
+    // Ties broken by key so the fused order is deterministic, not insertion-dependent.
+    const fused = [...score.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([k]) => k);
+    const pos = fused.indexOf(queries[i].gold);
+    ranks[i] = pos < 0 ? 0 : pos + 1;
   }
   return ranks;
 }
@@ -248,6 +286,13 @@ else if (arm === "fts") {
   const t0 = Date.now();
   const ranks = await runFts(queries);
   report("fts", queries, ranks, { wall_clock_s: (Date.now() - t0) / 1000, subsample: N || null });
+} else if (arm === "rrf") {
+  const combine = strArg("--combine", "fts,bge").split(",").map((x) => x.trim()).filter(Boolean);
+  const queries = await loadQueries();
+  log(`rrf(${combine.join(" + ")}): ${queries.length} queries · k=${RRF_K} · fusing captured top-50 lists`);
+  const t0 = Date.now();
+  const ranks = runRrf(queries, combine);
+  report(`rrf-${combine.join("-")}`, queries, ranks, { wall_clock_s: (Date.now() - t0) / 1000, subsample: N || null, combine, rrf_k: RRF_K });
 } else if (ARMS[arm]) {
   const queries = await loadQueries();
   log(`${arm}: ${queries.length} queries · table ${ARMS[arm].table} · operator ${ARMS[arm].op} (${ARMS[arm].note}) · hnsw.ef_search=${EF_SEARCH}`);
@@ -259,12 +304,30 @@ else if (arm === "fts") {
   } else {
     const vf = strArg("--query-vectors", "");
     if (!vf) { console.log(`${arm} needs --query-vectors <file.jsonl> ({q, vector}) — no local torch, so the query encoder must come from the rig lane`); process.exit(1); }
+    // Digest guard. Tonight produced two "different model" vector files that were
+    // byte-identical — correct names, correct dims, correct row count, valid
+    // JSON, real-looking floats, and nothing errored. A table row that is
+    // silently another model's is the worst outcome available to a published
+    // baseline, so refuse rather than score: compare this arm's input digest
+    // against every other arm's already on disk.
+    const digest = createHash("md5").update(readFileSync(vf)).digest("hex");
+    for (const other of readdirSync(OUT).filter((f) => f.startsWith("queryvec-") && f.endsWith(".jsonl"))) {
+      if (`${OUT}/${other}` === vf) continue;
+      const od = createHash("md5").update(readFileSync(`${OUT}/${other}`)).digest("hex");
+      if (od === digest) { console.log(`REFUSING: ${vf} and ${OUT}/${other} share md5 ${digest} — two models cannot produce identical vectors.`); process.exit(1); }
+    }
+    log(`  query vectors ${vf} md5 ${digest} — distinct from every other arm on disk`);
     const byQ = new Map();
     for await (const r of readJsonl(vf)) byQ.set(r.q ?? r.query, r.vector ?? r.embedding);
     vectors = queries.map((r) => byQ.get(r.q));
     const missing = vectors.filter((v) => !v).length;
     if (missing) { console.log(`${missing} of ${queries.length} queries have no vector in ${vf} — refusing to score a partial set`); process.exit(1); }
   }
+  const n0 = Math.sqrt(vectors[0].reduce((a, x) => a + x * x, 0));
+  const unit = Math.abs(n0 - 1) < 0.01;
+  if (ARMS[arm].op === "<#>" && unit) log(`  ⚠ WARNING: ${arm} uses <#> (dot product) but its query vectors are L2-normalized (‖v‖=${n0.toFixed(3)}) — check with the producer`);
+  if (ARMS[arm].op === "<=>" && !unit) log(`  note: ${arm} query vectors are not unit-norm (‖v‖=${n0.toFixed(3)}); cosine normalizes internally so this is fine`);
+  else log(`  query-vector L2 norm ${n0.toFixed(3)} — consistent with operator ${ARMS[arm].op}`);
   if (vectors.length !== queries.length) { console.log(`encoder returned ${vectors.length} vectors for ${queries.length} queries — refusing`); process.exit(1); }
   const ranks = await runDense(arm, queries, vectors);
   report(arm, queries, ranks, { wall_clock_s: (Date.now() - t0) / 1000, subsample: N || null, table: ARMS[arm].table, operator: ARMS[arm].op, ef_search: EF_SEARCH });
