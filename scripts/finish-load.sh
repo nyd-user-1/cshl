@@ -14,4 +14,8 @@ echo "=== $(date +%H:%M:%S) create anything missing (sql/02) ==="
 scripts/psql-cshl.sh -f sql/02-preprints-indexes.sql
 echo "=== $(date +%H:%M:%S) REAL index rebuild + analyze (sql/07) ==="
 scripts/psql-cshl.sh -f sql/07-reindex.sql
+echo "=== $(date +%H:%M:%S) embeddings sidecar, table only (sql/08) ==="
+scripts/psql-cshl.sh -f sql/08-embeddings.sql
+echo "=== $(date +%H:%M:%S) key assertion, independent of the loader ==="
+node scripts/assert-keys.mjs || echo "*** KEY ASSERTION FAILED ***"
 echo "=== $(date +%H:%M:%S) DONE ==="

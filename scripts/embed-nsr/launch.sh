@@ -17,10 +17,11 @@
 #
 # Usage (run from repo root):
 #   DRYRUN=1 N=1 ./scripts/embed-nsr/launch.sh                       # plan only, no AWS, no spend
+#   SCAFFOLD_ONLY=1 ./scripts/embed-nsr/launch.sh                     # create SSM/IAM/SG/S3 only ($0)
 #   REHEARSE=3000 REHEARSE_LO=2024 N=1 ./scripts/embed-nsr/launch.sh  # bounded rehearsal
 #   N=2 ./scripts/embed-nsr/launch.sh                                 # full run, 2 boxes
 #   MODEL=ncbi/MedCPT-Article-Encoder DIM=768 EMB_TABLE=preprint_embeddings_medcpt \
-#     EMB_MODEL=medcpt CAP=2000 N=1 ./scripts/embed-nsr/launch.sh      # an eval baseline arm
+#     EMB_MODEL=medcpt-article CAP=2000 NORMALIZE=0 N=1 ./scripts/embed-nsr/launch.sh  # a baseline arm
 #   MODEL_S3=s3://cshl-embed-rxiv/models/rxiv-encoder-bge-m3/<run>/final \
 #     EMB_TABLE=preprint_embeddings_rxiv EMB_MODEL=rxiv-encoder-bge-m3 N=1 \
 #     ./scripts/embed-nsr/launch.sh                                    # train rig Phase 3
@@ -43,9 +44,11 @@ DIM=${DIM:-1024}          # 768 for the MedCPT/SPECTER2/SciNCL baseline arms
 # model — this is the train rig's Phase 3, moved onto the rig that is already
 # sharded and resume-safe. Set it to s3://<bucket>/models/<name>/<run>/final .
 MODEL_S3=${MODEL_S3:-}
+NORMALIZE=${NORMALIZE:-1}          # 0 = store raw encoder output (MedCPT: dot product, not cosine)
 RECLAIM_STALE=${RECLAIM_STALE:-}   # 1 = also re-embed rows whose text_hash no longer matches the recipe
 MODEL_ID=${MODEL_S3:+/data}; MODEL_ID=${MODEL_ID:-$MODEL}
 DRYRUN=${DRYRUN:-}
+SCAFFOLD_ONLY=${SCAFFOLD_ONLY:-}   # create SSM/IAM/SG/S3 and stop; no bounds query, no instance
 EXPECT_HOST=${EXPECT_HOST:-ep-orange-water-aut2eymf}
 
 say() { echo "$@"; }
@@ -110,6 +113,11 @@ else
 fi
 say "sg: $SG"; say "ami: $AMI"
 
+if [ -n "$SCAFFOLD_ONLY" ]; then
+  echo "SCAFFOLD_ONLY: ssm=$PARAM role=$ROLE sg=$SG bucket=$BUCKET — no bounds query, no instance launched."
+  exit 0
+fi
+
 # 6. Lane bounds, computed from the unembedded set at launch time.
 #    L = N*LANES upper-boundary keys (last = global cap), so a rehearsal is
 #    bounded above and the full run claims exactly what remains.
@@ -167,7 +175,7 @@ mkdir -p /opt/embed && cd /opt/embed && npm init -y >/dev/null && npm i pg >/dev
 aws s3 cp s3://$BUCKET/worker.mjs worker.mjs
 for t in \$(seq 1 60); do curl -sf http://127.0.0.1:8080/health && break; sleep 5; done
 export PART=$i PARTS=$N PAGE=${PAGE:-1024} LANES=$LANES_UD
-export TABLE=$TABLE EMB_TABLE=$EMB_TABLE KEY=$KEY CAP=$CAP DIM=$DIM EMB_MODEL=${EMB_MODEL:-bge-m3}${RECLAIM_STALE:+ RECLAIM_STALE=1}
+export TABLE=$TABLE EMB_TABLE=$EMB_TABLE KEY=$KEY CAP=$CAP DIM=$DIM NORMALIZE=$NORMALIZE EMB_MODEL=${EMB_MODEL:-bge-m3}${RECLAIM_STALE:+ RECLAIM_STALE=1}
 export BOUNDS_KEYS='$BOUNDS' LO_CAP='${REHEARSE:+${REHEARSE_LO:-2024}}'
 DATABASE_URL="\$DBURL" node worker.mjs
 aws s3 cp /var/log/embed.log s3://$BUCKET/logs/cshl-embed-part$i-\$(date +%s).log

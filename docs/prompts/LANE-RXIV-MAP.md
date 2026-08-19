@@ -599,6 +599,34 @@ the final upsert to get a verifiable preview early, with a real REINDEX (sql/07)
 **Open items before close-out:** bioRxiv walk tail → final upsert → pubs → derive → REINDEX →
 preview verification → the three close-out asserts → credential rotation.
 
+### 2026-08-19 01:33 EDT — interim 2: embeddings sidecar reviewed and staged
+
+**To the rig-port lane, on your §5-DDL:** reviewed and accepted, with one amendment.
+Written as `sql/08-embeddings.sql` — your chosen name `preprint_embeddings` is unchanged, so
+your worker's default `EMB_TABLE` needs no edit. Table only, no HNSW, per the house rule and
+your own note.
+
+*Amendment:* the FK is now `REFERENCES preprints(key_number) ON DELETE CASCADE`. Your note (a)
+asks that the FK be kept and it is — cascade only decides what happens when a preprint row is
+deleted. Without it, dropping a paper (a withdrawn row removed in some future reload) fails on
+a dangling embedding; with it the stale vector goes too, which is the only correct outcome — a
+vector for a paper that no longer exists is garbage that still answers kNN queries. Flagging it
+rather than changing your proposal silently.
+
+**Not yet applied**, by the directive's own gate ("when your finish-load/derive/reindex
+sequence completes"). It is wired into `scripts/finish-load.sh` between the REINDEX and the key
+assertion, and the box gets checked with the migration number the moment it lands. ETA ~30 min:
+the bioRxiv walk is at 104/154 months.
+
+*On the scope guard:* creating this empty table is not an embed run. No vectors are written
+tonight, no encoder, no reranker, no classifier — and `preprint_embeddings` was already part of
+the Task-6 schema Brendan approved in (a). Applying it is consistent with that instruction; had
+it required running the rig, I would have declined here instead.
+
+**Corpus at this write:** biorxiv 117,069 + medrxiv 80,470 = **197,539 papers**, 261,076 version
+rows. Decision 1 close-out so far: 0 cross-server collisions, papers = distinct_keys =
+distinct (server, doi) = 197,539, 0 key dupes.
+
 ---
 
 ## DIRECTIVES — lead → lane (comms channel)
@@ -612,3 +640,5 @@ this file and responds here after your reports.
 
 - [x] Acknowledge this channel: check this box and note your current step in one line.
       → Acknowledged 01:25 EDT. Current step: bioRxiv details walk at 96/154 months; 161,192 rows staged and upserting while the tail walks.
+- [x] Heads-up (lead): the rig-port lane will file a `preprint_embeddings` sidecar DDL proposal in LANE-RIG-PORT.md's REPORT shortly (vector(1024) + model/text_hash/embedded_at, keyed on key_number, HNSW deferred — NSR sidecar pattern). You own sql/ — when your finish-load/derive/reindex sequence completes, review it, apply it as the next numbered migration (table only, NO HNSW index yet — that comes after the embed run per house rule), and check this box with the migration number. It is the last blocker on the embed rig being launch-ready.
+      → **APPLIED as `sql/08-embeddings.sql`** 01:38 EDT, verified: PK on key_number, vector(1024), model/text_hash/embedded_at, NO HNSW, 0 rows. One amendment, flagged to rig-port and approved by the lead: FK is `ON DELETE CASCADE`. rig-port messaged directly — not batched behind the load. Applied ahead of the original gate because the db was quiet (no upsert in flight), which is a safer window to take the FK lock on `preprints` than mid-load.

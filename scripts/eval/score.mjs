@@ -37,13 +37,22 @@ const TOPK = Number(process.env.TOPK ?? 50)
 const CONC = Number(process.env.CONC ?? 12)
 
 // ── the arm registry. Adding a baseline is one line here. ────────────────────
+// `metric` is not decoration. Each model is scored with the similarity function
+// its authors trained and published it for: bge-m3 and its descendants are
+// cosine models (and TEI normalizes them), while MedCPT / SPECTER2 / SciNCL are
+// dot-product models over raw [CLS] vectors. Normalizing before a dot product
+// changes the ranking whenever document norms vary, so scoring MedCPT with
+// cosine would quietly report a number that is not MedCPT's.
+//   cosine -> pgvector <=> , HNSW vector_cosine_ops , worker NORMALIZE=1
+//   ip     -> pgvector <#> , HNSW vector_ip_ops     , worker NORMALIZE=0
+export const OPS = { cosine: '<=>', ip: '<#>' }
 export const REGISTRY = {
   fts:        { kind: 'fts' },
-  'bge-m3':   { kind: 'dense', table: 'preprint_embeddings',           dim: 1024, doc: 'BAAI/bge-m3',                   query: 'BAAI/bge-m3' },
-  rxiv:       { kind: 'dense', table: 'preprint_embeddings_rxiv',      dim: 1024, doc: 'NYSgpt/rxiv-encoder-bge-m3',    query: 'NYSgpt/rxiv-encoder-bge-m3' },
-  medcpt:     { kind: 'dense', table: 'preprint_embeddings_medcpt',    dim: 768,  doc: 'ncbi/MedCPT-Article-Encoder',   query: 'ncbi/MedCPT-Query-Encoder' },
-  specter2:   { kind: 'dense', table: 'preprint_embeddings_specter2',  dim: 768,  doc: 'allenai/specter2_base',         query: 'allenai/specter2_base' },
-  scincl:     { kind: 'dense', table: 'preprint_embeddings_scincl',    dim: 768,  doc: 'malteos/scincl',                query: 'malteos/scincl' },
+  'bge-m3':   { kind: 'dense', table: 'preprint_embeddings',           dim: 1024, metric: 'cosine', doc: 'BAAI/bge-m3',                 query: 'BAAI/bge-m3' },
+  rxiv:       { kind: 'dense', table: 'preprint_embeddings_rxiv',      dim: 1024, metric: 'cosine', doc: 'NYSgpt/rxiv-encoder-bge-m3',  query: 'NYSgpt/rxiv-encoder-bge-m3' },
+  medcpt:     { kind: 'dense', table: 'preprint_embeddings_medcpt',    dim: 768,  metric: 'ip',     doc: 'ncbi/MedCPT-Article-Encoder', query: 'ncbi/MedCPT-Query-Encoder' },
+  specter2:   { kind: 'dense', table: 'preprint_embeddings_specter2',  dim: 768,  metric: 'ip',     doc: 'allenai/specter2_base',       query: 'allenai/specter2_base' },
+  scincl:     { kind: 'dense', table: 'preprint_embeddings_scincl',    dim: 768,  metric: 'ip',     doc: 'malteos/scincl',              query: 'malteos/scincl' },
 }
 
 const sql = neon(process.env.DATABASE_URL_UNPOOLED)
@@ -157,13 +166,14 @@ function loadQueryEmbeddings(arm) {
 
 async function runDense(arm, queries) {
   const spec = REGISTRY[arm]
+  const OP = OPS[spec.metric ?? 'cosine']
   const emb = loadQueryEmbeddings(arm)
   const [{ n: corpusN }] = await q(`SELECT count(*)::int AS n FROM ${spec.table}`)
-  console.log(`  ${arm}: corpus ${corpusN} vectors (dim ${spec.dim}), ${emb.size} query vectors`)
+  console.log(`  ${arm}: corpus ${corpusN} vectors (dim ${spec.dim}, metric ${spec.metric ?? 'cosine'} ${OP}), ${emb.size} query vectors`)
 
   const probe = queries.find((qq) => emb.has(qq.qid))
   if (probe) {
-    const plan = await q(`EXPLAIN SELECT key_number FROM ${spec.table} ORDER BY embedding <=> $1::vector LIMIT ${TOPK}`, [emb.get(probe.qid)])
+    const plan = await q(`EXPLAIN SELECT key_number FROM ${spec.table} ORDER BY embedding ${OP} $1::vector LIMIT ${TOPK}`, [emb.get(probe.qid)])
     const text = plan.map((r) => Object.values(r)[0]).join(' | ')
     console.log(`  ${arm} plan: ${text.includes('Index Scan') ? 'Index Scan CONFIRMED' : 'WARNING no Index Scan — ' + text}`)
   }
@@ -175,12 +185,12 @@ async function runDense(arm, queries) {
     const t0 = Date.now()
     const res = await withRetry(() => sql.transaction([
       sql.query(`SET LOCAL hnsw.ef_search = ${process.env.EF_SEARCH ?? 100}`),
-      sql.query(`SELECT key_number FROM ${spec.table} ORDER BY embedding <=> $1::vector LIMIT ${TOPK}`, [v]),
+      sql.query(`SELECT key_number FROM ${spec.table} ORDER BY embedding ${OP} $1::vector LIMIT ${TOPK}`, [v]),
     ]))
     latencies.push(Date.now() - t0)
     perQuery.set(qq.qid, res[1].map((r) => r.key_number))
   })
-  return { perQuery, latencies, extra: { corpus_vectors: corpusN, dim: spec.dim, doc_model: spec.doc, query_model: spec.query } }
+  return { perQuery, latencies, extra: { corpus_vectors: corpusN, dim: spec.dim, metric: spec.metric ?? 'cosine', doc_model: spec.doc, query_model: spec.query } }
 }
 
 const rrf = (lists, k = 60) => {

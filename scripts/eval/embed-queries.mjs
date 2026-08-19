@@ -34,7 +34,7 @@ const spec = REGISTRY[ARM]
 if (!spec || spec.kind !== 'dense') throw new Error(`ARM=${ARM} is not a dense arm in the registry`)
 const PROVIDER = process.env.PROVIDER ?? (ARM === 'bge-m3' ? 'cloudflare' : process.env.TEI_URL ? 'tei' : 'hf')
 const BATCH = Number(process.env.BATCH ?? (PROVIDER === 'cloudflare' ? 10 : 32))
-console.log(`arm=${ARM} provider=${PROVIDER} query_model=${spec.query} dim=${spec.dim} -> ${OUTF}`)
+console.log(`arm=${ARM} provider=${PROVIDER} query_model=${spec.query} dim=${spec.dim} metric=${spec.metric ?? 'cosine'} -> ${OUTF}`)
 
 const providers = {
   async cloudflare(texts) {
@@ -52,7 +52,7 @@ const providers = {
     const r = await fetch(`${process.env.TEI_URL.replace(/\/$/, '')}/embed`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) },
-      body: JSON.stringify({ inputs: texts, truncate: true, normalize: true }),
+      body: JSON.stringify({ inputs: texts, truncate: true, normalize: (spec.metric ?? 'cosine') === 'cosine' }),
     })
     if (!r.ok) throw new Error(`tei ${r.status}: ${(await r.text()).slice(0, 200)}`)
     return r.json()

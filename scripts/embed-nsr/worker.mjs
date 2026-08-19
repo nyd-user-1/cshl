@@ -8,7 +8,8 @@
 //     built from them once at startup instead of being hardcoded to nsr.
 //   - the upsert writes `model` explicitly (the sidecar has a model column and
 //     a fine-tuned run must not silently masquerade as stock bge-m3).
-//   - BOUNDS_NSR -> BOUNDS_KEYS; DIM knob (768-d baseline arms reuse this rig).
+//   - BOUNDS_NSR -> BOUNDS_KEYS; DIM knob (768-d baseline arms reuse this rig);
+//     NORMALIZE knob (MedCPT wants raw CLS + dot product, not cosine).
 //   - CHUNK defaults to 64, not 128: rxiv inputs are ~4x longer than NSR's
 //     (measured mean 1,754 chars at cap 2000 / 2,034 at cap 4000 vs NSR's
 //     mostly title-only rows), so 128 long texts per TEI call would push a
@@ -35,6 +36,15 @@ const TABLE = process.env.TABLE ?? 'preprints'
 const EMB_TABLE = process.env.EMB_TABLE ?? 'preprint_embeddings'
 const KEY = process.env.KEY ?? 'key_number'
 const EMB_MODEL = process.env.EMB_MODEL ?? 'bge-m3'
+// NORMALIZE=0 stores RAW encoder output. This is not a style preference: bge-m3
+// is trained for cosine and TEI normalizes it anyway, but MedCPT ranks by DOT
+// PRODUCT over unnormalized [CLS] vectors (its own model card and paper), and
+// normalizing before a dot product changes the ranking whenever |d| varies.
+// A baseline measured with the wrong similarity function is a bad number, and
+// this benchmark exists to be the number other people compare against.
+// Pair with the arm's `metric` in scripts/eval/score.mjs: normalized -> <=> ,
+// raw -> <#> (and the HNSW opclass must match).
+const NORMALIZE = (process.env.NORMALIZE ?? '1') !== '0'
 // Baseline arms are not all 1024-d: MedCPT / SPECTER2 / SciNCL are 768. The same
 // rig embeds the corpus for every eval arm, so the dimension is a knob.
 // RECLAIM_STALE=1 also claims rows whose stored text_hash no longer matches the
@@ -106,7 +116,7 @@ async function tei(texts) {
   const r = await fetch(`${TEI}/embed`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ inputs: texts, truncate: true }),
+    body: JSON.stringify({ inputs: texts, truncate: true, normalize: NORMALIZE }),
   })
   if (!r.ok) throw new Error(`TEI ${r.status}: ${(await r.text()).slice(0, 200)}`)
   return r.json()
