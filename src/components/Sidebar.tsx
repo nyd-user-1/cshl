@@ -280,7 +280,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
               onClick={() => { navigate("/new-chat"); window.dispatchEvent(new Event("new-chat")); closeMobile(); }}
               className="hover:opacity-80 transition-opacity"
             >
-              Nuclear Data Center
+              RxivGPT
             </button>
           </h1>
 

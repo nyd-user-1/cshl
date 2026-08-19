@@ -11,7 +11,7 @@
 > the same cshl strings are staged there as `CSHL_DATABASE_URL[_UNPOOLED]`. Cutting over
 > is a one-variable rename once there is data to serve.
 
-# NSRgpt — Nuclear Data Center
+# NSRgpt — RxivGPT
 
 A search, chat, and browsing layer over the Nuclear Science References corpus
 and its sibling NNDC databases (ENSDF, XUNDL, ENDF), backed by our own
