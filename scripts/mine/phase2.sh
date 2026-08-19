@@ -27,11 +27,23 @@ BIO=$(scripts/psql-cshl.sh -t -A -c "select count(*) from preprints where server
 MED=$(scripts/psql-cshl.sh -t -A -c "select count(*) from preprints where server='medrxiv'")
 PUB=$(scripts/psql-cshl.sh -t -A -c "select count(*) from preprints where published_doi is not null")
 echo "corpus: $ROWS papers (biorxiv $BIO · medrxiv $MED) · $PUB with a published DOI" | tee -a "$LOG"
-MIN=${MIN_ROWS:-420000}
-if [ "$ROWS" -lt "$MIN" ]; then
-  echo "REFUSING: $ROWS < $MIN expected. The loader is not done — set MIN_ROWS to override." | tee -a "$LOG"
+# The floor must be the corpus's DECLARED size, not a round number below it.
+# Set to 420000 on the first run, this guard passed at 426,352 — while medRxiv
+# was still 7,097 rows short of its true 87,567 (an early upsert had read a
+# partially-staged table). A guessed floor only catches a loader that has barely
+# started; it cannot catch one that is nearly done, which is the case that
+# actually produces a plausible-looking wrong dataset. Per-server counts, from
+# the ingest lane's independently verified figures.
+EXPECT_BIO=${EXPECT_BIORXIV:-345882}
+EXPECT_MED=${EXPECT_MEDRXIV:-87567}
+MIN=$((EXPECT_BIO + EXPECT_MED))
+if [ "$BIO" -lt "$EXPECT_BIO" ] || [ "$MED" -lt "$EXPECT_MED" ]; then
+  echo "REFUSING: biorxiv $BIO/$EXPECT_BIO · medrxiv $MED/$EXPECT_MED (total $ROWS/$MIN)." | tee -a "$LOG"
+  echo "  A per-server shortfall is invisible in the total — that is why this checks both." | tee -a "$LOG"
+  echo "  Override with EXPECT_BIORXIV= / EXPECT_MEDRXIV= only if the ingest lane has re-declared them." | tee -a "$LOG"
   exit 1
 fi
+echo "preflight OK: biorxiv $BIO/$EXPECT_BIO · medrxiv $MED/$EXPECT_MED" | tee -a "$LOG"
 
 # ── harvest ──────────────────────────────────────────────────────────────────
 step "1/7 citations — OpenAlex source walk, both servers"
