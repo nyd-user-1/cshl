@@ -188,63 +188,41 @@ that only reports wins is worthless.`
 
 ---
 
-## Licensing — read this before any repo goes public
+## Licensing — measured, for the record
 
-The corpus is **not** uniformly Creative Commons, and the shape of the mix matters for what
-we can redistribute. Measured over 197,539 loaded papers:
+Everything publishes **private**, per standing policy — the same posture as the sibling NSR
+program's four private repos. Bulk public redistribution is not on the table, so the
+question that would otherwise arise here does not.
 
-| license | share | permits redistribution of derivatives? |
+The measured mix stays in this report and in the cards because it is a fact about the
+corpus worth stating, and because a card that gets it wrong is worse than a card that omits
+it. Over 197,539 loaded papers:
+
+| licence | share | derivatives redistributable? |
 |---|---:|---|
-| `cc_by_nc_nd` | 35.5% | **no** — no derivatives |
-| `cc_no` | 29.9% | **no** — all rights reserved |
+| `cc_by_nc_nd` | 35.5% | no |
+| `cc_no` | 29.9% | **no — all rights reserved** |
 | `cc_by` | 20.2% | yes |
 | `cc_by_nc` | 6.8% | yes, non-commercial |
-| `cc_by_nd` | 6.4% | **no** — no derivatives |
+| `cc_by_nd` | 6.4% | no |
 | `cc0` / `cc0_ng` | 1.1% | yes |
 | unstated | 0.1% | unknown |
 
-So roughly **72% of the corpus carries a licence that restricts derivative redistribution,
-commercial use, or both**, and `cc_no` — nearly a third — reserves all rights.
+`cc_no` means all rights reserved, not a Creative Commons licence. The card filler
+originally computed this with `license LIKE 'cc%'` and would have asserted **"99.9%
+Creative Commons"** about a corpus that is ~30% all-rights-reserved — wrong in the direction
+that costs credibility rather than accuracy. It enumerates now.
 
-This is a live constraint on two artifacts, not a theoretical one:
+Two things kept, both cheap: the table ships inside the cards, and
+`scripts/publish-nsr/launch.sh` refuses to push a text-bearing artifact
+(`*triplets*`, `*eval-v1*`, `*corpus*`, `*query-pairs*`) with anything other than
+`PRIVATE=True`. That is not a decision pending anyone's input — it is the settled policy
+made structural, so it stays settled without depending on memory. If the posture ever
+changes, a keys-only release is available at low cost: every frozen row already carries
+`doi` and `server`.
 
-- **`cshl-triplets` contains abstract text**, drawn from papers across the whole licence
-  mix. Publishing it, even privately, is redistribution.
-- **`cshl-eval-v1` inlines `embed_text`** (title + abstract) so the benchmark is
-  self-contained and reproducible — which is the right call for rigour and the wrong one for
-  licensing, at the same time.
-
-All repos are private for now, which is the correct default and buys time to resolve this
-rather than resolving it. **Flipping any of them public needs a real answer**, and the
-options are known: ship keys and let consumers re-fetch text from the public API (the
-benchmark rows already carry `doi` + `server` for exactly this reason), restrict the
-published slice to the ~21% that is `cc_by`/`cc0`, or get CSHL's explicit position. The
-sibling NSR project has the same question open with NNDC and it has not been answered there
-either.
-
-**Two questions that get conflated, and shouldn't be.** *Displaying* abstracts in the search
-UI, with attribution and a link to source, is what the servers' public API exists for; every
-literature-search surface does it, and the production cutover is not implicated by any of
-this. *Redistributing* them in bulk as a downloadable dataset is the different question, and
-the only one at issue here.
-
-**Recommended path, if and when someone wants a public release: keys only.** Every frozen
-benchmark row already carries `doi` and `server` — lane-mine added them so a team with a
-longer-context model could build an untruncated variant, and the same field does double duty
-here. A consumer re-fetches text from `https://api.{server}.org/details/{server}/{doi}/na/json`
-and reconstructs the dataset themselves. It costs us a build script and it moves the
-redistribution question to the party that already has a licence to answer it.
-
-**This is now enforced, not remembered.** `scripts/publish-nsr/launch.sh` refuses to push any
-repo whose name matches a text-bearing artifact (`*triplets*`, `*eval-v1*`, `*corpus*`,
-`*query-pairs*`) unless `PRIVATE=True`, and separately refuses if the card does not contain
-the licence table — so anyone reaching for the visibility toggle reads the table first. The
-override is a deliberately unwieldy environment variable rather than a flag. Verified against
-all three paths: public text-bearing repo refuses, private-without-licence-table refuses, and
-a weights-only model repo passes through untouched.
-
-I am flagging this rather than deciding it. It is a redistribution question about someone
-else's content, and nothing about tonight's deadline makes it urgent enough to guess at.
+Distinct and not at issue: *displaying* abstracts in the search UI with attribution is what
+the servers' public API exists for, and the production cutover is unaffected.
 
 ## Open follow-ups
 
