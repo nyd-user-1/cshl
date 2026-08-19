@@ -21,7 +21,7 @@ program on nuclear-science literature.*
 | — | eval sidecar tables (4) | done | $0.00 |
 | — | aborted MedCPT rehearsal, terminated 35 s in on a permissions contradiction | done | $0.03 |
 | E0 | 3,000-row bge-m3 rehearsal | **done** | $0.25 |
-| E1 | full corpus embed, bge-m3, cap 4000 | pending | `PENDING` |
+| E1 | full corpus embed, bge-m3, cap 4000 (two launches — see note) | running | `PENDING` |
 | E2 | HNSW index | pending | `PENDING` |
 | B1–B3 | MedCPT / SPECTER2 / SciNCL baseline corpus embeds | pending | `PENDING` |
 | Q1 | doc2query synthetic-query generation | pending | `PENDING` |
@@ -81,6 +81,34 @@ to run one script; it never needed a package manager.
 The general lesson, which is worth more than either fix: **a rehearsal is not for
 confirming that the happy path works.** Both defects were invisible to "did it produce
 vectors?" and both were caught by checking an invariant and watching the clock.
+
+## E1 — two bugs that would not have announced themselves
+
+Both were caught in flight, and both belong to the same family: failures that produce a
+plausible result rather than an error.
+
+**The sweep was bounded at yesterday's maximum key.** Lane boundaries are computed from the
+unembedded set *at launch*. The corpus was still being upserted underneath the run, and the
+top lane's upper bound was the largest key that existed at that moment — so every row the
+loader added above it would have been silently excluded. No error, no crash, no short count
+anyone would notice: just ~236,000 papers with no vector. The first symptom would have been
+a dense-recall number that read as *model weakness*, and the search for it would have gone
+into the training data, which is the one place it wasn't. Fixed by emitting `L-1` boundaries
+on a full run so the top lane is unbounded. Rehearsals keep their bounded top — that is what
+makes them a rehearsal rather than a small sweep.
+
+**A comment executed on the laptop instead of the box.** The launcher builds its user-data
+with an unquoted heredoc, and a comment I wrote to explain the previous fix contained
+`` `apt-get update` `` in backticks. Bash performed command substitution while assembling the
+script: the command ran locally, its output was spliced into the comment, and the box
+received a mangled line. It was harmless because `apt-get` does not exist on macOS. A
+comment containing a destructive command in that position would have run on the author's
+machine with the author's credentials, and nothing about the surrounding code would have
+looked wrong. The response was to audit the entire heredoc for unescaped `` ` `` and `$(`
+rather than to fix the one instance.
+
+Neither of these is exotic. Both are the ordinary consequence of a rig assembled by string
+interpolation and pointed at a moving target, and both are invisible to "did it exit zero?"
 
 ## The corpus
 
