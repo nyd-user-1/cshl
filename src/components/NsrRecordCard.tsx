@@ -64,7 +64,7 @@ export const NsrRecordCard = memo(function NsrRecordCard({ record, searchQuery, 
       `Year: ${record.pub_year}`,
       record.reference ? `Reference: ${record.reference}` : null,
       record.doi ? `DOI: ${record.doi}` : null,
-      record.keywords ? `Keywords: ${record.keywords}` : null,
+      record.categories?.length ? `Category: ${record.categories.join(", ")}` : null,
     ]
       .filter(Boolean)
       .join("\n");
@@ -79,7 +79,7 @@ export const NsrRecordCard = memo(function NsrRecordCard({ record, searchQuery, 
     emit({
       event_type: "record_inquiry",
       category: "chat",
-      entity_type: "nsr_record",
+      entity_type: "preprint",
       entity_value: record.key_number,
       display_text: `Inquired about ${record.key_number}: "${record.title.slice(0, 60)}"`,
       metadata: { doi: record.doi },
@@ -148,23 +148,23 @@ export const NsrRecordCard = memo(function NsrRecordCard({ record, searchQuery, 
           )}
         </div>
 
-        {/* Row 2, Col 1: Nuclides */}
+        {/* Row 2, Col 1: Category */}
         <div className="min-w-0">
-          {record.nuclides && record.nuclides.length > 0 && (
+          {record.categories && record.categories.length > 0 && (
             <>
-              <span className="text-muted-foreground">Nuclides</span>
+              <span className="text-muted-foreground">Category</span>
               <div className="flex flex-wrap gap-1.5 mt-0.5">
-                {record.nuclides.slice(0, 3).map((nuc) => (
+                {record.categories.slice(0, 3).map((cat) => (
                   <span
-                    key={nuc}
+                    key={cat}
                     className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-foreground/80"
                   >
-                    {nuc}
+                    {cat}
                   </span>
                 ))}
-                {record.nuclides.length > 3 && (
+                {record.categories.length > 3 && (
                   <span className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                    +{record.nuclides.length - 3}
+                    +{record.categories.length - 3}
                   </span>
                 )}
               </div>
@@ -172,23 +172,23 @@ export const NsrRecordCard = memo(function NsrRecordCard({ record, searchQuery, 
           )}
         </div>
 
-        {/* Row 2, Col 2: Reactions */}
+        {/* Row 2, Col 2: Status */}
         <div className="min-w-0">
-          {record.reactions && record.reactions.length > 0 && (
+          {record.status_tags && record.status_tags.length > 0 && (
             <>
-              <span className="text-muted-foreground">Reactions</span>
+              <span className="text-muted-foreground">Status</span>
               <div className="flex flex-wrap gap-1.5 mt-0.5">
-                {record.reactions.slice(0, 3).map((rxn) => (
+                {record.status_tags.slice(0, 3).map((tag) => (
                   <span
-                    key={rxn}
+                    key={tag}
                     className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-foreground/80"
                   >
-                    {rxn}
+                    {tag}
                   </span>
                 ))}
-                {record.reactions.length > 3 && (
+                {record.status_tags.length > 3 && (
                   <span className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                    +{record.reactions.length - 3}
+                    +{record.status_tags.length - 3}
                   </span>
                 )}
               </div>
@@ -224,7 +224,7 @@ export const NsrRecordCard = memo(function NsrRecordCard({ record, searchQuery, 
         <button
           onClick={handleSendToChat}
           className="flex h-10 w-10 items-center justify-center rounded-full bg-foreground text-background shadow-lg transition-all hover:scale-110"
-          title="Ask NSRgpt about this reference"
+          title="Ask RxivGPT about this preprint"
         >
           <ArrowUp className="h-4 w-4" />
         </button>

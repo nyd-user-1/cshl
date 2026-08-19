@@ -12,11 +12,10 @@ export function RecordDialog({ record, open, onOpenChange }: { record: NsrRecord
   if (record.pub_year) rows.push(["Year", String(record.pub_year)]);
   if (record.reference_type) rows.push(["Type", record.reference_type]);
   if (record.doi) rows.push(["DOI", <a key="doi" href={`https://doi.org/${record.doi}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-nuclear hover:underline"><ExternalLink className="h-3 w-3" />{record.doi}</a>]);
-  if (record.nuclides?.length) rows.push(["Nuclides", record.nuclides.join(", ")]);
-  if (record.reactions?.length) rows.push(["Reactions", record.reactions.join(", ")]);
-  if (record.subjects?.length) rows.push(["Measured", record.subjects.join(", ")]);
-  if (record.topics?.length) rows.push(["Topics", record.topics.join(", ")]);
-  if (record.exfor_keys) rows.push(["EXFOR", record.exfor_keys]);
+  if (record.categories?.length) rows.push(["Category", record.categories.join(", ")]);
+  if (record.status_tags?.length) rows.push(["Status", record.status_tags.join(", ")]);
+  if (record.published_journal) rows.push(["Published in", record.published_journal]);
+  if (record.institution) rows.push(["Institution", record.institution]);
   if (record.citation_count != null) rows.push(["Citations", String(record.citation_count)]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

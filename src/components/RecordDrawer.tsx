@@ -271,34 +271,34 @@ export function RecordDrawer({
                   </div>
                 )}
 
-                {/* Nuclides (with label, matching card pattern) */}
-                {record.nuclides && record.nuclides.length > 0 && (
+                {/* Category (with label, matching card pattern) */}
+                {record.categories && record.categories.length > 0 && (
                   <div className="py-3">
-                    <span className="text-xs text-muted-foreground block mb-1">Nuclides</span>
+                    <span className="text-xs text-muted-foreground block mb-1">Category</span>
                     <div className="flex flex-wrap gap-1.5">
-                      {record.nuclides.map((nuc) => (
+                      {record.categories.map((cat: string) => (
                         <span
-                          key={nuc}
+                          key={cat}
                           className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-foreground/80"
                         >
-                          {nuc}
+                          {cat}
                         </span>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* Reactions (with label, matching card pattern) */}
-                {record.reactions && record.reactions.length > 0 && (
+                {/* Status (with label, matching card pattern) */}
+                {record.status_tags && record.status_tags.length > 0 && (
                   <div className="py-3">
-                    <span className="text-xs text-muted-foreground block mb-1">Reactions</span>
+                    <span className="text-xs text-muted-foreground block mb-1">Status</span>
                     <div className="flex flex-wrap gap-1.5">
-                      {record.reactions.map((rxn) => (
+                      {record.status_tags.map((tag: string) => (
                         <span
-                          key={rxn}
+                          key={tag}
                           className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-foreground/80"
                         >
-                          {rxn}
+                          {tag}
                         </span>
                       ))}
                     </div>

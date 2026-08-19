@@ -12,15 +12,33 @@ export interface NsrRecord {
   authors: string | null;
   title: string;
   doi: string | null;
-  exfor_keys: string | null;
-  keywords: string | null;
-  nuclides?: string[] | null;
-  reactions?: string[] | null;
-  /** NSR keyword-abstract subject codes (T1/2, SIGMA, A-DECAY, …) */
-  subjects?: string[] | null;
-  /** NSR topic classes (NUCLEAR_REACTIONS, NUCLEAR_STRUCTURE, RADIOACTIVITY, …) */
-  topics?: string[] | null;
+  exfor_keys?: string | null;
+  keywords?: string | null;
+  /** Subject category, author-assigned at submission — 76 values across the two
+   *  servers. Renders in the card's first chip group (was `nuclides`). */
+  categories?: string[] | null;
+  /** Derived chips: version, type, published/preprint, licence (was `reactions`). */
+  status_tags?: string[] | null;
+  server?: "biorxiv" | "medrxiv" | null;
+  version?: number | null;
+  type?: string | null;
+  license?: string | null;
+  posted_date?: string | null;
+  published_doi?: string | null;
+  published_journal?: string | null;
+  published_date?: string | null;
+  institution?: string | null;
+  author_corresponding?: string | null;
+  jatsxml_url?: string | null;
+  pdf_url?: string | null;
+  /** Version timeline, from /api/record only. */
+  versions?: { version: number; posted_date: string; type: string | null; title: string | null; license: string | null }[];
   reference_type?: string | null;
+  /** NSR-era facets with no preprint analog. The preprint API never returns these,
+   *  so /search's Subjects and Topics widgets render empty until that page gets its
+   *  own lane (LANE-RXIV-MAP.md BUILD addendum). Kept typed so the page compiles. */
+  subjects?: string[] | null;
+  topics?: string[] | null;
   similarity?: number;
   // S2 enrichment fields
   s2_paper_id?: string | null;

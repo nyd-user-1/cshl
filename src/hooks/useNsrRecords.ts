@@ -3,7 +3,7 @@ import type { NsrRecord } from "@/types/nsr";
 
 interface Filters {
   year?: number;
-  exforOnly?: boolean;
+  publishedOnly?: boolean;
   page?: number;
   pageSize?: number;
 }
@@ -13,11 +13,11 @@ interface PaginatedResult {
   totalCount: number;
 }
 
-/** Browse the corpus — Neon via /api/records (was Supabase REST with count:exact). */
+/** Browse the corpus — Neon via /api/records. */
 async function fetchRecords(filters: Filters): Promise<PaginatedResult> {
   const params = new URLSearchParams({ page: String(filters.page ?? 1), pageSize: String(filters.pageSize ?? 99) });
   if (filters.year) params.set("year", String(filters.year));
-  if (filters.exforOnly) params.set("exfor", "1");
+  if (filters.publishedOnly) params.set("published", "1");
   const res = await fetch(`/api/records?${params}`);
   if (!res.ok) throw new Error(`records ${res.status}`);
   const data = (await res.json()) as { records: NsrRecord[]; totalCount: number };
@@ -26,7 +26,7 @@ async function fetchRecords(filters: Filters): Promise<PaginatedResult> {
 
 export function useNsrRecords(filters: Filters = {}) {
   return useQuery({
-    queryKey: ["nsr-records", filters.year ?? "all", filters.exforOnly ?? false, filters.page ?? 1, filters.pageSize ?? 99],
+    queryKey: ["preprints", filters.year ?? "all", filters.publishedOnly ?? false, filters.page ?? 1, filters.pageSize ?? 99],
     queryFn: () => fetchRecords(filters),
     staleTime: 1000 * 60 * 10,
     placeholderData: (prev) => prev,

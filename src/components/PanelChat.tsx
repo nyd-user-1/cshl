@@ -17,9 +17,9 @@ function describeRecord(r: NsrRecord): string {
     r.reference ? `reference: ${r.reference}` : "",
     r.pub_year ? `year: ${r.pub_year}` : "",
     r.doi ? `doi: ${r.doi}` : "",
-    r.keywords ? `keywords: ${r.keywords}` : "",
-    r.nuclides?.length ? `nuclides: ${r.nuclides.join(", ")}` : "",
-    r.reactions?.length ? `reactions: ${r.reactions.join(", ")}` : "",
+    r.categories?.length ? `category: ${r.categories.join(", ")}` : "",
+    r.status_tags?.length ? `status: ${r.status_tags.join(", ")}` : "",
+    r.published_journal ? `published in: ${r.published_journal}` : "",
     r.abstract ? `abstract: ${r.abstract}` : "",
   ].filter(Boolean);
   return lines.join("\n");

@@ -5,8 +5,7 @@ import { ArrowUpDown, ChevronDown, ChevronLeft, ChevronRight } from "lucide-reac
 import { MobileFilterDrawer } from "@/components/MobileFilterDrawer";
 import { SearchInput } from "@/components/SearchInput";
 import { NsrRecordCard } from "@/components/NsrRecordCard";
-import { NuclideCombobox } from "@/components/NuclideCombobox";
-import { ReactionCombobox } from "@/components/ReactionCombobox";
+import { DictCombobox } from "@/components/DictCombobox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNsrSearch, type SearchMode } from "@/hooks/useNsrSearch";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -92,8 +91,13 @@ function FilterDropdown({ label, options, value, onChange }: FilterDropdownProps
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-// All years in the database (2000-2026)
-const YEAR_OPTIONS = Array.from({ length: 27 }, (_, i) => String(2026 - i));
+// Years actually in the corpus: bioRxiv opened 2013-11, medRxiv 2019-06 (LANE-RXIV-MAP.md §4).
+// The NSR-era list started at 2000 and offered thirteen dead years.
+const CORPUS_FIRST_YEAR = 2013;
+const YEAR_OPTIONS = Array.from(
+  { length: new Date().getFullYear() - CORPUS_FIRST_YEAR + 1 },
+  (_, i) => String(new Date().getFullYear() - i),
+);
 
 /* ------------------------------------------------------------------ */
 /*  Page                                                               */
@@ -105,8 +109,8 @@ export default function References() {
   // Read initial state from URL params (from feed item clicks)
   const initialQ = searchParams.get("q") ?? "";
   const initialMode = (searchParams.get("mode") as SearchMode) || "hybrid";
-  const initialNuclide = searchParams.get("nuclide") ?? "";
-  const initialReaction = searchParams.get("reaction") ?? "";
+  const initialCategory = searchParams.get("category") ?? "";
+  const initialJournal = searchParams.get("journal") ?? "";
   const [query, setQuery] = useState(initialQ);
   const [yearFilter, setYearFilter] = useState<string | null>(null);
   const [authorsSortAsc, setAuthorsSortAsc] = useState<boolean | null>(null);
@@ -119,19 +123,19 @@ export default function References() {
   const [drawerIndex, setDrawerIndex] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const [nuclideInput, setNuclideInput] = useState(initialNuclide);
-  const [reactionInput, setReactionInput] = useState(initialReaction);
+  const [categoryInput, setCategoryInput] = useState(initialCategory);
+  const [journalInput, setJournalInput] = useState(initialJournal);
   const [structuredParams, setStructuredParams] = useState<{
-    nuclides?: string[];
-    reactions?: string[];
+    categories?: string[];
+    journals?: string[];
   } | null>(() => {
     // Initialize structured params from URL if present
-    const nuclides = initialNuclide ? [initialNuclide] : [];
-    const reactions = initialReaction ? [initialReaction] : [];
-    if (nuclides.length > 0 || reactions.length > 0) {
+    const categories = initialCategory ? [initialCategory] : [];
+    const journals = initialJournal ? [initialJournal] : [];
+    if (categories.length > 0 || journals.length > 0) {
       return {
-        nuclides: nuclides.length > 0 ? nuclides : undefined,
-        reactions: reactions.length > 0 ? reactions : undefined,
+        categories: categories.length > 0 ? categories : undefined,
+        journals: journals.length > 0 ? journals : undefined,
       };
     }
     return null;
@@ -143,26 +147,26 @@ export default function References() {
     if (!paramKey) return;
     const q = searchParams.get("q") ?? "";
     const mode = (searchParams.get("mode") as SearchMode) || "hybrid";
-    const nuclide = searchParams.get("nuclide") ?? "";
-    const reaction = searchParams.get("reaction") ?? "";
+    const category = searchParams.get("category") ?? "";
+    const journal = searchParams.get("journal") ?? "";
 
     // Apply search params
     if (q) {
       setQuery(q);
       setSearchMode(mode);
-      setNuclideInput("");
-      setReactionInput("");
+      setCategoryInput("");
+      setJournalInput("");
       setStructuredParams(null);
     } else {
       setQuery("");
-      setNuclideInput(nuclide);
-      setReactionInput(reaction);
-      const nuclides = nuclide ? [nuclide] : [];
-      const reactions = reaction ? [reaction] : [];
-      if (nuclides.length > 0 || reactions.length > 0) {
+      setCategoryInput(category);
+      setJournalInput(journal);
+      const categories = category ? [category] : [];
+      const journals = journal ? [journal] : [];
+      if (categories.length > 0 || journals.length > 0) {
         setStructuredParams({
-          nuclides: nuclides.length > 0 ? nuclides : undefined,
-          reactions: reactions.length > 0 ? reactions : undefined,
+          categories: categories.length > 0 ? categories : undefined,
+          journals: journals.length > 0 ? journals : undefined,
         });
       }
     }
@@ -208,39 +212,39 @@ export default function References() {
     if (key === prevStructuredRef.current) return;
     prevStructuredRef.current = key;
 
-    if (structuredParams.nuclides?.length) {
+    if (structuredParams.categories?.length) {
       emit({
-        event_type: "nuclide_filter",
+        event_type: "category_filter",
         category: "search",
-        entity_type: "nuclide",
-        entity_value: structuredParams.nuclides.join(", "),
-        display_text: `Filtered by nuclide ${structuredParams.nuclides.join(", ")}`,
+        entity_type: "category",
+        entity_value: structuredParams.categories.join(", "),
+        display_text: `Filtered by category ${structuredParams.categories.join(", ")}`,
       });
     }
-    if (structuredParams.reactions?.length) {
+    if (structuredParams.journals?.length) {
       emit({
-        event_type: "reaction_filter",
+        event_type: "journal_filter",
         category: "search",
-        entity_type: "reaction",
-        entity_value: structuredParams.reactions.join(", "),
-        display_text: `Filtered by reaction ${structuredParams.reactions.join(", ")}`,
+        entity_type: "journal",
+        entity_value: structuredParams.journals.join(", "),
+        display_text: `Filtered by journal ${structuredParams.journals.join(", ")}`,
       });
     }
   }, [structured.data, structuredParams, emit]);
 
   const clearStructuredSearch = () => {
     setStructuredParams(null);
-    setNuclideInput("");
-    setReactionInput("");
+    setCategoryInput("");
+    setJournalInput("");
   };
 
-  const handleStructuredSearch = (overrides?: { nuclide?: string; reaction?: string }) => {
-    const nuc = overrides?.nuclide ?? nuclideInput;
-    const rxn = overrides?.reaction ?? reactionInput;
-    const nuclides = nuc.trim() ? [nuc.trim()] : [];
-    const reactions = rxn.trim() ? [rxn.trim()] : [];
+  const handleStructuredSearch = (overrides?: { category?: string; journal?: string }) => {
+    const cat = overrides?.category ?? categoryInput;
+    const jrnl = overrides?.journal ?? journalInput;
+    const categories = cat.trim() ? [cat.trim()] : [];
+    const journals = jrnl.trim() ? [jrnl.trim()] : [];
 
-    if (nuclides.length === 0 && reactions.length === 0) {
+    if (categories.length === 0 && journals.length === 0) {
       clearStructuredSearch();
       return;
     }
@@ -249,21 +253,21 @@ export default function References() {
     setQuery("");
     setPage(1);
     setStructuredParams({
-      nuclides: nuclides.length > 0 ? nuclides : undefined,
-      reactions: reactions.length > 0 ? reactions : undefined,
+      categories: categories.length > 0 ? categories : undefined,
+      journals: journals.length > 0 ? journals : undefined,
     });
   };
 
   // Auto-clear structured search when all inputs are emptied
-  const handleNuclideChange = (v: string) => {
-    setNuclideInput(v);
-    if (!v && !reactionInput && structuredParams) {
+  const handleCategoryChange = (v: string) => {
+    setCategoryInput(v);
+    if (!v && !journalInput && structuredParams) {
       setStructuredParams(null);
     }
   };
-  const handleReactionChange = (v: string) => {
-    setReactionInput(v);
-    if (!nuclideInput && !v && structuredParams) {
+  const handleJournalChange = (v: string) => {
+    setJournalInput(v);
+    if (!categoryInput && !v && structuredParams) {
       setStructuredParams(null);
     }
   };
@@ -442,17 +446,23 @@ export default function References() {
           />
 
           {/* Nuclide filter */}
-          <NuclideCombobox
-            value={nuclideInput}
-            onChange={handleNuclideChange}
-            onSubmit={handleStructuredSearch}
+          <DictCombobox
+            label="Category"
+            dictType="categories"
+            placeholder="e.g. neuroscience"
+            value={categoryInput}
+            onChange={handleCategoryChange}
+            onSubmit={(v) => handleStructuredSearch({ category: v })}
           />
 
           {/* Reaction filter */}
-          <ReactionCombobox
-            value={reactionInput}
-            onChange={handleReactionChange}
-            onSubmit={handleStructuredSearch}
+          <DictCombobox
+            label="Journal"
+            dictType="journals"
+            placeholder="e.g. eLife"
+            value={journalInput}
+            onChange={handleJournalChange}
+            onSubmit={(v) => handleStructuredSearch({ journal: v })}
           />
 
           {/* Search mode toggle + pagination (far right) */}
@@ -613,17 +623,23 @@ export default function References() {
           onChange={setYearFilter}
         />
 
-        <NuclideCombobox
-          value={nuclideInput}
-          onChange={handleNuclideChange}
-          onSubmit={handleStructuredSearch}
-        />
+        <DictCombobox
+            label="Category"
+            dictType="categories"
+            placeholder="e.g. neuroscience"
+            value={categoryInput}
+            onChange={handleCategoryChange}
+            onSubmit={(v) => handleStructuredSearch({ category: v })}
+          />
 
-        <ReactionCombobox
-          value={reactionInput}
-          onChange={handleReactionChange}
-          onSubmit={handleStructuredSearch}
-        />
+        <DictCombobox
+            label="Journal"
+            dictType="journals"
+            placeholder="e.g. eLife"
+            value={journalInput}
+            onChange={handleJournalChange}
+            onSubmit={(v) => handleStructuredSearch({ journal: v })}
+          />
       </MobileFilterDrawer>
 
       {/* Scrollable content area */}

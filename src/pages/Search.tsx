@@ -184,10 +184,10 @@ function applyFilters(records: NsrRecord[], filters: Filters): NsrRecord[] {
   return records.filter((r) => {
     if (filters.years.size > 0 && !filters.years.has(String(r.pub_year))) return false;
     if (filters.nuclides.size > 0) {
-      if (!r.nuclides || !r.nuclides.some((n) => filters.nuclides.has(n))) return false;
+      if (!r.categories || !r.categories.some((n) => filters.nuclides.has(n))) return false;
     }
     if (filters.reactions.size > 0) {
-      if (!r.reactions || !r.reactions.some((rx) => filters.reactions.has(rx))) return false;
+      if (!r.status_tags || !r.status_tags.some((rx) => filters.reactions.has(rx))) return false;
     }
     if (filters.journals.size > 0) {
       const j = extractJournal(r.reference);
@@ -692,11 +692,11 @@ export default function Search() {
   // Stats computed from ALL results (not filtered) so widgets stay stable
   const yearEntries = useMemo(() => countYears(records), [records]);
   const nuclideEntries = useMemo(
-    () => countField(records, (r) => r.nuclides),
+    () => countField(records, (r) => r.categories),
     [records],
   );
   const reactionEntries = useMemo(
-    () => countField(records, (r) => r.reactions),
+    () => countField(records, (r) => r.status_tags),
     [records],
   );
   const journalEntries = useMemo(() => countJournals(records), [records]);
