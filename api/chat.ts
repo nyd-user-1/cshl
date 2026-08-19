@@ -198,8 +198,22 @@ export default async function handler(req: any, res: any) {
     const denseP: Promise<Rec[]> = (async () => {
       try {
         if (!(await hasEmbeddings(sql as never))) return [];
-        const enc = activeEncoder();
-        const { vector } = await embedQueryCached(sql as never, userMessage, enc);
+        // Encoder selection with a fallback that matters once SEARCH_ENCODER=nsr: the
+        // fine-tuned arm depends on a single serve box, and if it is cold, throttled or
+        // gone we fall back to stock bge-m3 (free Cloudflare, always up) rather than
+        // dropping the dense arm entirely. Box down should cost retrieval QUALITY, not
+        // the whole hybrid. The vector table follows the encoder that actually answered,
+        // because querying one model's space with another model's vector returns
+        // confident nonsense.
+        let enc = activeEncoder();
+        let vector: number[];
+        try {
+          ({ vector } = await embedQueryCached(sql as never, userMessage, enc));
+        } catch (err) {
+          if (enc === "bge") throw err;
+          enc = "bge";
+          ({ vector } = await embedQueryCached(sql as never, userMessage, "bge"));
+        }
         const [, rows] = (await sql.transaction([
           sql.query(`SET LOCAL hnsw.ef_search = 60`),
           sql.query(

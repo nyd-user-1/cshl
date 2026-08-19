@@ -28,9 +28,17 @@ const HF_BGE_URL = "https://router.huggingface.co/hf-inference/models/BAAI/bge-m
 export function activeEncoder(): EncoderName {
   return process.env.SEARCH_ENCODER === "nsr" && process.env.NSR_ENCODER_URL ? "nsr" : "bge";
 }
-// CSHL corpus tables. The fine-tuned arm is a later flip and its table may not exist
-// yet; callers must tolerate an empty or absent sidecar (see hasEmbeddings()).
-export const vectorTable = (enc: EncoderName) => (enc === "nsr" ? "preprint_embeddings_ft" : "preprint_embeddings");
+// CSHL corpus vector tables.
+//   bge -> preprint_embeddings       stock bge-m3, 433,449 rows
+//   nsr -> preprint_embeddings_cshl  our fine-tuned encoder, 433,449 rows
+//
+// This name is load-bearing and was wrong once: it read `preprint_embeddings_ft`, a
+// table that does not exist. hasEmbeddings() would have probed it, found nothing, and
+// silently degraded the dense arm to FTS-only — so /chat would have looked like it was
+// running on the fine-tuned encoder while serving keyword-only results. No error, no
+// signal, plausible output. Caught by rig-port before the flip. If either table is ever
+// renamed, this constant is the thing that has to move with it.
+export const vectorTable = (enc: EncoderName) => (enc === "nsr" ? "preprint_embeddings_cshl" : "preprint_embeddings");
 
 /**
  * Is the vector sidecar actually populated? The dense arm is worth an encoder round
