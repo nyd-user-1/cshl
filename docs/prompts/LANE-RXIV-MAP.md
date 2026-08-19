@@ -826,6 +826,61 @@ deliberately deferred until after Brendan's first look.
 **Publishing only the warm number would have been the misleading thing to do** - it is the one
 most write-ups quote. p95 cold is the honest headline.
 
+### 2026-08-19 15:15 EDT - fine-tuned encoder flipped on production
+
+`SEARCH_ENCODER=nsr`. `/chat`'s dense arm now queries `preprint_embeddings_cshl` (our
+fine-tuned bge-m3) instead of the stock space, fused with FTS as before. Authorized by the
+lead lifting their own cutover condition 5 after the serve box came up.
+
+**Why, honestly stated:** the fine-tuned model *lost* head-to-head - MeSH R@10 0.332 against
+MedCPT's 0.457. But in the configuration production actually runs, FTS fused with a dense arm,
+RRF(FTS + ours) = **0.361** vs RRF(FTS + stock) = **0.317**. The claim is not "we built the best
+encoder"; it is "ours is a better dense arm inside the fusion users actually hit."
+
+**Verified three independent ways before reporting it live:**
+
+    behavioural   production /chat top source = "AI-based decoding of long covid cognitive
+                  impairments in mice" - the FINE-TUNED space's top hit, not stock's
+    parity        served vector vs preprint_embeddings_cshl : cosine 0.999999
+                  served vector vs preprint_embeddings      : cosine 0.706171
+    end to end    3,655-char grounded answer over 327 SSE frames
+
+**A bug caught by a teammate reading my code, not by me running it.** `vectorTable()` returned
+`preprint_embeddings_ft` - a table that does not exist; the populated one is
+`preprint_embeddings_cshl`. Flipping with that mapping would have had `hasEmbeddings()` probe a
+missing table, silently degrade the dense arm to FTS-only, and leave `/chat` **appearing** to run
+on the fine-tuned encoder while serving keyword results. Fifth instance of tonight's pattern, and
+the only one found by review rather than execution.
+
+**Fallback added before flipping:** the dense arm falls back to stock bge-m3 if the serve box is
+unreachable. The fine-tuned arm depends on a single t3.large; a box failure should cost retrieval
+*quality* (0.361 -> 0.317), not the whole hybrid. The vector table follows whichever encoder
+actually answered - querying one model's space with another model's vector returns confident
+nonsense with no error.
+
+**Also repointed:** `NSR_ENCODER_URL` / `NSR_SERVE_KEY` were 16 h old and still aimed at NSR's
+serve box. Unflipped, that meant a fine-tuned flip would have queried the *nuclear-physics*
+encoder for preprint search.
+
+#### The read artifact - a general operational lesson
+
+While verifying, I read all three production vars as **empty strings** and was about to report
+that a teammate's failed command had blanked them. Then I read `DATABASE_URL`, which is certainly
+correct because the live site serves 433,449 rows through it. **It also reads as `''`.**
+
+`type=sensitive` variables always read back empty - through `decrypt=true`, through
+`vercel env pull` (which writes the literal string `[SENSITIVE]`), and `vercel env ls` shows
+*created* time rather than updated. **A sensitive env var cannot be verified by reading it, only
+by observing behaviour.** All three read paths look like answers and none of them is one.
+
+That is why the check used here was two vector spaces with *different top hits for the same
+query* - a test that can only pass if the intended configuration is genuinely live. The lead
+assumed a failed command wrote nothing; I assumed an unreadable value meant nothing was written.
+Same wrong inference, opposite directions, a minute apart.
+
+**Revert:** `SEARCH_ENCODER=bge` plus a redeploy. Both vector tables stay populated at 433,449.
+Nothing about the flip is one-way.
+
 ---
 
 ## DIRECTIVES — lead → lane (comms channel)
