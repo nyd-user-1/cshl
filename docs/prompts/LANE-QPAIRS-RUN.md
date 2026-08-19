@@ -15,7 +15,9 @@ Budget: **hard cap $5.00 AWS**, approved by Brendan. Every box self-terminates o
 
 ## Status
 
-**PHASE: convert — running.** Started 2026-08-19T23:12Z, expected ~10 min.
+**PHASE: upload — running.** Started 2026-08-19T23:18Z. 601 MB at ~2.3 MB/s, expected ~4-5 min.
+Next: probe `g6e.2xlarge` capacity by launching. Train is the long pole — ~45-75 min on g6e,
+~2 h 20 m on g5.
 
 ---
 
@@ -73,6 +75,59 @@ lane and were not touched):
 - stream the 290 MB input instead of `readFileSync().split()`.
 
 ### 2026-08-19T23:12Z — convert fired
+
+### 2026-08-19T23:14Z — convert VERIFIED
+
+```
+read 424,753 · convertible 424,753 · dropped 0 · rejected for touching the frozen benchmark 0
+query side: 424,753 literal-text · 0 slug-into-corpus
+  MESH:     102,667 ->  9,668
+  AUTHORKW:  62,166 ->  5,854
+  EXTRACT:  259,920 -> 24,477
+EMITTED families: {"MESH":9668,"AUTHORKW":5854,"EXTRACT":24477}
+EMITTED disjointness: 0 references to frozen-benchmark gold papers (must be 0)
+EMITTED query-string overlap with benchmark: 157 / 39,999
+wrote 39,999 pairs -> data/train/qpairs/train.jsonl   (601 MB)
+```
+
+Stratified across all three families, counted **in what was emitted**. 39,999 rather than
+40,000 because the per-family `round()` of the proportional take loses one.
+
+`rejected_for_overlap 0` deserves a sentence, because zero is exactly the number a broken
+check returns. It is not broken: `evalKeys` loaded 6,203 gold papers (non-zero, and the same
+set gates the negatives). Zero rejections means lane-mine had **already** excluded held-out
+papers from the train split using the same `md5("holdout:"||key)` rule. This run is the
+independent second count that confirms it — which is the only kind of confirmation the
+orchestration doctrine accepts.
+
+Independent verification of the emitted file itself, re-read from disk rather than taken from
+the converter's report:
+
+```
+lines 39,999 · malformed 0
+query chars:    min 11 · avg 110 · max 273        <- genuinely query-shaped
+positive chars: avg 1,768 · max 4,000             <- title+abstract, the 4000-char cap
+negatives/row:  8 x 34,203 · 7 x 5,399 · 6 x 385 · 5 x 11 · 4 x 1
+first row query: "D. melanogaster; Embryo, Nonmammalian; Single-Cell Analyses; Transcriptome"
+```
+
+That average query length of 110 characters against an average positive of 1,768 is the whole
+experiment in one line: this is query->doc supervision, where the CITE run was doc->doc.
+
+`GROUP_SIZE=8` consumes 1 positive + 7 negatives; ~1% of rows carry fewer than 7 negatives and
+FlagEmbedding will sample with replacement for those. Noted, not corrected.
+
+### 2026-08-19T23:16Z — third vector table created, both existing tables untouched
+```
+preprints                    433,449
+preprint_embeddings_medcpt   433,449
+preprint_embeddings_cshl     433,449   <- the CITE run, untouched
+preprint_embeddings_cshl_qp        0   <- created empty, this run's target
+```
+DDL added to `scripts/eval/sidecars.sql`, HNSW (cosine, matching the arm's metric) to
+`scripts/eval/indexes.sql` — to be built AFTER the sweep, per that file's own rule. One
+registry entry `cshl_qp` added to `scripts/eval/score.mjs`, which is all three of the scorer,
+the doc->doc scorer and the coverage gate, since both import `REGISTRY` from it.
 
 ### 2026-08-19T23:14Z — capacity/quota preconditions checked (free)
 ```

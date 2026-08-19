@@ -51,6 +51,7 @@ export const REGISTRY = {
   fts:        { kind: 'fts' },
   'bge-m3':   { kind: 'dense', table: 'preprint_embeddings',           dim: 1024, metric: 'cosine', doc: 'BAAI/bge-m3',                 query: 'BAAI/bge-m3' },
   cshl:       { kind: 'dense', table: 'preprint_embeddings_cshl',      dim: 1024, metric: 'cosine', doc: 'NYSgpt/cshl-encoder-bge-m3',  query: 'NYSgpt/cshl-encoder-bge-m3' },
+  cshl_qp:    { kind: 'dense', table: 'preprint_embeddings_cshl_qp',   dim: 1024, metric: 'cosine', doc: 'cshl-encoder-bge-m3 (qpairs run)', query: 'cshl-encoder-bge-m3 (qpairs run)' },
   medcpt:     { kind: 'dense', table: 'preprint_embeddings_medcpt',    dim: 768,  metric: 'ip',     doc: 'ncbi/MedCPT-Article-Encoder', query: 'ncbi/MedCPT-Query-Encoder' },
   specter2:   { kind: 'dense', table: 'preprint_embeddings_specter2',  dim: 768,  metric: 'ip',     doc: 'allenai/specter2_base',       query: 'allenai/specter2_base' },
   scincl:     { kind: 'dense', table: 'preprint_embeddings_scincl',    dim: 768,  metric: 'ip',     doc: 'malteos/scincl',              query: 'malteos/scincl' },

@@ -14,6 +14,8 @@ CREATE INDEX IF NOT EXISTS idx_pp_emb_hnsw
   ON preprint_embeddings USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_pp_emb_cshl_hnsw
   ON preprint_embeddings_cshl USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_pp_emb_cshl_qp_hnsw
+  ON preprint_embeddings_cshl_qp USING hnsw (embedding vector_cosine_ops);
 
 -- the in-domain / scholarly baselines: inner product
 CREATE INDEX IF NOT EXISTS idx_pp_emb_medcpt_hnsw

@@ -43,3 +43,18 @@ CREATE TABLE IF NOT EXISTS preprint_embeddings_cshl (
 );
 
 COMMIT;
+
+-- lane-qpairs (2026-08-19): the THIRD encoder table. The query-pairs retrain is
+-- a *variant*, not a replacement — both preprint_embeddings_cshl (the CITE run)
+-- and this one must stay populated so the two objectives can be compared on the
+-- same corpus, with the same frozen benchmark, on the same day. Same 1024-d
+-- cosine shape as the CITE arm because it is the same base model.
+BEGIN;
+CREATE TABLE IF NOT EXISTS preprint_embeddings_cshl_qp (
+  key_number  text PRIMARY KEY REFERENCES preprints(key_number) ON DELETE CASCADE,
+  embedding   vector(1024) NOT NULL,           -- our fine-tune of BAAI/bge-m3, query-pairs objective
+  model       text NOT NULL DEFAULT 'cshl-encoder-bge-m3-qpairs',
+  text_hash   text NOT NULL,
+  embedded_at timestamptz NOT NULL DEFAULT now()
+);
+COMMIT;
