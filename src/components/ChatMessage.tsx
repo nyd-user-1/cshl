@@ -5,9 +5,13 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { ChatResponseFooter } from "./ChatResponseFooter";
 
-// Inline citations: NSR key numbers in the response become live chips that
+// Inline citations: preprint key numbers in the response become live chips that
 // open the entity panel (a scientific corpus answers with receipts).
-const KEY_RE = /\b((?:19|20)\d{2}[A-Z]{2}\d{2})\b(?!\]|\))/g;
+// CSHL keys are the bare DOI suffix, e.g. 2022.01.16.476506. The 68,139 legacy
+// keys that are bare 6-digit numbers (e.g. 549931) are deliberately NOT matched:
+// an unanchored 6-digit number in prose is far more often a quantity than a key,
+// and a wrong chip is worse than a missing one.
+const KEY_RE = /\b((?:19|20)\d{2}\.\d{2}\.\d{2}\.\d{5,})\b(?!\]|\))/g;
 const citeMarkdown = (md: string) =>
   md.replace(KEY_RE, (m) => `[${m}](#cite:paper:${m})`);
 

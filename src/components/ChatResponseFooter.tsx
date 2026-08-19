@@ -30,8 +30,13 @@ export function ChatResponseFooter({
 
   const { data: paperData } = usePaperLookup(pdfUrl);
 
-  // Use S2 open-access PDF when available, otherwise fall back to direct .pdf URLs
+  // Our own /api/pdf proxy wins when present: it is same-origin and therefore always
+  // frameable. Preferring S2 here would be a trap — its open-access URL for a preprint
+  // usually points straight back at bioRxiv/medRxiv, which send
+  // `x-frame-options: SAMEORIGIN` and render as a silent blank panel rather than an error.
+  const proxyPdfUrl = pdfUrl && pdfUrl.startsWith("/api/pdf") ? pdfUrl : undefined;
   const effectivePdfUrl =
+    proxyPdfUrl ??
     paperData?.openAccessPdfUrl ??
     (pdfUrl && pdfUrl.toLowerCase().endsWith(".pdf") ? pdfUrl : undefined);
 
@@ -290,7 +295,7 @@ export function ChatResponseFooter({
           <div className="flex items-center justify-between px-3 py-2 bg-muted/40 border-b">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
               <FileText className="h-3 w-3" />
-              {paperData ? "Paper PDF" : "ENDF Report PDF"}
+              {proxyPdfUrl ? "Preprint PDF" : paperData ? "Paper PDF" : "Report PDF"}
             </span>
             <a
               href={effectivePdfUrl}

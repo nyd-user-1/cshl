@@ -99,13 +99,15 @@ export default function Chat() {
       setAutoSubmitted(true);
 
       let systemContext =
-        "You are NSRgpt, an AI research assistant specializing in nuclear science. " +
-        "You help researchers explore Nuclear Science References (NSR) from the " +
-        "National Nuclear Data Center (NNDC) at Brookhaven National Laboratory.";
+        "You are RxivGPT, an AI research assistant for the biomedical and life-science " +
+        "preprint literature. You help researchers explore bioRxiv and medRxiv preprints " +
+        "from Cold Spring Harbor Laboratory. Preprints have not been peer reviewed — say so " +
+        "when it bears on how a finding should be read, and note when a preprint has since " +
+        "been published in a journal.";
 
       if (context) {
         systemContext +=
-          "\n\nThe user is asking about a specific nuclear science reference. " +
+          "\n\nThe user is asking about a specific preprint. " +
           "Here is the record data:\n" +
           context;
       }
@@ -119,11 +121,19 @@ export default function Chat() {
       }
 
       systemContext +=
-        "\n\nProvide a detailed, expert-level analysis. Include relevant nuclear physics " +
-        "context, explain the significance of the research, and highlight connections " +
-        "to related work in the field.";
+        "\n\nProvide a detailed, expert-level analysis. Explain the significance of the " +
+        "research and its methodology, and highlight connections to related work in the field.";
 
-      sendMessage(prompt, systemContext, url || undefined);
+      // The inline PDF viewer must be pointed at our own /api/pdf proxy, not the DOI link.
+      // bioRxiv and medRxiv send `x-frame-options: SAMEORIGIN` on their PDFs, so framing
+      // their URL directly yields a blank panel with no error. The key is the DOI suffix,
+      // which is our business key, so it derives from the DOI without touching the caller.
+      const keyFromDoi = url?.includes("/") ? url.split("/").pop()!.trim() : "";
+      const viewerUrl = keyFromDoi
+        ? `/api/pdf?key=${encodeURIComponent(keyFromDoi)}`
+        : url || undefined;
+
+      sendMessage(prompt, systemContext, viewerUrl);
       navigate("/", { replace: true });
     }
   }, [searchParams, autoSubmitted, routeSessionId, sendMessage, navigate]);
