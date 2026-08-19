@@ -780,6 +780,52 @@ here**: rig-port measured 2 ms warm vs ~1,200 ms cold because the HNSW graph is 
 456 MB of `shared_buffers`, so a handful of queries samples cache luck, not performance. A real
 number needs a few hundred varied queries reported as p50 **and** p95.
 
+### 2026-08-19 10:35 EDT - nav removal, rebrand, and measured kNN latency
+
+**(1) Dead sections removed from the nav.** ENDF, ENSDF, XUNDL, the NSR archive group, and
+Workspace's Code/Graph/Tools are out of the sidebar - they query nuclear tables this database
+does not have and **error when clicked**, which is worse than stale copy. One plain "Preprints"
+link to the References browser replaces the NSR group; Workspace keeps Community. **Their routes
+remain in `App.tsx`** - unreachable dead code, harmless this morning, wanting a proper removal
+pass later (`api/nuclide.ts` and `api/graph.ts` likewise).
+
+**(2) Rebrand of the surfaces that still work.** Browser tab is now `RxivGPT - bioRxiv & medRxiv
+Search`; meta description rewritten. The affiliation disclaimer named the wrong institution
+entirely - it now disclaims Cold Spring Harbor Laboratory, bioRxiv and medRxiv, and states that
+preprints are not peer reviewed. Remaining `NSRgpt` product strings in `AppLayout`, `Features`,
+`DatasetCard`, `EntityDetail` are gone. `/search`'s two facet widgets already read
+`categories`/`status_tags`; only their labels still said Nuclides and Reactions - relabelled to
+Category and Status.
+
+Full local verification re-run after both changes: **ALL CHECKS PASSED**. Deployed to production.
+
+**(3) kNN latency, measured properly rather than sampled.**
+
+30 *distinct* probe vectors (each a cold graph walk), then the same 30 repeated, then one probe
+30 times. `ef_search=60`, `LIMIT 8`, query-embedding time excluded - that is a Cloudflare round
+trip, not the index.
+
+    30 distinct (pass 1)   n=30   p50   970 ms   p95  1708 ms   min  405 / max 1773
+    same 30 (pass 2)       n=30   p50    47 ms   p95    73 ms   min   37 / max   81
+    1 probe x30 (warm)     n=30   p50    42 ms   p95    57 ms   min   29 / max   66
+
+**Caveat stated rather than buried: these are client-observed from a laptop and include network
+round trip to Neon (~20-40 ms).** rig-port's server-side `EXPLAIN ANALYZE` measured ~2 ms warm.
+Both are true and they measure different things - mine is what a user's request costs, theirs is
+what the index costs.
+
+**What the numbers actually say.** The HNSW graph is 3,411 MB against 456 MB of `shared_buffers`,
+so ~13% is resident. A first-touch query pays storage reads for the whole walk (p50 ~1 s, p95
+~1.7 s); once those graph pages are cached the same query costs ~45 ms - a **~20x** spread. The
+important row is the middle one: pass 2 over the *same 30 distinct* queries is fast, so the cache
+retains what varied walks touch. **An interactive session warms progressively** and feels far
+better than the cold figure suggests; the first question after any compute restart is the slow
+one. Neon restarts the compute on any autoscale change, which is why the credential rotation is
+deliberately deferred until after Brendan's first look.
+
+**Publishing only the warm number would have been the misleading thing to do** - it is the one
+most write-ups quote. p95 cold is the honest headline.
+
 ---
 
 ## DIRECTIVES — lead → lane (comms channel)
