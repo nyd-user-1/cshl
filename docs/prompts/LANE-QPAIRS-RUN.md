@@ -306,6 +306,27 @@ twice the wall-clock. Same money, more waiting. (It would also need `TEI_IMAGE=�
 the default `89` image is Ada-only, and the wrong one starts a container that never loads a
 model.)
 
+### 2026-08-19T23:43Z — control: the harness still reproduces the published numbers exactly
+
+Before trusting this harness to produce a *new* number, made it produce the *old* ones. Scored
+the two arms the report already published, on the same frozen 2k subsample, through the same
+code path the new arm will use — after my registry edit, so the edit is inside the test:
+
+| arm | MeSH R@10 | published | MeSH nDCG@10 | published | AUTHORKW R@10 | published |
+|---|---:|---:|---:|---:|---:|---:|
+| `cshl` (CITE run) | **0.3320** | 0.3320 | 0.2367 | 0.2367 | **0.6693** | 0.6693 |
+| `ncbi/MedCPT` | **0.4569** | 0.4569 | 0.3373 | 0.3373 | **0.8076** | 0.8076 |
+
+Every digit. R@1 likewise: ours 0.1571 / 0.4611, MedCPT 0.2345 / 0.5731. Both arms reported
+`Index Scan CONFIRMED`, so neither fell back to a sequential scan — the failure the
+`indexes.sql` header warns about, where an opclass mismatch gives a correct-but-slow answer and
+nothing complains.
+
+This is a control, not a formality. It rules out, *in advance*, the three ways the new number
+could have been quietly wrong: a benchmark that shifted under us, a harness change that broke
+an arm, and a registry edit with side effects. The published results were copied aside first
+and are byte-restorable.
+
 ---
 
 ## Spend ledger (revised — the train box is now live)
