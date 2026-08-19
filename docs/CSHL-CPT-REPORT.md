@@ -469,6 +469,34 @@ Secondary levers, all unpulled: 40,000 of 132,793 available triplets, one epoch,
 A second run on `cshl-query-pairs` against this same frozen benchmark either closes the gap or
 refutes the hypothesis. **Both outcomes are publishable.** Staged and priced below; not fired.
 
+## Method worth reusing: the served-model parity check
+
+**Before any encoder flip is called verified, embed one document's exact indexed text through
+the live endpoint and take the cosine similarity against that document's stored corpus
+vector. It must be ~1.0.**
+
+That is the whole method, and it is cheap. It exists because a health check cannot see the
+failure it is meant to prevent: an endpoint serving the *wrong model* returns HTTP 200, a
+correctly-shaped vector, sensible-looking neighbours, and raises nothing. Search then degrades
+in a way that reads as "our model is bad" rather than "we are querying the wrong space."
+
+Measured here, twice, by two lanes with separate scripts and different samples:
+
+| comparison | cosine |
+|---|---:|
+| served endpoint vs `preprint_embeddings_cshl` (our fine-tune) | **0.999999 / 1.00000** |
+| served endpoint vs `preprint_embeddings` (stock bge-m3) | **0.77284** |
+
+The second row is what makes the first row meaningful. A parity check that only confirms
+agreement with the expected table proves less than one that also shows clear *dis*agreement
+with the wrong table — 0.77 is high enough to look plausible in a top-10 list and low enough
+to wreck retrieval quality, which is exactly the band where this failure hides.
+
+The check generalises to any two-sided embedding system: whenever documents are embedded by
+one process and queries by another, the two spaces must be shown to match rather than assumed
+to. It came out of a bug rather than a design, and it is the most portable thing this program
+produced.
+
 ## Serving — the flip, and why it is worth making despite the loss
 
 Our encoder is served from a `t3.large` (`i-08d4dfab74ff44054`) running TEI on CPU,
