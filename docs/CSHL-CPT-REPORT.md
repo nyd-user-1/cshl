@@ -507,6 +507,58 @@ changes, a keys-only release is available at low cost: every frozen row already 
 Distinct and not at issue: *displaying* abstracts in the search UI with attribution is what
 the servers' public API exists for, and the production cutover is unaffected.
 
+## Staged: the one experiment that would settle it
+
+**Not fired. Priced. Brendan's call.**
+
+The leading hypothesis for our shortfall is an objective mismatch — we trained on
+citation-based **document→document** pairs and evaluated **query→document** retrieval. The
+data to test it already exists on disk, frozen: `cshl-query-pairs`, **424,753 query-shaped
+training pairs** across MESH / AUTHORKW / EXTRACT families, built by the miner lane and never
+used.
+
+```bash
+# 1. convert (local, free, ~3 min)
+IN=data/mine/cshl-query-pairs.train.jsonl NAME=qpairs SUBSAMPLE=40000 \
+  node --max-old-space-size=6144 scripts/train/from-mine.mjs
+
+# 2. upload the slice + the frozen queries
+NAME=qpairs EVAL_VERSION=cshl-eval-v1 ./scripts/train/upload-slice.sh
+
+# 3. train  (g5.2xlarge, A10G 24 GB — g6e had no capacity all night)
+TYPE=g5.2xlarge MODE=train TRAIN_NAME=qpairs EVAL_VERSION=cshl-eval-v1 \
+  BATCH=8 EPOCHS=1 QUERY_MAX_LEN=128 PASSAGE_MAX_LEN=384 GROUP_SIZE=8 \
+  ./scripts/train/launch.sh
+
+# 4. re-embed into a THIRD table, keeping both existing ones
+MODEL_S3=s3://cshl-embed-rxiv/models/cshl-encoder-bge-m3/<new-run>/final \
+  EMB_TABLE=preprint_embeddings_cshl_qp N=2 ./scripts/embed-nsr/launch.sh
+
+# 5. score against the identical frozen subsample
+EVAL_VERSION=cshl-eval-2k ARMS=cshl_qp,rrf:cshl_qp+medcpt+fts node scripts/eval/score.mjs
+```
+
+| step | wall-clock | $ |
+|---|---|---:|
+| convert + upload | ~8 min | 0.00 |
+| train, 40,000 pairs, 1 epoch | ~2 h 20 m | **2.85** |
+| re-embed 433,449 × 2 boxes | ~25 min | **0.85** |
+| score | ~3 min | 0.00 |
+| **total** | **~3 h** | **≈ $3.70** |
+
+**Budget reality: this does not fit under the remaining ceiling alongside anything else.**
+About $6.70 of $10.50 is spent, leaving ~$3.80. The run above is ~$3.70. It fits only if
+nothing else is spent, and it leaves no margin for a failed box.
+
+**A cheaper variant that still tests the hypothesis:** 15,000 pairs instead of 40,000
+(~55 min train, **≈ $1.15**, plus $0.85 re-embed = **≈ $2.00**). Statistically weaker but it
+answers the same yes/no question — does query-shaped supervision move MeSH R@10 off 0.332
+toward MedCPT's 0.457? A directional answer is worth more than a precise null.
+
+**If a bigger box becomes available**, `g6e.xlarge` (L40S, 48 GB) removes the OOM halving that
+forced batch 4, roughly halving the step count at the same pair budget. `g6e` had zero
+capacity in every AZ throughout this night; it is worth re-probing before committing.
+
 ## Open follow-ups
 
 1. **The Hugging Face push used the NSR-scoped token** (`/nsr/hf/token`), on Brendan's

@@ -17,19 +17,19 @@ metric code, rather than quoted from its own paper.
 
 | file | rows | what |
 |---|---:|---|
-| `queries.jsonl` | {{N_QUERIES}} | `{qid, family, text, server, pub_year, published, abs_len}` |
-| `qrels.tsv` | {{N_QRELS}} | `qid \t key_number`, one line per gold pair |
+| `queries.jsonl` | 2,000 (frozen deterministic subsample of 10,000) | `{qid, family, text, server, pub_year, published, abs_len}` |
+| `qrels.tsv` | 2,000 | `qid \t key_number`, one line per gold pair |
 | `manifest.json` | 1 | freeze date, holdout rule, per-family provenance, leak audit |
-| `results/*.json` | {{N_ARMS}} | one file per scored arm, per-family and per-segment |
+| `results/*.json` | 11 | one file per scored arm, per-family and per-segment |
 
 ## Query families
 
 | family | queries | source | note |
 |---|---:|---|---|
-| `MESH` | {{N_MESH}} | NLM MeSH descriptors on the published half | hierarchical, indexer-assigned gold |
-| `CITE` | {{N_CITE}} | held-out citation pairs | document-shaped, not query-shaped |
-| `SYNTH` | {{N_SYNTH}} | LLM questions over held-out abstracts | the only genuinely query-shaped family |
-| `TITLE` | {{N_TITLE}} | the paper's own title | **leaked by construction** — a plumbing floor, never blended into a headline |
+| `MESH` | 1,241 | NLM MeSH descriptors on the published half | hierarchical, indexer-assigned gold |
+| `CITE` | 0 | held-out citation pairs | document-shaped, not query-shaped |
+| `SYNTH` | 0 | LLM questions over held-out abstracts | the only genuinely query-shaped family |
+| `TITLE` | 0 | the paper's own title | **leaked by construction** — a plumbing floor, never blended into a headline |
 
 `TITLE` is reported separately and explicitly. An arm that cannot find a paper from
 its own title is broken; that is all this family proves.
@@ -38,7 +38,7 @@ its own title is broken; that is all this family proves.
 
 25% of **papers** held out by `md5("holdout:" || key_number) < 0.25`, frozen before
 any training. Split by paper, never by query, so a paper's queries cannot straddle
-the boundary. Leak audit at freeze time: **{{N_LEAKS}}** of {{N_AUDITED}} non-TITLE
+the boundary. Leak audit at freeze time: **0** of 2,000 non-TITLE
 queries appear verbatim inside their own document.
 
 ## Metrics
@@ -52,7 +52,7 @@ Postgres FTS · stock `BAAI/bge-m3` · `ncbi/MedCPT` (query + article encoders) 
 `allenai/specter2_base` · `malteos/scincl` · `NYSgpt/cshl-encoder-bge-m3` ·
 RRF fusions · cross-encoder rerank stages.
 
-{{RESULTS_TABLE}}
+See `docs/CSHL-CPT-REPORT.md` in the source repository for the full 11-arm table.
 
 ## Reproducing
 
@@ -73,12 +73,12 @@ Both preprint servers operated by **Cold Spring Harbor Laboratory**:
 
 | server | papers | posted range | with a published journal DOI |
 |---|---:|---|---:|
-| bioRxiv | {{BIORXIV_N}} | {{BIORXIV_RANGE}} | {{BIORXIV_PUBLISHED}} |
-| medRxiv | {{MEDRXIV_N}} | {{MEDRXIV_RANGE}} | {{MEDRXIV_PUBLISHED}} |
-| **total** | **{{TOTAL_N}}** | | **{{TOTAL_PUBLISHED}}** |
+| bioRxiv | 345,882 | 2013-11-07 → 2026-08-18 | 176,056 (50.9%) |
+| medRxiv | 87,567 | 2019-06-25 → 2026-08-18 | 39,352 (44.9%) |
+| **total** | **433,449** | | **215,408 (49.7%)** |
 
 - **Source:** the public bioRxiv/medRxiv APIs (`api.biorxiv.org`, `api.medrxiv.org`),
-  unauthenticated, harvested {{HARVEST_DATE}}. Field-by-field provenance and the
+  unauthenticated, harvested 2026-08-19. Field-by-field provenance and the
   endpoint inventory are in the project's `docs/prompts/LANE-RXIV-MAP.md`.
 - **Unit of record:** a paper, not a version. A source row is a *version*; the hub
   keeps `max(version)` per `(server, doi)` and full history lives in a sidecar.
@@ -94,7 +94,16 @@ Both preprint servers operated by **Cold Spring Harbor Laboratory**:
 Preprint metadata and abstracts are redistributed by the servers under **per-paper**
 licences. This corpus is not uniformly permissive:
 
-{{LICENSE_TABLE}}
+| licence | share | derivatives redistributable? |
+|---|---:|---|
+| `cc_by_nc_nd` | 35.1% | **no — no derivatives** |
+| `cc_no` | 28.3% | **no — all rights reserved** |
+| `cc_by` | 21.6% | yes |
+| `cc_by_nc` | 8.1% | yes, non-commercial |
+| `cc_by_nd` | 5.5% | **no — no derivatives** |
+| `cc0` | 1.0% | yes |
+| `cc0_ng` | 0.3% | yes |
+| `unstated` | 0.1% | unknown |
 
 `cc_no` means **all rights reserved**, not a Creative Commons licence — a prefix match on
 `cc` reports the opposite of the truth, and did once before this table was generated from

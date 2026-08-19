@@ -14,18 +14,18 @@ and `NYSgpt/cshl-reranker-gte-modernbert` were trained on.
 
 | file | records | shape |
 |---|---:|---|
-| `train.jsonl` | {{N_PAIRS}} | `{"query": str, "pos": [str], "neg": [str]}` (FlagEmbedding) |
-| `train-groups.jsonl` | {{N_GROUPS}} | `{"q": str, "pos": str, "negs": [str], "src": str}` (cross-encoder) |
+| `train.jsonl` | 40,000 (of 132,793 available) | `{"query": str, "pos": [str], "neg": [str]}` (FlagEmbedding) |
+| `train-groups.jsonl` | n/a — reranker not trained | `{"q": str, "pos": str, "negs": [str], "src": str}` (cross-encoder) |
 | `manifest.json` | 1 | provenance, holdout audit, input hashes |
 
 ## Where the supervision comes from
 
 | signal | records | how |
 |---|---:|---|
-| citation graph | {{N_CITE}} | cited work = positive; citation-of-a-citation that is not itself cited = hard negative (the SPECTER/SciNCL recipe) |
-| MeSH terms via the published DOI | {{N_MESH}} | NLM-indexer-assigned descriptors as queries against the ~{{PUBLISHED_PCT}}% of the corpus that reached a journal |
-| synthetic queries | {{N_SYNTH}} | LLM-generated questions over abstracts — the only source that is actually query-shaped rather than document-shaped |
-| category labels | {{N_CAT}} | same-category papers as harder-than-random negatives |
+| citation graph | 0 | cited work = positive; citation-of-a-citation that is not itself cited = hard negative (the SPECTER/SciNCL recipe) |
+| MeSH terms via the published DOI | 1,241 | NLM-indexer-assigned descriptors as queries against the ~49% of the corpus that reached a journal |
+| synthetic queries | 0 | LLM-generated questions over abstracts — the only source that is actually query-shaped rather than document-shaped |
+| category labels | 0 | same-category papers as harder-than-random negatives |
 
 Version pairs and preprint↔published pairs were deliberately **excluded** from the
 triplet set: they are near-duplicates, and a model trained on them learns lexical
@@ -52,12 +52,12 @@ Both preprint servers operated by **Cold Spring Harbor Laboratory**:
 
 | server | papers | posted range | with a published journal DOI |
 |---|---:|---|---:|
-| bioRxiv | {{BIORXIV_N}} | {{BIORXIV_RANGE}} | {{BIORXIV_PUBLISHED}} |
-| medRxiv | {{MEDRXIV_N}} | {{MEDRXIV_RANGE}} | {{MEDRXIV_PUBLISHED}} |
-| **total** | **{{TOTAL_N}}** | | **{{TOTAL_PUBLISHED}}** |
+| bioRxiv | 345,882 | 2013-11-07 → 2026-08-18 | 176,056 (50.9%) |
+| medRxiv | 87,567 | 2019-06-25 → 2026-08-18 | 39,352 (44.9%) |
+| **total** | **433,449** | | **215,408 (49.7%)** |
 
 - **Source:** the public bioRxiv/medRxiv APIs (`api.biorxiv.org`, `api.medrxiv.org`),
-  unauthenticated, harvested {{HARVEST_DATE}}. Field-by-field provenance and the
+  unauthenticated, harvested 2026-08-19. Field-by-field provenance and the
   endpoint inventory are in the project's `docs/prompts/LANE-RXIV-MAP.md`.
 - **Unit of record:** a paper, not a version. A source row is a *version*; the hub
   keeps `max(version)` per `(server, doi)` and full history lives in a sidecar.
@@ -69,7 +69,7 @@ Both preprint servers operated by **Cold Spring Harbor Laboratory**:
   1,941 characters, p99 4,763. The 4,000-character cap leaves ~2.3% of documents
   truncated; the NSR-inherited 2,000 cap would have truncated 45.4%.
 - **Licensing:** preprint metadata and abstracts are redistributed by the servers
-  under per-paper licenses ({{LICENSE_MIX}}). **Nothing in this repo redistributes
+  under per-paper licenses (`cc_by_nc_nd` 35.1%, `cc_no` 28.3%, `cc_by` 21.6%, `cc_by_nc` 8.1%, `cc_by_nd` 5.5%, `cc0` 1.0%, `cc0_ng` 0.3%, `unstated` 0.1%). **Nothing in this repo redistributes
   full text.** Confirm CSHL's terms before flipping any repo public.
 
 ## Split discipline

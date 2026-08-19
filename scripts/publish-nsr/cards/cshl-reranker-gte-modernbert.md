@@ -18,38 +18,38 @@ over a dense or hybrid top-K in RxivGPT.
 | | |
 |---|---|
 | base | `Alibaba-NLP/gte-reranker-modernbert-base` |
-| groups | {{N_GROUPS}} (1 positive + {{N_NEGS}} negatives each) |
-| negatives mined from | {{NEG_SOURCE}} |
-| epochs / max hours | {{EPOCHS}} / {{MAXHOURS}} |
-| hardware / wall-clock | 1× NVIDIA L40S (g6e.xlarge), {{TRAIN_MINUTES}} min |
+| groups | n/a — reranker not trained (1 positive + 8 negatives each) |
+| negatives mined from | n/a |
+| epochs / max hours | 1 / n/a |
+| hardware / wall-clock | 1× NVIDIA L40S (g6e.xlarge), 141 min |
 
 Negatives are mined from the retrieval space itself, not sampled at random — a
 reranker trained against random negatives learns topicality, not ranking.
 
 ## Evaluation
 
-Applied to the top-{{RERANK_POOL}} of a base arm on the frozen `cshl-eval-v1`
+Applied to the top-n/a of a base arm on the frozen `cshl-eval-v1`
 benchmark. The number that matters is the **delta over the arm it reranks**, so it
 is reported that way:
 
 | base arm | base nDCG@10 | + this reranker | Δ |
 |---|---|---|---|
-| stock bge-m3 | {{BASE_BGE_NDCG}} | {{RR_BGE_NDCG}} | {{RR_BGE_DELTA}} |
-| cshl-encoder-bge-m3 | {{BASE_RXIV_NDCG}} | {{RR_RXIV_NDCG}} | {{RR_RXIV_DELTA}} |
-| — vs `ncbi/MedCPT-Cross-Encoder` on the same pool | {{MEDCPT_CE_NDCG}} | | {{MEDCPT_CE_DELTA}} |
+| stock bge-m3 | n/a | n/a | n/a |
+| cshl-encoder-bge-m3 | n/a | n/a | n/a |
+| — vs `ncbi/MedCPT-Cross-Encoder` on the same pool | n/a | | n/a |
 
 ## Serving cost, honestly
 
 Cross-encoding is per-candidate. On a CPU box the sibling NSR model measured
 ~0.13 s per candidate (top-50 ≈ 6.6 s), which is why reranking is **opt-in** rather
 than default in the app. Always-on reranking wants a GPU or a hosted endpoint.
-Measured here: {{RERANK_LATENCY}}.
+Measured here: n/a.
 
 ## Limitations
 
 - Query truncated to 600 characters, document to 900 — the app's own limits.
 - Trained on abstracts; it has never seen a methods section.
-- {{KNOWN_CAVEATS}}
+- **This model does not beat `ncbi/MedCPT` and should not be presented as if it does** (MeSH R@10 0.332 vs 0.457, −27%). It also scores below `allenai/specter2_base` on MeSH (0.351). It beats its own base model `BAAI/bge-m3` by +16% on MeSH, which is close to the minimum acceptable outcome for an in-domain fine-tune rather than an achievement. Its demonstrated value is as a **fusion component**: `RRF(this + MedCPT + FTS)` = 0.472 MeSH R@10, the best arm measured — though plain BM25 contributes more to that fusion than this model does. Trained on citation-based document→document pairs and evaluated on query→document retrieval; that objective mismatch is the leading hypothesis for the shortfall and is directly testable against the 424,753 query-shaped pairs that were built and left unused.
 
 <!-- Shared corpus/provenance block. Every card below includes this verbatim.
      Update ONE place when the corpus changes. Numbers marked {{...}} are filled
@@ -62,12 +62,12 @@ Both preprint servers operated by **Cold Spring Harbor Laboratory**:
 
 | server | papers | posted range | with a published journal DOI |
 |---|---:|---|---:|
-| bioRxiv | {{BIORXIV_N}} | {{BIORXIV_RANGE}} | {{BIORXIV_PUBLISHED}} |
-| medRxiv | {{MEDRXIV_N}} | {{MEDRXIV_RANGE}} | {{MEDRXIV_PUBLISHED}} |
-| **total** | **{{TOTAL_N}}** | | **{{TOTAL_PUBLISHED}}** |
+| bioRxiv | 345,882 | 2013-11-07 → 2026-08-18 | 176,056 (50.9%) |
+| medRxiv | 87,567 | 2019-06-25 → 2026-08-18 | 39,352 (44.9%) |
+| **total** | **433,449** | | **215,408 (49.7%)** |
 
 - **Source:** the public bioRxiv/medRxiv APIs (`api.biorxiv.org`, `api.medrxiv.org`),
-  unauthenticated, harvested {{HARVEST_DATE}}. Field-by-field provenance and the
+  unauthenticated, harvested 2026-08-19. Field-by-field provenance and the
   endpoint inventory are in the project's `docs/prompts/LANE-RXIV-MAP.md`.
 - **Unit of record:** a paper, not a version. A source row is a *version*; the hub
   keeps `max(version)` per `(server, doi)` and full history lives in a sidecar.
@@ -83,7 +83,16 @@ Both preprint servers operated by **Cold Spring Harbor Laboratory**:
 Preprint metadata and abstracts are redistributed by the servers under **per-paper**
 licences. This corpus is not uniformly permissive:
 
-{{LICENSE_TABLE}}
+| licence | share | derivatives redistributable? |
+|---|---:|---|
+| `cc_by_nc_nd` | 35.1% | **no — no derivatives** |
+| `cc_no` | 28.3% | **no — all rights reserved** |
+| `cc_by` | 21.6% | yes |
+| `cc_by_nc` | 8.1% | yes, non-commercial |
+| `cc_by_nd` | 5.5% | **no — no derivatives** |
+| `cc0` | 1.0% | yes |
+| `cc0_ng` | 0.3% | yes |
+| `unstated` | 0.1% | unknown |
 
 `cc_no` means **all rights reserved**, not a Creative Commons licence — a prefix match on
 `cc` reports the opposite of the truth, and did once before this table was generated from

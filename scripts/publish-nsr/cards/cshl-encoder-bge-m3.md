@@ -24,15 +24,15 @@ adaptation**, not a general-purpose upgrade: outside this corpus, use stock bge-
 | base | `BAAI/bge-m3` |
 | objective | in-batch contrastive, dense only (`--unified_finetuning False`) |
 | trainer | FlagEmbedding `finetune.embedder.encoder_only.m3` |
-| pairs | {{N_PAIRS}} |
-| negatives / pair | {{N_NEGS}} |
-| group size | {{GROUP_SIZE}} |
-| query / passage max len | {{QUERY_MAX_LEN}} / {{PASSAGE_MAX_LEN}} tokens |
-| batch / epochs / lr | {{BATCH}} / {{EPOCHS}} / {{LR}} |
+| pairs | 40,000 (of 132,793 available) |
+| negatives / pair | 8 |
+| group size | 8 |
+| query / passage max len | 128 / 384 tokens |
+| batch / epochs / lr | 4 (halved from 8 by the OOM loop on a 24 GB A10G) / 1 / 1e-5 |
 | precision | bf16 |
-| hardware / wall-clock | 1× NVIDIA L40S (g6e.xlarge), {{TRAIN_MINUTES}} min |
+| hardware / wall-clock | 1× NVIDIA L40S (g6e.xlarge), 141 min |
 
-Supervision comes from {{SUPERVISION_SOURCES}}. Triplets are published separately
+Supervision comes from citation-graph triplets only (`meta.family = CITE`, 100%) — cited work as positive, same-category-uncited (83%) and citation-of-citation (17%) as negatives. **Query-shaped training pairs existed and were not used; see Limitations.**. Triplets are published separately
 as `NYSgpt/cshl-triplets`.
 
 ## Evaluation
@@ -43,13 +43,13 @@ corpus, not quoted from their own papers.
 
 | arm | R@1 | R@10 | nDCG@10 |
 |---|---|---|---|
-| BM25 / Postgres FTS | {{FTS_R1}} | {{FTS_R10}} | {{FTS_NDCG}} |
-| stock `BAAI/bge-m3` | {{BGE_R1}} | {{BGE_R10}} | {{BGE_NDCG}} |
-| `ncbi/MedCPT` | {{MEDCPT_R1}} | {{MEDCPT_R10}} | {{MEDCPT_NDCG}} |
-| `allenai/specter2_base` | {{SPECTER_R1}} | {{SPECTER_R10}} | {{SPECTER_NDCG}} |
-| `malteos/scincl` | {{SCINCL_R1}} | {{SCINCL_R10}} | {{SCINCL_NDCG}} |
-| **this model** | **{{RXIV_R1}}** | **{{RXIV_R10}}** | **{{RXIV_NDCG}}** |
-| RRF(FTS + this model) | {{RRF_R1}} | {{RRF_R10}} | {{RRF_NDCG}} |
+| BM25 / Postgres FTS | 0.047 | 0.081 | 0.063 |
+| stock `BAAI/bge-m3` | 0.118 | 0.286 | 0.194 |
+| `ncbi/MedCPT` | 0.235 | **0.457** | **0.337** |
+| `allenai/specter2_base` | 0.153 | 0.351 | 0.247 |
+| `malteos/scincl` | n/a | NOT RUN | n/a |
+| **this model** | **0.157** | **0.332** | **0.237** |
+| RRF(FTS + this model) | 0.237 | 0.472 | 0.345 |
 
 Per-segment numbers (server, era, published vs unpublished, abstract length) are in
 `results/` on the benchmark repo.
@@ -60,7 +60,7 @@ Per-segment numbers (server, era, published vs unpublished, abstract length) are
 - Documents are truncated at 4,000 characters; the tail of a long methods-heavy
   abstract is not represented.
 - Trained on preprint abstracts, not full text or figures.
-- {{KNOWN_CAVEATS}}
+- **This model does not beat `ncbi/MedCPT` and should not be presented as if it does** (MeSH R@10 0.332 vs 0.457, −27%). It also scores below `allenai/specter2_base` on MeSH (0.351). It beats its own base model `BAAI/bge-m3` by +16% on MeSH, which is close to the minimum acceptable outcome for an in-domain fine-tune rather than an achievement. Its demonstrated value is as a **fusion component**: `RRF(this + MedCPT + FTS)` = 0.472 MeSH R@10, the best arm measured — though plain BM25 contributes more to that fusion than this model does. Trained on citation-based document→document pairs and evaluated on query→document retrieval; that objective mismatch is the leading hypothesis for the shortfall and is directly testable against the 424,753 query-shaped pairs that were built and left unused.
 
 ## Usage
 
@@ -81,12 +81,12 @@ Both preprint servers operated by **Cold Spring Harbor Laboratory**:
 
 | server | papers | posted range | with a published journal DOI |
 |---|---:|---|---:|
-| bioRxiv | {{BIORXIV_N}} | {{BIORXIV_RANGE}} | {{BIORXIV_PUBLISHED}} |
-| medRxiv | {{MEDRXIV_N}} | {{MEDRXIV_RANGE}} | {{MEDRXIV_PUBLISHED}} |
-| **total** | **{{TOTAL_N}}** | | **{{TOTAL_PUBLISHED}}** |
+| bioRxiv | 345,882 | 2013-11-07 → 2026-08-18 | 176,056 (50.9%) |
+| medRxiv | 87,567 | 2019-06-25 → 2026-08-18 | 39,352 (44.9%) |
+| **total** | **433,449** | | **215,408 (49.7%)** |
 
 - **Source:** the public bioRxiv/medRxiv APIs (`api.biorxiv.org`, `api.medrxiv.org`),
-  unauthenticated, harvested {{HARVEST_DATE}}. Field-by-field provenance and the
+  unauthenticated, harvested 2026-08-19. Field-by-field provenance and the
   endpoint inventory are in the project's `docs/prompts/LANE-RXIV-MAP.md`.
 - **Unit of record:** a paper, not a version. A source row is a *version*; the hub
   keeps `max(version)` per `(server, doi)` and full history lives in a sidecar.
@@ -102,7 +102,16 @@ Both preprint servers operated by **Cold Spring Harbor Laboratory**:
 Preprint metadata and abstracts are redistributed by the servers under **per-paper**
 licences. This corpus is not uniformly permissive:
 
-{{LICENSE_TABLE}}
+| licence | share | derivatives redistributable? |
+|---|---:|---|
+| `cc_by_nc_nd` | 35.1% | **no — no derivatives** |
+| `cc_no` | 28.3% | **no — all rights reserved** |
+| `cc_by` | 21.6% | yes |
+| `cc_by_nc` | 8.1% | yes, non-commercial |
+| `cc_by_nd` | 5.5% | **no — no derivatives** |
+| `cc0` | 1.0% | yes |
+| `cc0_ng` | 0.3% | yes |
+| `unstated` | 0.1% | unknown |
 
 `cc_no` means **all rights reserved**, not a Creative Commons licence — a prefix match on
 `cc` reports the opposite of the truth, and did once before this table was generated from
