@@ -401,8 +401,8 @@ is a follow-up rather than a completed claim.
 | Postgres FTS | 0.047 | 0.081 | 0.063 |
 | stock `BAAI/bge-m3` | 0.118 | 0.286 | 0.194 |
 | **RRF(FTS + bge-m3)** | **0.136** | **0.317** | **0.218** |
-| `ncbi/MedCPT` | `PENDING` | | |
-| `allenai/specter2_base` | `PENDING` | | |
+| **`ncbi/MedCPT`** | **0.235** | **0.457** | **0.337** |
+| `allenai/specter2_base` | 0.153 | 0.351 | 0.247 |
 | `malteos/scincl` | **NOT RUN** — TEI has no `text-embeddings-inference` support for this model | | |
 | **our fine-tune** | `PENDING` | | |
 
@@ -413,12 +413,21 @@ is a follow-up rather than a completed claim.
 | Postgres FTS | 0.217 | 0.240 | 0.229 |
 | stock `BAAI/bge-m3` | 0.457 | 0.652 | 0.552 |
 | **RRF(FTS + bge-m3)** | **0.491** | **0.684** | **0.589** |
-| `ncbi/MedCPT` | `PENDING` | | |
-| `allenai/specter2_base` | `PENDING` | | |
+| **`ncbi/MedCPT`** | **0.573** | **0.808** | **0.689** |
+| `allenai/specter2_base` | 0.497 | 0.726 | 0.610 |
 | `malteos/scincl` | **NOT RUN** — TEI has no `text-embeddings-inference` support for this model | | |
 | **our fine-tune** | `PENDING` | | |
 
-**Two things already visible, before our own model exists:**
+**MedCPT is the bar, and it is a high one.** On MeSH it scores R@10 **0.457** against stock
+bge-m3's 0.286 — a **60% lead** — and on author keywords 0.808 against 0.652. That is the
+in-domain biomedical retrieval model doing exactly what it was built to do on exactly the
+literature it was built for. It also reframes the claim this program can honestly make:
+*"we beat stock bge-m3"* would be a near-tautology, since our encoder is a fine-tune of it on
+in-domain data. **The question that matters is whether a one-night domain adaptation of a
+general multilingual model can close a 60% gap to a purpose-built biomedical one.** If it
+cannot, that is the finding and it will be reported as such.
+
+**Three things already visible, before our own model exists:**
 
 **Dense retrieval dominates lexical on this corpus, by 3.5× on MeSH.** FTS R@10 0.081 against
 bge-m3's 0.286. MeSH descriptors are controlled vocabulary assigned by an indexer — they often
