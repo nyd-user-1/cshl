@@ -18,7 +18,8 @@ that fusion is **+0.9%** over `RRF(MedCPT + FTS)` — real, positive, and small.
 
 **The most useful result is about full-text search.** Postgres FTS is the worst arm alone
 (MeSH R@10 0.081, five times worse than anything else) and the *largest single contributor*
-in fusion: adding it to MedCPT gains **+2.5%**, nearly three times what our encoder adds.
+in fusion: adding it to MedCPT gains **+2.5%** against our encoder's **+1.6%**, i.e. about
+1.6× (2.0× when each is added last to the other's pair).
 Lexical and dense retrieval fail on disjoint queries, and this is an unusually clean
 demonstration of it on a real corpus.
 
@@ -445,11 +446,24 @@ scholarly encoder, not a biomedical one. On author keywords we lose by more (0.6
 available.** +16% on MeSH (0.332 vs 0.286), +2.6% on author keywords. Improving on the model
 you fine-tuned from, using in-domain data, is closer to a floor than an achievement.
 
-**In fusion, plain BM25 beats us as a contributor.** `RRF(MedCPT+FTS)` 0.4682 against
-`RRF(ours+MedCPT)` 0.4641. Our marginal contribution on top of `RRF(MedCPT+FTS)` is
-**+0.9%** (0.4682 → 0.4722); FTS's contribution on top of MedCPT alone is **+2.5%**
-(0.4569 → 0.4682). Postgres full-text search — the worst arm alone by a factor of five —
-adds nearly three times what our fine-tuned encoder does.
+**In fusion, plain BM25 beats us as a contributor — by about 1.6–2×, measured symmetrically.**
+An earlier draft of this report said "nearly three times." That was wrong: it compared FTS's
+gain when added *first* against ours when added *last*, which are not comparable quantities.
+Corrected, with both orderings shown:
+
+| | MeSH R@10 | Δ |
+|---|---:|---:|
+| MedCPT alone | 0.4569 | — |
+| MedCPT + FTS | 0.4682 | **+0.0113** |
+| MedCPT + ours | 0.4641 | **+0.0072** |
+| | | *FTS adds 1.57× ours* |
+| MedCPT + ours → + FTS | 0.4722 | **+0.0081** |
+| MedCPT + FTS → + ours | 0.4722 | **+0.0040** |
+| | | *FTS adds 2.02× ours* |
+
+So Postgres full-text search — the worst arm alone by a factor of five (0.081) — contributes
+**roughly one and a half to two times** what our fine-tuned encoder does to the best fusion.
+That is still the striking result, and it no longer overstates itself.
 
 ### The leading hypothesis, and it is testable
 
