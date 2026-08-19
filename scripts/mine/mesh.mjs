@@ -22,8 +22,8 @@
 // this corpus size). Europe PMC publishes no hard ceiling and asks for restraint.
 
 import {
-  Pacer, fetchRetry, jsonlWriter, existingKeys, psqlRows, rowCounts,
-  log, has, numArg, chunk, bareDoi, human, bytesOf, elapsed, sleep,
+  Pacer, fetchRetry, jsonlWriter, existingKeys, readJsonl, psqlRows, rowCounts,
+  log, has, numArg, strArg, chunk, bareDoi, human, bytesOf, elapsed, sleep,
 } from "./lib.mjs";
 import { writeFileSync } from "node:fs";
 
@@ -101,10 +101,15 @@ function parsePubmedArticles(xml) {
 // ── published DOIs from the corpus (read-only) ───────────────────────────────
 async function publishedDois(limit) {
   const lim = limit ? `LIMIT ${limit}` : "";
+  // --server lets the run be fired per slice while the loader is still walking
+  // the other one; the resume set makes a later whole-corpus run a no-op on
+  // whatever a slice run already covered.
+  const srv = strArg("--server", "");
+  const where = srv ? `AND server = '${srv.replace(/'/g, "''")}'` : "";
   const rows = await psqlRows(
     `SELECT key_number, server, lower(published_doi)
        FROM preprints
-      WHERE published_doi IS NOT NULL AND published_doi <> ''
+      WHERE published_doi IS NOT NULL AND published_doi <> '' ${where}
       ORDER BY md5(key_number) ${lim};`
   );
   return rows.map(([key, server, doi]) => ({ key, server, doi: bareDoi(doi) }));
@@ -151,6 +156,32 @@ async function efetchBatch(pmids, pacer) {
     pacer, method: "POST", json: false, timeoutMs: 180_000,
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: eutilsBody({ db: "pubmed", id: pmids.join(","), retmode: "xml" }).toString(),
+  });
+  if (!res.ok || !res.text) return { records: [], bytes: 0 };
+  return { records: parsePubmedArticles(res.text), bytes: Buffer.byteLength(res.text) };
+}
+
+// ── EPost + the history server (NCBI's own recommendation, NBK25497) ─────────
+// Post the whole PMID list once, then efetch large pages against WebEnv /
+// query_key instead of stuffing 200 ids into every request URL. Fewer calls,
+// smaller requests, and it is the access pattern NCBI asks for at this volume.
+async function epost(pmids, pacer) {
+  const res = await fetchRetry(`${EUTILS}/epost.fcgi`, {
+    pacer, method: "POST", json: false, timeoutMs: 120_000,
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: eutilsBody({ db: "pubmed", id: pmids.join(",") }).toString(),
+  });
+  if (!res.ok || !res.text) return null;
+  const key = (res.text.match(/<QueryKey>(\d+)<\/QueryKey>/) || [])[1];
+  const env = (res.text.match(/<WebEnv>([^<]+)<\/WebEnv>/) || [])[1];
+  return key && env ? { key, env, count: pmids.length } : null;
+}
+
+async function efetchHistory(h, retstart, retmax, pacer) {
+  const res = await fetchRetry(`${EUTILS}/efetch.fcgi`, {
+    pacer, method: "POST", json: false, timeoutMs: 300_000,
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: eutilsBody({ db: "pubmed", query_key: h.key, WebEnv: h.env, retstart: String(retstart), retmax: String(retmax), retmode: "xml" }).toString(),
   });
   if (!res.ok || !res.text) return { records: [], bytes: 0 };
   return { records: parsePubmedArticles(res.text), bytes: Buffer.byteLength(res.text) };
@@ -277,72 +308,136 @@ async function probe() {
   log(`wrote data/mine/raw/mesh-probe.json (${sampleOut.length} full records as evidence)`);
 }
 
-// ── full run ─────────────────────────────────────────────────────────────────
+// ── full run — two phases, resumable at both ─────────────────────────────────
+// A: every published DOI → PMID (idconv, esearch for its misses), cached to disk.
+// B: EPost the whole PMID list, efetch it back in large pages off the history
+//    server. Splitting the phases means a crash in B costs no re-resolution, and
+//    it collapses the call count: ~4,300 URL-batched calls become ~2,000.
+const PMIDMAP = "data/mine/raw/pmid-map.jsonl";
+
+async function resolvePmids(todo, pacer) {
+  const known = new Map();
+  for await (const r of readJsonl(PMIDMAP)) known.set(r.doi, r.pmid);
+  const missing = todo.filter((r) => !known.has(r.doi));
+  log(`phase A: ${todo.length} published DOIs · ${known.size} already resolved on disk · ${missing.length} to resolve`);
+  if (!missing.length) return known;
+
+  const out = jsonlWriter(PMIDMAP);
+  const queue = chunk(missing, 200);
+  const lanes = Math.max(1, numArg("--lanes", 4));
+  let calls = 0, hit = 0, miss = 0, lastLog = 0;
+
+  await Promise.all(Array.from({ length: Math.min(lanes, queue.length) }, async () => {
+    while (queue.length) {
+      const b = queue.shift();
+      const dois = b.map((r) => r.doi);
+      const map = await idconvBatch(dois, pacer); calls++;
+
+      // idconv only knows PMC-deposited articles (82.5% in the probe); esearch
+      // sees all of PubMed (94.5%). Send only the misses, then merge.
+      const left = dois.filter((d) => !map.has(d));
+      let extraPmids = [];
+      for (const mb of chunk(left, 100)) { extraPmids.push(...await esearchBatch(mb, pacer)); calls++; }
+
+      for (const [d, p] of map) { known.set(d, p); await out.write({ doi: d, pmid: p, via: "idconv" }); hit++; }
+      // esearch returns a bare PMID list with no DOI attached — the mapping is
+      // recovered in phase B from each record's own ArticleIdList, so park them
+      // under a synthetic key rather than guessing an alignment.
+      for (const p of extraPmids) { known.set(`pmid:${p}`, p); await out.write({ doi: `pmid:${p}`, pmid: p, via: "esearch" }); hit++; }
+      miss += left.length - extraPmids.length > 0 ? left.length - extraPmids.length : 0;
+
+      if (Date.now() - lastLog > 20_000) {
+        lastLog = Date.now();
+        log(`  phase A: ${known.size} pmids · ${calls} calls · ${queue.length} batches left · ${(calls / elapsed()).toFixed(1)} req/s`);
+      }
+    }
+  }));
+  await out.drain(); await out.close();
+  log(`phase A done: ${known.size} PMIDs from ${todo.length} published DOIs · ${calls} calls`);
+  return known;
+}
+
 async function run() {
   const limit = numArg("--limit", 0);
   const all = await publishedDois(limit);
   const done = await existingKeys(OUT, "key");
   const todo = all.filter((r) => !done.has(r.key));
   log(`MeSH run: ${all.length} published DOIs, ${done.size} already harvested, ${todo.length} to go`);
+  log(`NCBI api_key: ${NCBI_KEY ? "present → 10 req/s tier" : "ABSENT → 3 req/s tier"} · pacing at ${NCBI_RPS} req/s`);
   if (!todo.length) return;
 
-  const out = jsonlWriter(OUT);
-  const pacer = new Pacer(NCBI_RPS, 3);
+  const pacer = new Pacer(NCBI_RPS, Math.max(2, numArg("--lanes", 4), numArg("--page-lanes", 4)));
   const byDoi = new Map(todo.map((r) => [r.doi, r]));
-  let calls = 0, written = 0, withMesh = 0, unresolved = 0;
 
-  // Chunk at 200 to match both idconv's and efetch's per-call ceiling, then run
-  // several chunks in flight. The Pacer holds the aggregate under NCBI's rate
-  // policy regardless of how many chunks are open, so concurrency buys wall-clock
-  // without buying rudeness: the run becomes calls/rps-bound, not latency-bound.
-  const batches = chunk(todo, 200);
-  const queue = [...batches];
-  const lanes = Math.max(1, numArg("--lanes", 4));
-  log(`${batches.length} batches of ≤200 · ${lanes} lanes · ≤${NCBI_RPS} req/s aggregate · ~${Math.ceil((batches.length * 4) / NCBI_RPS / 60)} min projected`);
+  const pmidMap = await resolvePmids(todo, pacer);
+  // Second join key. idconv gives us doi→pmid, so invert it: a PubMed record
+  // whose own DOI string differs from the one bioRxiv recorded still lands on
+  // the right paper via its PMID.
+  const pmidToDoi = new Map();
+  for (const [d, p] of pmidMap) if (!d.startsWith("pmid:")) pmidToDoi.set(p, d);
+  // Resume precisely: a PMID already written to mesh.jsonl must not be fetched
+  // again. Without this a resumed run re-downloads the whole slice and throws it
+  // away as "unmatched" — correct, but it costs the bandwidth twice.
+  const donePmids = new Set();
+  for await (const r of readJsonl(OUT)) if (r.pmid) donePmids.add(String(r.pmid));
+  const pmids = [...new Set(pmidMap.values())].filter((p) => p && !donePmids.has(String(p)));
+  log(`phase B: ${donePmids.size} PMIDs already on disk · EPost ${pmids.length} remaining, efetch in pages of ${numArg("--page", 500)}`);
 
-  const doBatch = async (b) => {
-    const dois = b.map((r) => r.doi);
-    const map = await idconvBatch(dois, pacer); calls++;
+  const out = jsonlWriter(OUT);
+  const PAGE = numArg("--page", 500);
+  const POST = numArg("--post", 5000);
+  let written = 0, withMesh = 0, unmatched = 0, bytes = 0, lastLog = 0;
 
-    // Whatever idconv could not place (non-PMC articles) goes to esearch, which
-    // sees all of PubMed. Two paths, one merged PMID set.
-    const missing = dois.filter((d) => !map.has(d));
-    const extra = [];
-    if (missing.length) { for (const mb of chunk(missing, 100)) { extra.push(...await esearchBatch(mb, pacer)); calls++; } }
-
-    const pmids = [...new Set([...map.values(), ...extra])];
-    if (!pmids.length) { unresolved += b.length; return; }
-    const { records } = await efetchBatch(pmids, pacer); calls++;
-
-    const hit = new Set();
-    for (const r of records) {
-      const src = byDoi.get(r.doi);
-      if (!src) continue;                       // an esearch [AID] false-positive
-      hit.add(r.doi);
-      await out.write({
-        key: src.key, server: src.server, published_doi: r.doi,
-        pmid: r.pmid, pmcid: r.pmcid, journal: r.journal,
-        mesh: r.mesh, author_keywords: r.author_keywords,
-        publication_types: r.publication_types, source: "ncbi/efetch",
-      });
-      written++; if (r.mesh.length) withMesh++;
+  // Phase B is bandwidth-bound, not call-bound: a page is ~15 MB of XML, so
+  // fetching pages one at a time leaves the pace budget unspent and the link
+  // idle. Pages within an EPost group are independent (retstart/retmax against
+  // the same WebEnv), so run them through a bounded pool; the Pacer still holds
+  // the aggregate under NCBI's rate policy.
+  const PAGE_LANES = Math.max(1, numArg("--page-lanes", 4));
+  for (const group of chunk(pmids, POST)) {
+    // --no-epost forces the URL-batched path. EPost only changes HOW the PMID
+    // list is fetched back; the idconv→esearch resolution in phase A is
+    // identical either way.
+    const h = has("--no-epost") ? null : await epost(group, pacer);
+    if (!h) {
+      if (!has("--no-epost")) log(`  epost failed for a ${group.length}-id group — falling back to URL batches`);
+      const q = chunk(group, 200);
+      await Promise.all(Array.from({ length: Math.min(PAGE_LANES, q.length) }, async () => {
+        while (q.length) {
+          const r = await efetchBatch(q.shift(), pacer); bytes += r.bytes;
+          for (const rec of r.records) { const w = await emit(rec); if (w === 1) { written++; withMesh += rec.mesh.length ? 1 : 0; } else unmatched++; }
+        }
+      }));
+      continue;
     }
-    unresolved += dois.length - hit.size;
-  };
-
-  let lastLog = 0;
-  await Promise.all(Array.from({ length: Math.min(lanes, queue.length) }, async () => {
-    while (queue.length) {
-      await doBatch(queue.shift());
-      if (Date.now() - lastLog > 20_000) {
-        lastLog = Date.now();
-        log(`${written} written (${withMesh} with MeSH) · ${unresolved} unresolved · ${calls} calls · ${queue.length} batches left · ${(written / elapsed()).toFixed(0)} papers/s`);
+    const offsets = [];
+    for (let start = 0; start < group.length; start += PAGE) offsets.push(start);
+    await Promise.all(Array.from({ length: Math.min(PAGE_LANES, offsets.length) }, async () => {
+      while (offsets.length) {
+        const r = await efetchHistory(h, offsets.shift(), PAGE, pacer); bytes += r.bytes;
+        for (const rec of r.records) { const w = await emit(rec); if (w === 1) { written++; withMesh += rec.mesh.length ? 1 : 0; } else unmatched++; }
+        if (Date.now() - lastLog > 20_000) {
+          lastLog = Date.now();
+          log(`  phase B: ${written} written (${withMesh} with MeSH) · ${human(bytes)} fetched · ${(written / elapsed()).toFixed(0)} papers/s`);
+        }
       }
-    }
-  }));
+    }));
+  }
+
+  async function emit(rec) {
+    const src = byDoi.get(rec.doi) ?? byDoi.get(pmidToDoi.get(rec.pmid));
+    if (!src) return 0;                         // an esearch [AID] false-positive, or a DOI we do not hold
+    await out.write({
+      key: src.key, server: src.server, published_doi: rec.doi,
+      pmid: rec.pmid, pmcid: rec.pmcid, journal: rec.journal,
+      mesh: rec.mesh, author_keywords: rec.author_keywords,
+      publication_types: rec.publication_types, source: "ncbi/efetch",
+    });
+    return 1;
+  }
 
   await out.drain(); await out.close();
-  log(`mesh.jsonl: ${written} records · ${withMesh} with ≥1 descriptor (${((withMesh / Math.max(1, written)) * 100).toFixed(1)}%) · ${unresolved} published DOIs unresolved · ${human(bytesOf(OUT))}`);
+  log(`mesh.jsonl: ${written} records · ${withMesh} with ≥1 descriptor (${((withMesh / Math.max(1, written)) * 100).toFixed(1)}%) · ${unmatched} fetched records matched no corpus DOI · ${human(bytes)} fetched · ${human(bytesOf(OUT))} written`);
 }
 
 const t = Date.now();

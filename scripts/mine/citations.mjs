@@ -212,10 +212,14 @@ async function walk() {
   const state = existsSync(STATE) ? JSON.parse(readFileSync(STATE, "utf8")) : {};
   const out = jsonlWriter(RAW);
   const pacer = new Pacer(RPS, CONC);
+  // --years 2013:2014 restricts the shard set. Used to verify the shard/resume
+  // machinery on one small real shard without committing to the full walk.
+  const yr = strArg("--years", "");
+  const [lo, hi] = yr ? yr.split(":").map(Number) : [-Infinity, Infinity];
   const shards = [];
   for (const server of servers) {
     const [a, b] = YEARS[server];
-    for (let y = a; y <= b; y++) shards.push({ server, year: y, id: `${server}:${y}` });
+    for (let y = a; y <= b; y++) if (y >= lo && y <= hi) shards.push({ server, year: y, id: `${server}:${y}` });
   }
   const pending = shards.filter((s) => !state[s.id]?.done);
   log(`walk: ${shards.length} shards (${pending.length} outstanding), ${CONC} in flight, ≤${RPS} req/s aggregate`);
@@ -314,8 +318,8 @@ async function resolve() {
   }
   log(`openalex-work → corpus-key bridge: ${wToKey.size} entries`);
 
-  // 3. emit
-  const out = jsonlWriter(OUT);
+  // 3. emit — fully derived from RAW+GAP, so replace rather than append
+  const out = jsonlWriter(OUT, { append: false });
   let papers = 0, edges = 0, inEdges = 0, withIn = 0;
   const seen = new Set();
   for (const src of [RAW, GAP]) {

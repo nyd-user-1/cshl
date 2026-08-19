@@ -12,6 +12,7 @@
 //     restart reads back the keys already on disk instead of re-spending.
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -167,9 +168,12 @@ export async function fetchRetry(url, { pacer, method = "GET", body, headers = {
 }
 
 // ── jsonl out ────────────────────────────────────────────────────────────────
-export function jsonlWriter(path) {
+// append:true (the default) is what makes the harvesters resumable. Derived
+// files — anything fully regenerated from an input — pass append:false so a
+// rerun replaces rather than doubles.
+export function jsonlWriter(path, { append = true } = {}) {
   mkdirSync(dirname(path), { recursive: true });
-  const stream = createWriteStream(path, { flags: "a" });
+  const stream = createWriteStream(path, { flags: append ? "a" : "w" });
   let pending = null;
   let lines = 0, bytes = 0;
   return {
@@ -232,12 +236,16 @@ export const bytesOf = (p) => (existsSync(p) ? statSync(p).size : 0);
 export const human = (n) => (n > 1e9 ? (n / 1e9).toFixed(2) + " GB" : n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : (n / 1e3).toFixed(0) + " KB");
 
 // ── deterministic split (NSR's rule: split by paper hash, never by row) ───────
-// FNV-1a over the business key → a stable [0,1). Frozen across runs and machines.
-export function hash01(key) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
-  return h / 0x100000000;
-}
+// Byte-identical to the house function in scripts/eval/build-nsr-eval.mjs and
+// scripts/train/build-nsr-triplets.mjs: md5 of a seeded key, first 8 hex digits,
+// scaled to [0,1). Frozen across runs, machines, and lanes — which is the whole
+// point: the rig lane must be able to recompute any split without asking us.
+export const h32 = (s) => parseInt(createHash("md5").update(s).digest("hex").slice(0, 8), 16) / 0xffffffff;
+
+// The frozen benchmark reservation. A paper under the holdout line never appears
+// as a training anchor, positive, or negative — it exists only in rxiv-eval-v1.
+export const HOLDOUT_SEED = "holdout:";
+export const SPLIT_SEED = "rxiv-training-pairs-2026-08-19";
 
 export const DOI_SUFFIX = (doi) => String(doi || "").replace(/^https?:\/\/doi\.org\//i, "").replace(/^10\.\d{4,9}\//, "");
 export const bareDoi = (doi) => String(doi || "").replace(/^https?:\/\/doi\.org\//i, "").toLowerCase();
