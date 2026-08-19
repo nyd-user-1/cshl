@@ -18,6 +18,7 @@
 //      SEMANTIC_SCHOLAR_API_KEY (optional).
 
 import { neon } from "@neondatabase/serverless";
+import { activeEncoder, embedQueryCached, hasEmbeddings, toVectorLiteral, vectorTable } from "./_lib/embed.js";
 import {
   BedrockRuntimeClient,
   ConverseStreamCommand,
@@ -178,10 +179,41 @@ export default async function handler(req: any, res: any) {
       )
       .catch(() => []);
 
-    // Dense arm: retired for now. This corpus has no embeddings yet (no encoder,
-    // no vector sidecar), so retrieval is FTS + structured + author only. Restoring
-    // it means populating preprint_embeddings and reinstating the kNN arm here.
-    const denseP: Promise<Rec[]> = Promise.resolve([]);
+    // Dense arm — kNN over preprint_embeddings (bge-m3, 1024-d, cosine).
+    //
+    // Self-enabling: hasEmbeddings() is a cheap probe cached 60 s per process, so this
+    // arm switches on by itself as vectors land and switches off if the sidecar is
+    // absent or empty — no deploy, no flag. Any failure degrades to FTS-only and never
+    // errors, which is the same contract /api/search advertises.
+    //
+    // Two details that are not stylistic:
+    //   1. The probe vector is a BOUND $1::vector parameter. A *correlated* reference
+    //      (one that varies per row) defeats the HNSW index and turns this into an
+    //      exact scan over 433k vectors.
+    //   2. SET LOCAL hnsw.ef_search must share a transaction with the scan, or it is
+    //      set on one pooled connection and the scan runs on another with the default.
+    //
+    // Query side must match the corpus side: stock bge-m3 via the free Cloudflare path
+    // (SEARCH_ENCODER=bge), so /chat has no dependency on a serve box.
+    const denseP: Promise<Rec[]> = (async () => {
+      try {
+        if (!(await hasEmbeddings(sql as never))) return [];
+        const enc = activeEncoder();
+        const { vector } = await embedQueryCached(sql as never, userMessage, enc);
+        const [, rows] = (await sql.transaction([
+          sql.query(`SET LOCAL hnsw.ef_search = 60`),
+          sql.query(
+            `SELECT ${SELECT}, (1 - (e.embedding <=> $1::vector))::float AS similarity
+             FROM ${vectorTable(enc)} e
+             JOIN preprints USING (key_number)
+             ORDER BY e.embedding <=> $1::vector
+             LIMIT 8`,
+            [toVectorLiteral(vector)],
+          ),
+        ])) as [unknown, Rec[]];
+        return rows;
+      } catch { return []; }
+    })();
 
     const [structured, authorRecs, ftsRecs, denseRecs, s2Papers] = await Promise.all([
       structuredP,

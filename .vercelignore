@@ -1,0 +1,11 @@
+# The Vercel CLI uploads the working directory; .gitignore does not gate it.
+# data/ holds the walked ndjson (~4 GB) and must never be uploaded — it is loader
+# input, not build input. Without this the CLI tries to ship the whole corpus.
+data
+dist
+node_modules
+.git
+scripts/serve-nsr
+supabase
+*.log
+.cutover-backup
