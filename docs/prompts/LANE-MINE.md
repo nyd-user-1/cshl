@@ -688,6 +688,50 @@ DIRECTIVES — here is the line item, ready to carry across verbatim:
 reference for the generator's prompt design — the four-family shape (keyword / question / method /
 broad) and the title-echo audit are the parts worth carrying over.
 
+### Coverage limits — read this before anyone writes a model card
+
+Every signal in this lane covers a different fraction of the corpus, and two of them cannot be
+improved by harvesting harder. Stating it plainly so no reader assumes otherwise:
+
+| signal | coverage | ceiling |
+|---|---|---|
+| category labels | **100%** | none — author-assigned at submission |
+| EXTRACT queries | **~100%** | none — abstract coverage is ~100% |
+| citation edges (any reference) | ~100% | none — OpenAlex resolves 99.2% |
+| citation edges **in-corpus** (what triplets need) | see below | soft — grows with corpus size |
+| **MeSH labels** | **~36%** | **hard and structural** |
+
+**The MeSH ceiling is not a harvest gap and no additional work moves it.** MeSH descriptors are
+assigned by NLM indexers to journal articles that MEDLINE indexes. A preprint carries none of its
+own — verified by the map lane (`SRC:PPR AND HAS_MESH:Y` → hitCount 0). So the labels only reach a
+paper through the chain:
+
+```
+paper has a published journal DOI      ~49%   (measured 48.7% on the loaded corpus; recency-driven,
+                                                recent preprints simply are not published yet)
+  × that DOI resolves to a PMID        95.2%  (measured, medRxiv slice: idconv + esearch merged)
+  × that PubMed record carries MeSH    77.8%  (measured, medRxiv slice — the rest are journals
+                                                MEDLINE does not index, or records not yet indexed)
+  ────────────────────────────────────────
+  ≈ 36% of the corpus                          ← the ceiling
+```
+
+Two honest consequences:
+
+- **`rxiv-mesh-classify` is a classifier over a biased third of the corpus**, not over the corpus.
+  The papers it covers skew older (published), and toward the clinical/biomedical journals MEDLINE
+  indexes — which means it under-covers exactly the newest and the most basic-science material.
+  Any headline number from it must say "on the MEDLINE-indexed subset".
+- **`rxiv-category-classify` is the only 100%-coverage classifier target.** If a single classifier
+  number is quoted anywhere, it should be that one.
+
+**In-corpus citation edges** are a softer limit but worth stating too: a triplet needs a paper whose
+references include *another paper in this corpus*. On the medRxiv-only slice that was 23,228 of
+79,218 papers (29%) and only 56,612 of 2,885,247 references (2.0%) — because medRxiv papers mostly
+cite journal articles and bioRxiv preprints, and bioRxiv was not loaded yet. This number should
+rise sharply once both servers are in; it is the one figure in this report I expect to move
+materially, and it will be restated after the full harvest rather than extrapolated now.
+
 ### Gates needing Brendan
 
 1. ~~Synthetic-query spend~~ — **RULED: REJECTED.** No Bedrock generation at any subsample size.
