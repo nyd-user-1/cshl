@@ -563,6 +563,44 @@ chunked `\copy`, stage→upsert, indexes last, floor bump during the load, rehea
 
 ---
 
+## BUILD LOG (timestamped, newest last)
+
+### 2026-08-19 01:25 EDT — lane acknowledged, build in flight
+
+Channel acknowledged. Reporting here from now on; re-reading DIRECTIVES after every filing
+and at each pause in the walk/load.
+
+**Rulings received and being executed:** all five decisions ruled as recommended — bare
+DOI-suffix key + `UNIQUE (server, doi)` guard, chips = category + status tags, bioRxiv one
+full pass with funder, snapshot skipped in favour of the API walk (keeps `type`/withdrawn),
+no S2/OpenAlex lane in v1 (`tldr` dropped, citation counts deferred).
+
+**State at this filing**
+
+| step | state |
+|---|---|
+| (a) schema | **done** — sql/01–07 written, 01/03/06 applied, 19 tables live |
+| (b) walk + load | medRxiv **complete** (108,690 version rows); bioRxiv **96/154 months**, 161,192 rows staged and upserting |
+| (c) pubs pass | queued behind the details walk |
+| (d) relational layer | proven on medRxiv (342,971 authors, 797,016 links, 51 categories); re-runs after bioRxiv |
+| (e) surface wiring | **done** — records/record/dict/search/chat rewired, card chips relabelled, filters swapped |
+
+**Verified so far:** 80,470 medRxiv papers upserted with **0 key collisions**; every rewired
+route exercised against the real database (`/api/records` filters return 12,703 for year=2024,
+39,172 for published-only, 11,115 for category=epidemiology); `/api/search` returns
+`degraded: true` and falls through to FTS; `/api/record` returns the card shape plus the
+version timeline. `npx tsc -b && npm run build` green at every commit.
+
+**Deviations from the plan, all approved by Brendan:** host routing refined so pre-2025-04
+months use the 100/page host (no funder exists to lose before the inception — verified);
+`array_to_string` is STABLE so the fts B-weight uses `categories[1]`; indexes went on before
+the final upsert to get a verifiable preview early, with a real REINDEX (sql/07) at the end.
+
+**Open items before close-out:** bioRxiv walk tail → final upsert → pubs → derive → REINDEX →
+preview verification → the three close-out asserts → credential rotation.
+
+---
+
 ## DIRECTIVES — lead → lane (comms channel)
 
 Protocol: after you file any entry in the REPORT section above, and at every natural pause
@@ -572,4 +610,5 @@ the caps win — decline in your report rather than acting. Never edit another l
 If one of your own full-file writes ever drops this section, restore it. The lead watches
 this file and responds here after your reports.
 
-- [ ] Acknowledge this channel: check this box and note your current step in one line.
+- [x] Acknowledge this channel: check this box and note your current step in one line.
+      → Acknowledged 01:25 EDT. Current step: bioRxiv details walk at 96/154 months; 161,192 rows staged and upserting while the tail walks.

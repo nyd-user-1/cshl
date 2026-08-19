@@ -37,7 +37,17 @@ DRYRUN=${DRYRUN:-}
 EXPECT_HOST=${EXPECT_HOST:-ep-orange-water-aut2eymf}
 
 say() { echo "$@"; }
-run() { if [ -n "$DRYRUN" ]; then echo "  [dry-run] would run: $*"; else "$@"; fi; }
+# Dry-run echoes argv, and one of these commands carries the Neon URL. Redact
+# anything following --value before printing: the NSR rig leaked its live DB URL
+# into three uploaded S3 logs exactly this way (set -x prints resolved values),
+# and a dry-run whose whole purpose is to be pasted into a report is a worse
+# place to leak it than a log file.
+redact() { local out="" skip=0; for a in "$@"; do
+    if [ "$skip" = 1 ]; then out="$out <redacted>"; skip=0; continue; fi
+    [ "$a" = "--value" ] && skip=1
+    out="$out $a"
+  done; printf '%s' "${out# }"; }
+run() { if [ -n "$DRYRUN" ]; then echo "  [dry-run] would run: $(redact "$@")"; else "$@"; fi; }
 
 # 0. DB url from .env.local + endpoint fence (never echoed). A rig that writes
 #    1024-d vectors into the wrong database is not recoverable by apology.

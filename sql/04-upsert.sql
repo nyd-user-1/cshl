@@ -34,10 +34,20 @@ WHERE doi IS NOT NULL AND date IS NOT NULL AND version ~ '^[0-9]+$';
 
 -- Collision guard for Decision 1: the bare DOI suffix is the business key, and the
 -- two servers' pre-2020 sequences are bare integers that are not provably disjoint.
--- If this ever returns rows, the key scheme must become server-qualified.
+--
+-- This MUST look at the staged rows UNION the rows already in the hub, not the stage
+-- alone. When servers are staged separately, a stage-only check is blind to the very
+-- case that matters — and because key_number is UNIQUE with ON CONFLICT DO UPDATE, a
+-- cross-server suffix clash would not raise: it would quietly overwrite the other
+-- server's paper. If this returns rows, the key scheme must become server-qualified.
 CREATE TEMP TABLE key_collisions AS
 SELECT key_number, count(DISTINCT server) AS servers, array_agg(DISTINCT server) AS which
-FROM s GROUP BY key_number HAVING count(DISTINCT server) > 1;
+FROM (
+  SELECT key_number, server FROM s
+  UNION
+  SELECT key_number, server FROM preprints
+) u
+GROUP BY key_number HAVING count(DISTINCT server) > 1;
 
 INSERT INTO preprints (
   key_number, server, doi, pub_year, posted_date, version, title, authors, abstract,
@@ -83,8 +93,15 @@ ON CONFLICT (key_number, version) DO NOTHING;
 
 COMMIT;
 
-\echo '--- key collisions across servers (must be 0) ---'
+\echo '--- Decision 1 close-out: cross-server key collisions (must be 0) ---'
 SELECT count(*) AS collisions FROM key_collisions;
+SELECT * FROM key_collisions LIMIT 10;
+\echo '--- identity conservation: one key_number per (server, doi), no silent merges ---'
+SELECT count(*)                              AS papers,
+       count(DISTINCT key_number)            AS distinct_keys,
+       count(DISTINCT (server, doi))         AS distinct_server_doi,
+       count(*) - count(DISTINCT key_number) AS key_dupes_must_be_0
+FROM preprints;
 \echo '--- row counts ---'
 SELECT (SELECT count(*) FROM preprints)         AS papers,
        (SELECT count(*) FROM preprint_versions) AS versions,

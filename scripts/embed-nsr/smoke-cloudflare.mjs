@@ -103,6 +103,7 @@ try {
   console.log('upsert ran twice (idempotency check)')
 
   // 5. verify
+  const keys = done.map((d) => d.id)
   const [v] = (await c.query(`
     SELECT count(*)::int                                   AS n,
            count(DISTINCT key_number)::int                 AS distinct_keys,
@@ -111,17 +112,18 @@ try {
            count(*) FILTER (WHERE model = '${MODEL}')::int  AS model_ok,
            count(*) FILTER (WHERE text_hash ~ '^[0-9a-f]{32}$')::int AS hash_shape_ok,
            count(*) FILTER (WHERE embedded_at IS NULL)::int AS null_embedded_at,
-           round(min(l2_norm(embedding))::numeric, 5)      AS min_norm,
-           round(max(l2_norm(embedding))::numeric, 5)      AS max_norm,
-           count(*) FILTER (WHERE l2_norm(embedding) = 0)::int AS zero_vectors
-      FROM ${SCRATCH}`)).rows
+           round(min(vector_norm(embedding))::numeric, 5)      AS min_norm,
+           round(max(vector_norm(embedding))::numeric, 5)      AS max_norm,
+           count(*) FILTER (WHERE vector_norm(embedding) = 0)::int AS zero_vectors
+      FROM ${SCRATCH} WHERE key_number = ANY($1)`, [keys])).rows
   console.log('verification:', JSON.stringify(v))
 
   // hash parity: the DB's text_hash must equal md5 of the DB's own recipe output
   const [{ hash_mismatches }] = (await c.query(`
     SELECT count(*)::int AS hash_mismatches
       FROM ${SCRATCH} e JOIN preprints p USING (key_number)
-     WHERE e.text_hash <> md5(left(trim(coalesce(p.title,'') || E'\n\n' || coalesce(p.abstract,'')), ${CAP}))`)).rows
+     WHERE e.key_number = ANY($1)
+       AND e.text_hash <> md5(left(trim(coalesce(p.title,'') || E'\n\n' || coalesce(p.abstract,'')), ${CAP}))`, [keys])).rows
   console.log(`text_hash parity vs the SQL recipe: ${hash_mismatches} mismatches`)
 
   // resume predicate: these keys must no longer claim
