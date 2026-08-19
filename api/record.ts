@@ -19,16 +19,24 @@ export default async function handler(req: any, res: any) {
   const key = req.query?.key ? String(req.query.key).trim() : null;
   if (!id && !key) return res.status(400).json({ error: "id or key required" });
 
-  if (req.method === "PATCH") {
-    // community-edited abstract (the drawer's "save abstract"); no auth by ruling
-    const abstract = String(req.body?.abstract ?? "").trim();
-    if (!abstract) return res.status(400).json({ error: "abstract required" });
-    await (id
-      ? sql.query(`UPDATE preprints SET abstract = $2 WHERE id = $1`, [id, abstract])
-      : sql.query(`UPDATE preprints SET abstract = $2 WHERE key_number = $1`, [key, abstract]));
-    return res.status(200).json({ ok: true });
+  // PATCH (the NSR drawer's "save abstract") is DISABLED for this corpus.
+  //
+  // It was an unauthenticated write straight into preprints.abstract — by explicit
+  // NSR-era ruling, no auth. Three reasons it cannot carry over:
+  //
+  //   1. Abstracts here are the source of record. bioRxiv/medRxiv own this text; an
+  //      edited copy silently diverges from the DOI it claims to represent.
+  //   2. title/abstract are FROZEN while the embed program runs. Rewriting an abstract
+  //      invalidates that paper's vector with no error and no signal — only a text_hash
+  //      comparison someone remembers to re-run can see it (rig-port lost 3,207 rows to
+  //      exactly this, from a legitimate re-stage rather than an attack).
+  //   3. It is about to be internet-facing on cshl.nysgpt.com with no auth in front of it.
+  //
+  // Re-enabling means: auth, a stale-vector marker written in the same transaction, and
+  // a reclaim pass — not simply deleting this block.
+  if (req.method !== "GET") {
+    return res.status(405).json({ error: "GET only — abstract editing is disabled for the preprint corpus" });
   }
-  if (req.method !== "GET") return res.status(405).json({ error: "GET or PATCH" });
 
   try {
     const rows = id

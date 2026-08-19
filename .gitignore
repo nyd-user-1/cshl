@@ -36,3 +36,4 @@ supabase/.temp/
 # Root-anchored: public/data/ (pre-rendered app JSON) IS committed.
 /data/
 .env*
+.cutover-backup

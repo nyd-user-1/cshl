@@ -43,7 +43,11 @@ export default async function handler(req: any, res: any) {
       sql.query(`SELECT ${COLS} FROM preprints ${W} ORDER BY pub_year DESC NULLS LAST, posted_date DESC, key_number DESC LIMIT ${pageSize} OFFSET ${off}`, params),
       where.length
         ? sql.query(`SELECT count(*)::int AS n FROM preprints ${W}`, params)
-        : sql.query(`SELECT reltuples::bigint::int AS n FROM pg_class WHERE relname = 'preprints'`),
+        // Unfiltered: the exact total, materialized at load time (sql/10). reltuples is
+        // free but overstated it by 1.17% after this load — fine for the planner, wrong
+        // for a number a human reads. Falls back to reltuples if the row is absent.
+        : sql.query(`SELECT coalesce((SELECT papers FROM corpus_stats WHERE id = 1),
+                                     (SELECT reltuples::bigint::int FROM pg_class WHERE relname = 'preprints')) AS n`),
     ]);
     res.setHeader("Cache-Control", "public, s-maxage=3600, stale-while-revalidate=86400");
     return res.status(200).json({ records: rows, totalCount: Number(cnt[0]?.n ?? 0), page, pageSize });

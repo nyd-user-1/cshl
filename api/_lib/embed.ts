@@ -28,7 +28,31 @@ const HF_BGE_URL = "https://router.huggingface.co/hf-inference/models/BAAI/bge-m
 export function activeEncoder(): EncoderName {
   return process.env.SEARCH_ENCODER === "nsr" && process.env.NSR_ENCODER_URL ? "nsr" : "bge";
 }
-export const vectorTable = (enc: EncoderName) => (enc === "nsr" ? "nsr_embeddings_nsr" : "nsr_embeddings");
+// CSHL corpus tables. The fine-tuned arm is a later flip and its table may not exist
+// yet; callers must tolerate an empty or absent sidecar (see hasEmbeddings()).
+export const vectorTable = (enc: EncoderName) => (enc === "nsr" ? "preprint_embeddings_ft" : "preprint_embeddings");
+
+/**
+ * Is the vector sidecar actually populated? The dense arm is worth an encoder round
+ * trip only if there is something to search. Cached per process with a short TTL so
+ * this costs one cheap probe a minute, not one per request — which means retrieval
+ * turns itself on when the embed sweep lands, with no deploy and nobody awake.
+ */
+let embProbe = { at: 0, ok: false };
+export async function hasEmbeddings(
+  sql: { query: (t: string, p?: unknown[]) => Promise<Record<string, unknown>[]> },
+  enc: EncoderName = activeEncoder(),
+): Promise<boolean> {
+  const now = Date.now();
+  if (now - embProbe.at < 60_000) return embProbe.ok;
+  try {
+    const r = await sql.query(`SELECT 1 AS x FROM ${vectorTable(enc)} LIMIT 1`);
+    embProbe = { at: now, ok: r.length > 0 };
+  } catch {
+    embProbe = { at: now, ok: false };   // table absent → FTS-only, never an error
+  }
+  return embProbe.ok;
+}
 const serveKey = () => process.env.NSR_SERVE_KEY ?? process.env.HF_TOKEN ?? "";
 export const rerankEnabled = () => process.env.SEARCH_RERANK === "on" && !!process.env.NSR_RERANKER_URL && !!serveKey();
 

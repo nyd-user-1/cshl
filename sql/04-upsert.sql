@@ -70,7 +70,15 @@ SELECT DISTINCT ON (server, doi)
   -- provisional; sql/05 overwrites this with published_journal wherever pubs has one
   CASE WHEN server = 'biorxiv' THEN 'bioRxiv' ELSE 'medRxiv' END
     || ' (preprint, ' || to_char(posted_date, 'YYYY-MM-DD') || ')',
-  jsonb_build_object('funder', CASE WHEN funder IS NULL THEN NULL ELSE funder::jsonb END)
+  -- Source defect: two bioRxiv rows escape a character as \u0000 inside a funder
+  -- award string ("CZ.02.01.01\u0000022_008\u0000004643"). PostgreSQL's jsonb type
+  -- cannot represent \u0000 at all, so the cast aborts the whole transaction — 2 bad
+  -- rows in 314,808 take down the entire load. Replaced with \uFFFD (REPLACEMENT
+  -- CHARACTER) rather than deleted, so the award string keeps its shape and anyone
+  -- reading it can see a character was lost rather than silently getting a shorter id.
+  jsonb_build_object('funder',
+    CASE WHEN funder IS NULL THEN NULL
+         ELSE replace(funder, '\u0000', '\uFFFD')::jsonb END)
 FROM s
 ORDER BY server, doi, version DESC
 ON CONFLICT (key_number) DO UPDATE SET

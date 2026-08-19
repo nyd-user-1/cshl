@@ -99,6 +99,14 @@ FROM preprints p, jsonb_array_elements(p.raw->'funder') AS f
 WHERE jsonb_typeof(p.raw->'funder') = 'array'
   AND coalesce(nullif(btrim(f->>'id'), ''), btrim(f->>'name')) <> '';
 
+-- keep the pager's exact total in step with the load (sql/10)
+INSERT INTO corpus_stats (id, papers, versions, biorxiv, medrxiv, refreshed_at)
+SELECT 1, (SELECT count(*)::int FROM preprints), (SELECT count(*)::int FROM preprint_versions),
+       (SELECT count(*)::int FROM preprints WHERE server='biorxiv'),
+       (SELECT count(*)::int FROM preprints WHERE server='medrxiv'), now()
+ON CONFLICT (id) DO UPDATE SET papers=EXCLUDED.papers, versions=EXCLUDED.versions,
+  biorxiv=EXCLUDED.biorxiv, medrxiv=EXCLUDED.medrxiv, refreshed_at=EXCLUDED.refreshed_at;
+
 COMMIT;
 
 \echo '--- dictionary sizes ---'
