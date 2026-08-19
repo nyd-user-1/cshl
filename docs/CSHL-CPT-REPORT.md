@@ -245,6 +245,43 @@ which would halve the index and roughly double what fits in cache at some recall
 latter is a re-embed-adjacent change against a frozen, verified corpus, so it is a follow-up
 and not a tonight decision.
 
+## Training — what the hardware actually allowed
+
+The plan was one g6e.xlarge (L40S, 48 GB) at `passage_max_len` 512, batch 8, ~40,000 pairs,
+about 70 minutes. What happened instead is worth recording precisely, because a benchmark
+that hides its constraints isn't reproducible.
+
+**`g6e` had no capacity in any availability zone** — not `xlarge`, not `2xlarge`. The error is
+explicit and rotating: each AZ suggests trying the other three. That is capacity churn, not a
+configuration fault. `g5.2xlarge` (A10G, **24 GB**) was available, so training ran there.
+
+Consequences, in order:
+
+- `passage_max_len` dropped 512 → **384** to fit 24 GB.
+- The OOM-halving loop then took batch 8 → **4**, which is the loop doing its job. 40,000 pairs
+  ÷ 4 = **10,000 steps** rather than 5,000, at ~1.22 it/s — about **2.3 hours** instead of ~70
+  minutes.
+
+So the encoder was trained on the hardware capacity actually granted, at half the planned
+batch and three-quarters of the planned passage length. Both numbers are in the model card.
+NSR's winning encoder trained at `passage_max_len` 256, so 384 is still above that precedent —
+but it is below what this corpus indexes, and that is a real limitation rather than a footnote.
+
+### Two rig bugs found by the capacity failure
+
+**The AZ-failover had never once executed.** Under `set -e`, `OUT=$(launch_in "$sn")` exits the
+script the instant the first zone returns a capacity error — so the loop whose only purpose is
+to try the next zone could never be reached. Every launch until this one had succeeded on the
+first attempt, so the fallback path had never run. **A fallback that has never been exercised
+is not a fallback; it is a comment.**
+
+**The TEI container image was hardcoded to `89-1.8`** (Ada — L40S, L4). A10G is compute
+capability 8.6. On a g5 box that container starts successfully and never loads the model: no
+crash, no error, a healthy-looking process serving nothing. Now a `TEI_IMAGE` knob.
+
+Both belong to the night's dominant failure mode — code that looks right, raises nothing, and
+does the wrong thing — and both were invisible until the path finally had to work.
+
 ## Methodology
 
 ### The frozen benchmark: `cshl-eval-v1`

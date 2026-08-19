@@ -27,7 +27,23 @@
 //     more of them, which is the behaviour a search box actually has.
 
 import { psqlRows, readJsonl, log, has, numArg, strArg, h32 } from "./lib.mjs";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+
+// Corpus document frequency, already computed for the EXTRACT family. Used here
+// to prune the tsquery: OR-ing every token of a MeSH query drags in terms like
+// "humans" or "patients" that match a large fraction of 433,449 documents, and
+// ts_rank_cd then has to score that whole bitmap. Measured cost of the naive
+// form: 6.3 s/query — 17 hours for the frozen set. Pruning by df is not a
+// shortcut, it is what a real retrieval system does: a term present in a third
+// of the corpus carries almost no ranking signal and costs the most to score.
+const DF = (() => {
+  try {
+    const j = JSON.parse(readFileSync("data/mine/raw/extract-df.json", "utf8"));
+    return { N: j.docs, df: new Map(Object.entries(j.df)) };
+  } catch { return null; }
+})();
+const DF_MAX = numArg("--df-max", 0.02);      // drop tokens in >2% of documents
+const MAX_TOKENS = numArg("--max-tokens", 12);
 
 const EVALF = "data/mine/eval/cshl-eval-v1.retrieval.jsonl";
 const OUT = "data/mine/results";
@@ -42,8 +58,16 @@ const sq = (s) => String(s).replace(/'/g, "''");
 
 // tsquery from free text: OR of the content tokens (see METHOD above).
 function tsq(text) {
-  const toks = [...new Set(String(text).toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2))];
-  return toks.slice(0, 40).join(" | ");
+  let toks = [...new Set(String(text).toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2))];
+  if (DF) {
+    const cap = DF.N * DF_MAX;
+    const scored = toks.map((w) => [w, DF.df.get(w) ?? 1]).sort((a, b) => a[1] - b[1]);
+    const kept = scored.filter(([, d]) => d <= cap);
+    // If pruning empties the query, keep the most selective tokens anyway —
+    // a query of only common words still has to return something.
+    toks = (kept.length ? kept : scored).slice(0, MAX_TOKENS).map(([w]) => w);
+  } else toks = toks.slice(0, MAX_TOKENS);
+  return toks.join(" | ");
 }
 
 async function loadQueries() {
