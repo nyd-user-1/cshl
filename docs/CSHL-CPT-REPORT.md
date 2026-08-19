@@ -7,6 +7,55 @@ program on nuclear-science literature.*
 
 ## Headline
 
+**Each model wins the task it was trained for. That is the whole result, and it is symmetric.**
+
+| benchmark | ours | MedCPT | winner |
+|---|---:|---:|---|
+| **query→document** (MeSH R@10) | 0.332 | **0.457** | MedCPT, +38% |
+| **document→document** (R@10) | **0.212** | 0.179 | **ours, +18%** |
+
+We trained on citation-based document→document pairs. On query→document retrieval we lose to
+`ncbi/MedCPT` by 38%. On document→document retrieval — the task we actually trained for —
+**we beat MedCPT, SPECTER2 and stock bge-m3, and we beat all three at a statistically
+significant margin.**
+
+Paired McNemar on 2,000 held-out pairs, R@10:
+
+| comparison | ours-only hits | theirs-only | ΔR@10 | p |
+|---|---:|---:|---:|---:|
+| ours vs `ncbi/MedCPT` | 172 | 106 | **+0.0330** | **0.0001** |
+| ours vs `allenai/specter2_base` | 140 | 108 | +0.0160 | 0.049 |
+| ours vs stock `BAAI/bge-m3` | 118 | 85 | +0.0165 | 0.025 |
+
+Bootstrap 95% CI on ours − MedCPT: **[+0.0165, +0.0495]**, 5,000 resamples.
+
+MedCPT — trained on PubMed query-click logs — is the **worst** of the four arms at
+document→document (R@10 0.179, below even stock bge-m3's 0.196). It is a query-retrieval
+specialist and it does not transfer to document similarity. We are the mirror image. Neither
+result is a surprise once stated; both were unmeasured until now, and we had already written
+up the loss without running the matching test.
+
+**Three honest qualifications.**
+
+1. **Absolute numbers on doc→doc are low for every arm** — R@10 between 0.18 and 0.21, finding
+   one specific gold paper among 433,449. This is a hard task and nobody is good at it.
+2. **Our margin over stock bge-m3 is modest** (+0.0165, p=0.025). Most of our advantage over
+   MedCPT comes from MedCPT being weak off-task, not from our fine-tune being strong.
+3. **Query→document is the task the product actually serves.** A search box takes queries, not
+   documents. So the query→doc loss is the commercially important number, and doc→doc is where
+   the "more like this", reviewer-matching and systematic-review-expansion features live.
+
+**The best retrieval configuration remains a fusion**: `RRF(ours + MedCPT + FTS)` at MeSH R@10
+**0.4722**, above MedCPT alone at 0.4569. Within that fusion, plain BM25 contributes about
+1.6–2× what our encoder does.
+
+**What this changes about the next step.** The objective-mismatch hypothesis is no longer a
+hypothesis — it is measured in both directions. Training on the 424,753 query-shaped pairs
+that were built and left unused is now the obvious experiment, and its expected value is
+higher than it looked when the doc→doc side was unmeasured.
+
+## Superseded headline (kept for the record)
+
 **We did not beat MedCPT.** Our fine-tuned encoder scores **MeSH R@10 0.332** against
 `ncbi/MedCPT`'s **0.457** — one night of domain adaptation closed about a quarter of the gap
 to a purpose-built biomedical retriever, not all of it. It also lost to `allenai/specter2_base`
