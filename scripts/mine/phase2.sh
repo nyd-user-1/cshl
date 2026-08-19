@@ -59,13 +59,20 @@ step "4/7 MeSH — DOI→PMID→descriptors, both servers"
 timed $RUN scripts/mine/mesh.mjs --run --page-lanes 6
 
 # ── free query family (no model, no spend) ───────────────────────────────────
-step "5/7 EXTRACT — corpus IDF, then keyphrase queries"
+step "5/7 assemble — the text sidecar FIRST (everything below reads it)"
+# Ordering is load-bearing and was wrong on the first full run: EXTRACT reads
+# corpus-text.jsonl, so the sidecar has to be rebuilt for the current corpus
+# BEFORE the keyphrase pass, not after. It only looked right during Phase 1
+# because the sidecar happened to already exist at the right size — a step order
+# that works only when nothing has changed is a coincidence, not an order.
+timed $RUN scripts/mine/assemble.mjs --text
+
+step "6/7 EXTRACT — corpus IDF, then keyphrase queries (reads the sidecar above)"
 timed node scripts/mine/extract-queries.mjs --df
 timed node scripts/mine/extract-queries.mjs --run
 
-# ── assembly ─────────────────────────────────────────────────────────────────
-step "6/7 assemble — text sidecar, triplets, classifiers, query pairs"
-timed $RUN scripts/mine/assemble.mjs --text --triplets --classify --pairs
+step "6b/7 assemble — triplets, classifiers, query pairs"
+timed $RUN scripts/mine/assemble.mjs --triplets --classify --pairs
 
 step "7/7 freeze + verify"
 if [ "${1:-}" = "--freeze" ]; then
