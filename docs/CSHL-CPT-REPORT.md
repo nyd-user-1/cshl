@@ -342,8 +342,58 @@ blended into a headline number. Measured with FTS on a draft freeze: R@1 0.9933.
 
 ## Results
 
-`PENDING — the whole point of the night. One table per family, per-segment breakdowns
-(server / era / published / abstract length) in the benchmark repo's results/ directory.`
+**Scored on the frozen 2,000-query subsample of `cshl-eval-v1`**
+(`sha256 32433e4d95099b964d2d571ab2389ad0a1cc1eeba29670fe5a87e30683cf4594`,
+MESH 1,241 · AUTHORKW 759), retrieved against the **full 433,449-paper corpus** —
+not against each row's own negatives, which would measure reranking and flatter every arm.
+`hnsw.ef_search=100`, single gold per query, so R@k is hit-rate@k.
+
+Why a subsample: the miner lane measured full-10k FTS at ~104 min/arm. Five arms on the full
+set was not available in the time. The subsample is deterministic and documented, so it is
+reproducible — but **absolute numbers will differ on the full 10,000**, and full-set scoring
+is a follow-up rather than a completed claim.
+
+### MESH family (n = 1,241) — NLM controlled vocabulary as the query
+
+| arm | R@1 | R@10 | nDCG@10 |
+|---|---|---|---|
+| Postgres FTS | 0.047 | 0.081 | 0.063 |
+| stock `BAAI/bge-m3` | 0.118 | 0.286 | 0.194 |
+| **RRF(FTS + bge-m3)** | **0.136** | **0.317** | **0.218** |
+| `ncbi/MedCPT` | `PENDING` | | |
+| `allenai/specter2_base` | `PENDING` | | |
+| `malteos/scincl` | `PENDING` | | |
+| **our fine-tune** | `PENDING` | | |
+
+### AUTHORKW family (n = 759) — author-supplied keywords as the query
+
+| arm | R@1 | R@10 | nDCG@10 |
+|---|---|---|---|
+| Postgres FTS | 0.217 | 0.240 | 0.229 |
+| stock `BAAI/bge-m3` | 0.457 | 0.652 | 0.552 |
+| **RRF(FTS + bge-m3)** | **0.491** | **0.684** | **0.589** |
+| `ncbi/MedCPT` | `PENDING` | | |
+| `allenai/specter2_base` | `PENDING` | | |
+| `malteos/scincl` | `PENDING` | | |
+| **our fine-tune** | `PENDING` | | |
+
+**Two things already visible, before our own model exists:**
+
+**Dense retrieval dominates lexical on this corpus, by 3.5× on MeSH.** FTS R@10 0.081 against
+bge-m3's 0.286. MeSH descriptors are controlled vocabulary assigned by an indexer — they often
+never appear verbatim in the paper, so lexical matching has little to match. This is the
+strongest argument in the report for the whole dense-retrieval program, and it comes from a
+baseline rather than from our model.
+
+**The two families measure different things and must never be blended into one headline.**
+Every arm scores roughly 2–3× higher on AUTHORKW than on MESH. Author keywords are written by
+the authors of the paper being retrieved, so they plausibly share vocabulary with its abstract;
+MeSH descriptors are assigned externally and do not. A single blended number would move with
+the family mix rather than with retrieval quality.
+
+**RRF beats both of its inputs on every metric in both families** — consistent with the NSR
+program's finding, and it is the configuration production should serve regardless of how our
+fine-tune scores.
 
 ### Where our model loses
 
