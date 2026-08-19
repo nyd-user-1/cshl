@@ -103,3 +103,46 @@ URL to Google's viewer instead:
 Google fetches and renders it; their fetcher is not blocked; the resulting page frames cleanly.
 This is the pattern `/Code/policy` already used (`BillPDFSheet.tsx`). Return **two** URLs from
 your resolver: the viewer URL for the `<iframe>`, and the canonical PDF URL for "open in new tab".
+
+---
+
+## 8. Benchmark pgvector warm, or you are measuring your cache
+
+**A reported finding was tested and did not survive.** A lane reported that `row_number()` over
+an HNSW scan costs **888×** (1,777 ms vs 2.005 ms, same index, same 50 rows), attributing it to
+`WindowAgg` re-evaluating the distance expression above an index that already returns rank order.
+
+Retested on the same table (433,449 × 1024-dim, `ef_search=100`), three warm runs each:
+
+    run1  plain 0.21s   row_number 0.35s
+    run2  plain 0.31s   row_number 0.31s
+    run3  plain 0.25s   row_number 0.26s
+
+**No meaningful difference.** And `EXPLAIN ANALYZE` contradicts the stated mechanism: the
+`WindowAgg` shows `actual rows=50` — the `LIMIT` pushes through it, so it never sees the full
+partition.
+
+**What almost certainly happened is a cold-vs-warm cache confound**, and this project had already
+measured that effect on this very index: **~2 ms warm against ~1,200 ms cold**, because the HNSW
+graph is 3,411 MB against 456 MB of `shared_buffers`. My own first attempt reproduced it by
+accident — 469 ms then 3.9 ms for the identical query, a 120× swing from warmth alone.
+
+> **A single-shot pgvector timing measures cache state, not query cost.** Any kNN benchmark needs
+> repeated warm runs, and any published latency needs p50 *and* p95 with cold and warm stated
+> separately.
+
+The generalisable rule is not about window functions. It is: **when a measurement shows a
+three-order-of-magnitude effect, suspect the measurement first.**
+
+## 9. Never interpolate a vector into SQL text — bind it
+
+A lane's batch-scoring job hung: a single kNN through `psql -f` took 1.3 s, while the same
+statements piped through stdin never returned. The diagnosis stopped at "psql plumbing."
+
+The actual lesson is upstream of that: **the vectors were being interpolated into SQL as literal
+text.** A 768- or 1024-float literal is several kilobytes of statement per query; batch them and
+you are pushing megabytes of SQL text through a pipe, which is what stalled.
+
+House rule already on the books, and violated here: **pass the vector as a bound `$1::vector`
+parameter.** It exists because a join-sourced or inlined probe also defeats the HNSW index — so
+binding is both a correctness and a throughput requirement, not a style preference.
