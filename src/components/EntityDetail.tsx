@@ -48,7 +48,7 @@ export function DetailBody({ type, detail, navigate, onCanvas }: {
           <Field k="Links" v={`${counts.authors ?? 0} authors · ${counts.nuclides ?? 0} nuclides · ${counts.reactions ?? 0} reactions · ${counts.exfor ?? 0} EXFOR`} />
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(`/?prompt=${encodeURIComponent(`Tell me about ${node.key_number}: ${node.title ?? ""}`)}&key=${encodeURIComponent(node.key_number)}`)}>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(`/?prompt=${encodeURIComponent(`Tell me about ${node.key_number}: ${node.title ?? ""}`)}&key=${encodeURIComponent(String(node.key_number))}`)}>
             Ask RxivGPT
           </Button>
           {node.doi != null && (
