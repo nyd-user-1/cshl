@@ -688,6 +688,23 @@ DIRECTIVES — here is the line item, ready to carry across verbatim:
 reference for the generator's prompt design — the four-family shape (keyword / question / method /
 broad) and the title-echo audit are the parts worth carrying over.
 
+### Phase-2 runner — one command, correct order
+
+`scripts/mine/phase2.sh` runs the whole harvest and assembly in the order the dependencies
+require (text sidecar before assembly; citations resolved before triplets; freeze last, because it
+hydrates from everything above). Every step is resumable, so a rerun after any failure picks up
+rather than re-spending.
+
+It **refuses to run against a still-loading corpus** — a partial corpus silently produces a partial
+dataset that looks complete, which is the failure mode worth a guard:
+```
+$ MIN_ROWS=999999999 scripts/mine/phase2.sh
+══ preflight ══
+corpus: 197539 papers (biorxiv 117069 · medrxiv 80470) · 120056 with a published DOI
+REFUSING: 197539 < 999999999 expected. The loader is not done — set MIN_ROWS to override.
+```
+`scripts/mine/phase2.sh` leaves the eval a DRY RUN; `--freeze` stamps `rxiv-eval-v1` FROZEN.
+
 ### Coverage limits — read this before anyone writes a model card
 
 Every signal in this lane covers a different fraction of the corpus, and two of them cannot be
