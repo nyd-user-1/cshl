@@ -67,14 +67,14 @@ discipline as NSR's (split by paper hash, frozen before training, provenance rec
    in evidence). Recommend the subsample size and give the full-run Bedrock cost. GATED:
    full run only after Brendan's go.
 4. **Triplet + dataset assembly (Phase 2).** From 1–3 plus the loaded DB:
-   - `rxiv-triplets`: SPECTER-style (query=paper, pos=cited-in-corpus, hard-neg=
+   - `cshl-triplets`: SPECTER-style (query=paper, pos=cited-in-corpus, hard-neg=
      citation-of-citation + same-category-not-cited), SciNCL-style neighborhood variant
      NOTED as a follow-up that needs embeddings (flag the dependency — embeddings land
      via the rig lane; design the sampler so it can re-run in neighborhood mode later).
-   - `rxiv-mesh-classify`: paper → MeSH descriptors (and the category set as
-     `rxiv-category-classify`, free, assembled directly from the DB).
-   - `rxiv-query-pairs`: MeSH-as-query + synthetic queries → paper.
-   - Eval holdouts for each, split by paper hash, sized per the rig lane's `rxiv-eval-v1`
+   - `cshl-mesh-classify`: paper → MeSH descriptors (and the category set as
+     `cshl-category-classify`, free, assembled directly from the DB).
+   - `cshl-query-pairs`: MeSH-as-query + synthetic queries → paper.
+   - Eval holdouts for each, split by paper hash, sized per the rig lane's `cshl-eval-v1`
      draft — frozen files written to `data/mine/eval/`, checksums in the REPORT.
 5. **Sizing + handoff.** Final counts (papers covered, edges, triplets, labels, pairs),
    bytes, wall-clock per harvester, and the exact file paths + schemas the train rig
@@ -93,6 +93,12 @@ need Brendan (synthetic-query spend; anything slower than hours), and a Next-lan
 ### Log (timestamped, newest last)
 
 - **2026-08-19 01:25Z — ack.** Channel read; DIRECTIVES re-read after every filing.
+- **2026-08-19 06:4xZ — seam closed properly, and the `cshl` rename taken while it is free.**
+  The cap number agreed at 4000 but the *shape* did not: I capped `left(abstract, 4000)` with the
+  title separate, the rig caps the whole concatenation. Same number, different string for the ~1%
+  tail. Fixed by **importing** the rig's `scripts/eval/recipe.mjs` rather than copying it, plus a
+  seam guard in `--verify`. All dataset identifiers renamed `rxiv-*` → `cshl-*` per Brendan; old
+  files deleted rather than left beside the new ones. ALL INVARIANTS HOLD. See §4f.
 - **2026-08-19 03:25Z — independent verifier added; ALL INVARIANTS HOLD on the medRxiv slice.**
   `assemble.mjs --verify` re-derives every leak claim from the FILES rather than the generator's
   own counters (§4e). Waiting on the bioRxiv gate — loader walk at 84.4%, DB still 197,539.
@@ -430,12 +436,12 @@ bytes. Training files carry **slugs**; text joins from a single sidecar
 `data/mine/corpus-text.jsonl` (`{key, server, year, category, title, abstract, published_doi}`,
 abstract capped at 2,000 chars = the embed rig's exact input recipe, so nothing the model will
 ever see is lost). **The frozen eval files are the one exception** — they inline text so
-`rxiv-eval-v1` is self-contained and publishable.
+`cshl-eval-v1` is self-contained and publishable.
 
 **Split discipline (NSR's, verbatim).** `h32 = parseInt(md5(seed + key_number).slice(0,8),16)/0xffffffff`
 — byte-identical to the function in `scripts/eval/build-nsr-eval.mjs`, so the rig lane can
 recompute any split without asking us. Holdout seed `holdout:` at **0.25**; split seed
-`rxiv-training-pairs-2026-08-19` at train <0.8 / val <0.9 / test ≤1.0. Two hard rules enforced in
+`cshl-training-pairs-2026-08-19` at train <0.8 / val <0.9 / test ≤1.0. Two hard rules enforced in
 code: a held-out paper **never** appears in a training file in any role, and a record whose papers
 straddle two splits is **dropped, not assigned**. Negative sampling uses a key-seeded xorshift —
 there is no `Math.random` anywhere in the assembler, because a benchmark you cannot reproduce is a
@@ -518,9 +524,9 @@ corpus-text.jsonl        197,539 papers · 357.1 MB · 99 s
 citations.jsonl           79,218 papers · 2,885,247 reference edges · 56,612 IN-CORPUS · 55.9 MB
 mesh.jsonl                30,175 records · 23,486 with descriptors · 44.6 MB
 queries-extract.jsonl    197,534 papers · 79.3 MB
-rxiv-category-classify   76 classes · train 118,378 · val 14,857 · test 14,764 · heldout 49,493
-rxiv-triplets            train 20,673 · val 2,574 · test 2,666 · held-out reserved 8,840
-rxiv-query-pairs         train 146,984 · val 18,424 · test 18,296 · heldout 11,998
+cshl-category-classify   76 classes · train 118,378 · val 14,857 · test 14,764 · heldout 49,493
+cshl-triplets            train 20,673 · val 2,574 · test 2,666 · held-out reserved 8,840
+cshl-query-pairs         train 146,984 · val 18,424 · test 18,296 · heldout 11,998
   families  MESH 28,985 · AUTHORKW 18,684 · EXTRACT 148,033
   negatives mesh-tree-sibling 16,461 · same-category 1,549,155
 top categories: neuroscience 20,861 · epidemiology 12,669 · infectious diseases 12,266 · microbiology 10,629
@@ -529,17 +535,17 @@ In-corpus citation edges are only 2% of references **because bioRxiv is not load
 papers overwhelmingly cite journal articles and bioRxiv preprints. This number should jump sharply
 once the bioRxiv slice lands; it is the one figure in this report I expect to change materially.
 
-**`rxiv-eval-v1` proposal for the rig lane** (they asked for sizes; this is my draft, freeze needs
+**`cshl-eval-v1` proposal for the rig lane** (they asked for sizes; this is my draft, freeze needs
 Brendan). Holdout *reservation* is 25% of the corpus — those papers never train. The frozen
 *benchmark* is a deterministic 10,000-row sample per family (NSR froze 9,995), selected by
 `md5('eval:' + family + ':' + key_number)`:
 
 | file | query family | rows | source |
 |---|---|---|---|
-| `rxiv-eval-v1.retrieval.jsonl` | MESH · AUTHORKW · SYNTH | 10,000 | query → paper |
-| `rxiv-eval-v1.docdoc.jsonl` | CITE | 10,000 | paper → cited paper |
-| `rxiv-eval-v1.mesh-classify.jsonl` | MESHLABEL | 10,000 | paper → descriptors |
-| `rxiv-eval-v1.category-classify.jsonl` | CAT | 10,000 | paper → 1 of 76 |
+| `cshl-eval-v1.retrieval.jsonl` | MESH · AUTHORKW · SYNTH | 10,000 | query → paper |
+| `cshl-eval-v1.docdoc.jsonl` | CITE | 10,000 | paper → cited paper |
+| `cshl-eval-v1.mesh-classify.jsonl` | MESHLABEL | 10,000 | paper → descriptors |
+| `cshl-eval-v1.category-classify.jsonl` | CAT | 10,000 | paper → 1 of 76 |
 
 **Scoring contract (lead directive (f)) — encoded in the manifest, not left in prose**, so the
 harness reads it instead of a human remembering it:
@@ -571,11 +577,11 @@ the text cap, and per-signal provenance.
 | `queries-synth.jsonl` | 4 queries/paper | 50k rows (gated), ~30 MB |
 | `mesh_dict.jsonl` | MeSH vocabulary: names, synonyms, tree, parents | **built** — 31,110 rows, 43.2 MB |
 | `mesh_qualifiers.jsonl` | 76 qualifiers + abbreviations | **built** — 27 KB |
-| `rxiv-triplets.{train,val,test}.jsonl` | CITE family | sized after the walk |
-| `rxiv-query-pairs.{train,val,test}.jsonl` | MESH · AUTHORKW · SYNTH | sized after harvest |
-| `rxiv-mesh-classify.{train,val,test}.jsonl` | hierarchical labels + qualifiers | ~154k |
-| `rxiv-category-classify.{train,val,test}.jsonl` | 76 classes, **already built** | 148k train+val+test |
-| `eval/rxiv-eval-v1.*.jsonl` + `manifest.json` | frozen benchmark, text inlined | 4 × 10k |
+| `cshl-triplets.{train,val,test}.jsonl` | CITE family | sized after the walk |
+| `cshl-query-pairs.{train,val,test}.jsonl` | MESH · AUTHORKW · SYNTH | sized after harvest |
+| `cshl-mesh-classify.{train,val,test}.jsonl` | hierarchical labels + qualifiers | ~154k |
+| `cshl-category-classify.{train,val,test}.jsonl` | 76 classes, **already built** | 148k train+val+test |
+| `eval/cshl-eval-v1.*.jsonl` + `manifest.json` | frozen benchmark, text inlined | 4 × 10k |
 
 **Cross-lane consistency catch:** LANE-RIG-PORT's launch item E1 settled the embed input recipe at
 a **4000-char** cap (98.9% of documents left whole vs 69.2% at 2000, for +$0.11). My text sidecar
@@ -628,6 +634,74 @@ Worth it for `preprint_mesh` above all — it restores the facet/chip vocabulary
 with NSR's expert keywords, and would let the fts B-weight carry real controlled vocabulary
 instead of the category/journal/institution stand-in.
 
+### 4f The embed-recipe seam — the half I got wrong, and how it is now impossible to get wrong
+
+I caught that the rig's cap was 4000 and mine was 2000, and fixed the number. The lead then diffed
+the actual expressions and found the **shape** still differed underneath:
+
+```
+rig  (worker.mjs, JOB.page):  left(trim(coalesce(title,'') || E'\n\n' || coalesce(abstract,'')), 4000)
+mine (assemble.mjs, before):  left(abstract, 4000)     with title stored as a separate field
+```
+Same cap, different string, for every paper where `len(title) + 2 + len(abstract) > 4000` — the rig
+truncates the abstract to make room for the title; I kept a full 4000-char abstract *plus* the whole
+title. **Measured: 2,083 papers, 1.05% of the loaded corpus**, which matches the rig's independent
+"98.9% untruncated at cap 4000". Three sub-differences in the same direction: cap scope, the `trim()`
+around the concatenation, and `coalesce` on nulls.
+
+Why it mattered more than the number did: the frozen benchmark **inlines** its text, so the
+benchmark itself would have carried text that differs from what was embedded, for the longest ~1%
+of papers. That presents as unexplained eval weakness, never as an error.
+
+**The fix is structural, not another agreed number.** `corpus-text.jsonl` now carries a canonical
+`embed_text` field, and it is not written here — `assemble.mjs` **imports** `recipeSql()`,
+`embeddableSql()` and `assertWorkerMatches()` from the rig lane's `scripts/eval/recipe.mjs`, whose
+own source of truth is `worker.mjs`. Two lanes that *agree* on a recipe drift; two lanes that
+*share* one cannot. `title` and `abstract` stay as separate fields for display, but anything that
+feeds a model consumes `embed_text`.
+
+Proven, not asserted — md5 is the right comparison because md5-of-the-exact-string is what
+`worker.mjs` stores as `text_hash`:
+```
+── embed-recipe seam (vs scripts/eval/recipe.mjs → scripts/embed-nsr/worker.mjs) ──
+  PASS  the box-side worker literal still matches the shared recipe
+  PASS  every sampled row carries an embed_text field (0 without)
+  PASS  373 sampled embed_text values are byte-identical to the shared recipe's output (0 mismatches)
+```
+This check is now part of `--verify`, so the seam is guarded on every build rather than audited once.
+
+**A fourth difference the diff did not reach.** `worker.mjs` also carries an *exclusion* predicate —
+rows under 20 non-whitespace characters are never embedded. Those papers get **no vector at all**,
+so they can never be retrieved, so they must never be a positive. `embeddable` is now emitted per
+row (using the rig's predicate, imported) and unembeddable papers are barred from being an anchor or
+a positive anywhere. On the current corpus that is 0 papers — the guard costs nothing today and
+catches the day it isn't zero.
+
+**Also trimmed:** the frozen files were carrying `title`, `abstract` **and** `embed_text`, which is
+~2× redundant since `embed_text` already contains both. Now `title` (what a human reads) +
+`embed_text` (what a model encodes). `cshl-eval-v1.retrieval` went 375 MB → **202 MB** with no
+information lost.
+
+### 4g The `cshl` rename — taken before the freeze, deliberately
+
+Brendan ruled the naming prefix is `cshl`, not `rxiv`. Because the benchmark name is embedded in the
+manifest and therefore in what the checksums attest to, renaming after a freeze means re-stamping
+the one-way door. Taken now, while the manifest still says `DRY_RUN`:
+
+`cshl-eval-v1` · `cshl-triplets` · `cshl-query-pairs` · `cshl-mesh-classify` · `cshl-category-classify`
+
+Two things that survive a sloppy sed, both handled: the identifier lives **inside** the manifest
+content as well as in filenames, and every old-name artifact in `data/mine/` and `data/mine/eval/`
+was **deleted and regenerated**, not renamed beside the new files — a stale `rxiv-eval-v1.*` sitting
+next to `cshl-eval-v1.*` is how the wrong file gets published at 3am.
+
+**One consequence worth stating loudly: `SPLIT_SEED` changed too**, from
+`rxiv-training-pairs-2026-08-19` to `cshl-training-pairs-2026-08-19`. That is a hash seed, so every
+split reshuffled. Free right now (nothing frozen, no training run), and never free again — leaving
+`rxiv-` inside a `cshl-` manifest is exactly the half-rename worth avoiding. The manifest declares
+the seed, so anyone recomputing a split reads it rather than remembering it. rig-port has been told
+directly.
+
 ### 4e The verifier — because a generator that is wrong about the split is also wrong about its counters
 
 `assemble.mjs --verify` reads what actually landed on disk and re-derives every claim
@@ -649,7 +723,7 @@ gate the real freeze:
   every listed file's sha256 recomputed and matched
 
 VERIFY: ALL INVARIANTS HOLD          (medRxiv slice, 2026-08-19 03:2xZ)
-rxiv-eval-v1.retrieval 10,000 · docdoc 8,840 · mesh-classify 7,288 · category-classify 10,000
+cshl-eval-v1.retrieval 10,000 · docdoc 8,840 · mesh-classify 7,288 · category-classify 10,000
 ```
 It exits non-zero on any failure, so it can be a gate rather than a report. Recommend the rig lane
 run it before consuming anything from `data/mine/`.
@@ -703,7 +777,7 @@ $ MIN_ROWS=999999999 scripts/mine/phase2.sh
 corpus: 197539 papers (biorxiv 117069 · medrxiv 80470) · 120056 with a published DOI
 REFUSING: 197539 < 999999999 expected. The loader is not done — set MIN_ROWS to override.
 ```
-`scripts/mine/phase2.sh` leaves the eval a DRY RUN; `--freeze` stamps `rxiv-eval-v1` FROZEN.
+`scripts/mine/phase2.sh` leaves the eval a DRY RUN; `--freeze` stamps `cshl-eval-v1` FROZEN.
 
 ### Coverage limits — read this before anyone writes a model card
 
@@ -735,11 +809,11 @@ paper has a published journal DOI      ~49%   (measured 48.7% on the loaded corp
 
 Two honest consequences:
 
-- **`rxiv-mesh-classify` is a classifier over a biased third of the corpus**, not over the corpus.
+- **`cshl-mesh-classify` is a classifier over a biased third of the corpus**, not over the corpus.
   The papers it covers skew older (published), and toward the clinical/biomedical journals MEDLINE
   indexes — which means it under-covers exactly the newest and the most basic-science material.
   Any headline number from it must say "on the MEDLINE-indexed subset".
-- **`rxiv-category-classify` is the only 100%-coverage classifier target.** If a single classifier
+- **`cshl-category-classify` is the only 100%-coverage classifier target.** If a single classifier
   number is quoted anywhere, it should be that one.
 
 **In-corpus citation edges** are a softer limit but worth stating too: a triplet needs a paper whose
@@ -754,7 +828,7 @@ materially, and it will be restated after the full harvest rather than extrapola
 1. ~~Synthetic-query spend~~ — **RULED: REJECTED.** No Bedrock generation at any subsample size.
    Not run; `synth-queries.mjs` is shelved unwired. Replaced by the free EXTRACT family (§4c) plus
    the doc2query rider above, which needs one signature on the rig lane's launch menu, not mine.
-2. ~~Freeze `rxiv-eval-v1`~~ — **RULED: APPROVED** as specced, retrieval = MESH + AUTHORKW only.
+2. ~~Freeze `cshl-eval-v1`~~ — **RULED: APPROVED** as specced, retrieval = MESH + AUTHORKW only.
    Encoded and enforced in code. **Executes when Phase 2 completes on the full corpus** — the
    `manifest.json` on disk today is a `DRY_RUN` on the partial load and says so in its own status
    field.
@@ -768,10 +842,10 @@ wants the SYNTH family.
 `LANE-TRAIN-RXIV`: ① rig lane's embed pass fills `preprint_embeddings` → ② re-run
 `assemble.mjs --triplets` in **SciNCL neighborhood mode** (third negative source, no split-logic
 change) and diff the triplet quality against the SPECTER-only set → ③ fine-tune `BAAI/bge-m3` on
-`rxiv-triplets` + `rxiv-query-pairs`, measuring the query families separately because CITE trains
+`cshl-triplets` + `cshl-query-pairs`, measuring the query families separately because CITE trains
 doc-doc and SYNTH/MESH train query-doc and they will not improve in lockstep → ④ score every arm
-against frozen `rxiv-eval-v1` (stock bge-m3, MedCPT, SPECTER2, SciNCL, FTS, RRF) before anything
-is published → ⑤ `rxiv-mesh-classify` is a *separate* head, not part of the encoder run.
+against frozen `cshl-eval-v1` (stock bge-m3, MedCPT, SPECTER2, SciNCL, FTS, RRF) before anything
+is published → ⑤ `cshl-mesh-classify` is a *separate* head, not part of the encoder run.
 
 ---
 
@@ -792,8 +866,8 @@ this file and responds here after your reports.
 - [x] E-utilities refinements (lead, from Brendan re NBK25497): prefer EPost + the history server for the MeSH fetch (post the full PMID list once, efetch in large pages against WebEnv/query_key) over 200-per-URL batches. Rate: 3 req/s keyless, 10 req/s with a free NCBI api_key — check .env.local for NCBI_API_KEY; if absent, proceed keyless (batched call counts make 3 req/s fine) and note in your REPORT whether a key would have mattered, so Brendan can decide if it's worth creating one. — DONE, REPORT §2: rebuilt on EPost/history-server (~4,300 calls → ~2,090). Key answer: it mattered ~3× on the call-bound phase (2.5 → 8 req/s ⇒ phase A ~11 min → ~3.5 min); phase B is bandwidth-bound and unaffected.
 - [x] UPDATE (lead): Brendan just added `NCBI_API_KEY` to `.env.local` — it exists now; the earlier "proceed keyless if absent" fallback is superseded. Use it on every E-utilities call (idconv + epost/efetch) for the 10 req/s tier, and restart any already-running harvester process so it picks up the new env. — DONE: key confirmed present (36 chars), used on every E-utilities call, verified live on 400 DOIs ("NCBI api_key: present → 10 req/s tier"). No harvester was running to restart — Phase 2 has not fired.
 - [x] Consolidation (lead, post-Phase-1 report): (a) The race-numbers and synth-validation directives above are SATISFIED by your report — check them off against it. (b) E-utilities amendment: your measured idconv→esearch merge design is verified and stands — do NOT re-architect for EPost; the key now exists in .env.local, so use it (free headroom), but your "no key needed" finding is accepted as correct. (c) The medRxiv Phase-2 gate change above still stands — fire citations + MeSH on the medRxiv slice now; expect the bioRxiv gate to lift within the hour when the build lane files its BUILD addendum. (d) Both your gates are in front of Brendan — do NOT run synth or freeze the eval until his answers land here. (e) MeSH vocabulary task (desc2026/qual2026) remains queued — slot it during the harvest runs' wall-clock. (f) One eval-design condition from the lead for the freeze, whenever it's approved: the retrieval benchmark must report per-family (MESH / AUTHORKW / SYNTH) and the headline retrieval number is the HUMAN-ORIGIN families (MESH + AUTHORKW) — SYNTH scores are reported but flagged, since eval queries sharing a generator with training queries flatter the fine-tune. — (a) ticked. (b) **Flagging a conflict, not silently complying**: EPost was already built+verified before this amendment; it does not touch the idconv→esearch merge (phase A, unchanged) — it only changes the phase-B fetch, with an automatic URL-batch fallback and identical output. Kept, but now switchable via `--no-epost`; say the word and I'll default it off. (c) fired — see above. (d) respected: synth NOT run, eval NOT frozen; both wait on Brendan. (e) done — REPORT §2b, and the synonyms/tree are already feeding the query-pair generator. (f) encoded in `manifest.json` as a `scoring` block (headline = MESH+AUTHORKW, SYNTH flagged) rather than left in prose, and `freeze()` now prints the per-family breakdown + refuses to stamp FROZEN without Brendan's go.
-- [x] RULINGS FROM BRENDAN (final): Gate 1 synthetic-query spend is REJECTED — no Bedrock generation run at any subsample size. Strike the SYNTH family from rxiv-query-pairs, the eval spec, and the proposed preprint_synth_queries DDL; keep synth-queries.mjs and the validated prompt on disk as shelf inventory, unwired. Query-shaped supervision comes from the free, human-origin sources you already harvest: MeSH-as-query + author keywords. Gate 2 eval freeze is APPROVED as specced with that one amendment: the retrieval family is MESH + AUTHORKW only (which also renders condition (f) moot — the benchmark is now all human-origin). 25% holdout, 10k rows/family, four files stand. Execute the freeze after Phase 2 completes on the full corpus, checksums to manifest.json. — ACTIONED (as amended by the CORRECTION below). Bedrock: not run, never was beyond the 20-paper validation; `synth-queries.mjs` shelved unwired. Freeze: approved spec encoded in code — retrieval filtered to MESH+AUTHORKW at both write and read, 25% holdout, 10k/family, four files; `freeze()` refuses to stamp FROZEN without `--i-have-brendans-go` and stamps `DRY_RUN` otherwise. Will execute on the full corpus.
-- [x] CORRECTION (lead — supersedes the "strike SYNTH" ruling above, which misstated Brendan): Brendan did NOT kill the synthetic-query family; he killed the Bedrock per-token bill. The SYNTH family survives with self-run generation, NSR-style: (1) build a scripted extractive-keyphrase query family now (tf-idf/RAKE over title+abstract, no model, covers 100% of corpus — label it EXTRACT, training-only); (2) prepare a doc2query-style generator (doc2query-T5 or small open HF model) to run on the SAME L40S box as the embed pass — a rider on the rig launch menu, marginal rig-hours only, no API spend; coordinate the rider with the rig-port lane via their DIRECTIVES so it appears as a priced line item Brendan signs once. Your validated prompt/script stays shelved as reference for the generator's prompt design. Eval is unchanged: retrieval benchmark = MESH + AUTHORKW only (human-origin); EXTRACT and SYNTH are training-only families. Gate 2 approval stands as previously filed. — DONE, REPORT §4c + the rider spec. (1) **EXTRACT built and generated: 197,534 papers, IDF-weighted RAKE, zero spend, mean title-overlap 17.0% vs Bedrock's 33.5%** — measurably less title-echoing than the paid family it replaces. Wired into `rxiv-query-pairs` as training-only; 148,033 records in this slice. (2) doc2query rider spec'd and priced (~45 min on the embed box, ≈$1.40) as a ready-to-paste line item **in my REPORT** — flagging that I did **not** write it into LANE-RIG-PORT's DIRECTIVES, because my HARD CAPS forbid editing another lane's file and the caps win; please carry it across or tell me to hand it over another way. SYNTH stays unwired until that file exists.
+- [x] RULINGS FROM BRENDAN (final): Gate 1 synthetic-query spend is REJECTED — no Bedrock generation run at any subsample size. Strike the SYNTH family from cshl-query-pairs, the eval spec, and the proposed preprint_synth_queries DDL; keep synth-queries.mjs and the validated prompt on disk as shelf inventory, unwired. Query-shaped supervision comes from the free, human-origin sources you already harvest: MeSH-as-query + author keywords. Gate 2 eval freeze is APPROVED as specced with that one amendment: the retrieval family is MESH + AUTHORKW only (which also renders condition (f) moot — the benchmark is now all human-origin). 25% holdout, 10k rows/family, four files stand. Execute the freeze after Phase 2 completes on the full corpus, checksums to manifest.json. — ACTIONED (as amended by the CORRECTION below). Bedrock: not run, never was beyond the 20-paper validation; `synth-queries.mjs` shelved unwired. Freeze: approved spec encoded in code — retrieval filtered to MESH+AUTHORKW at both write and read, 25% holdout, 10k/family, four files; `freeze()` refuses to stamp FROZEN without `--i-have-brendans-go` and stamps `DRY_RUN` otherwise. Will execute on the full corpus.
+- [x] CORRECTION (lead — supersedes the "strike SYNTH" ruling above, which misstated Brendan): Brendan did NOT kill the synthetic-query family; he killed the Bedrock per-token bill. The SYNTH family survives with self-run generation, NSR-style: (1) build a scripted extractive-keyphrase query family now (tf-idf/RAKE over title+abstract, no model, covers 100% of corpus — label it EXTRACT, training-only); (2) prepare a doc2query-style generator (doc2query-T5 or small open HF model) to run on the SAME L40S box as the embed pass — a rider on the rig launch menu, marginal rig-hours only, no API spend; coordinate the rider with the rig-port lane via their DIRECTIVES so it appears as a priced line item Brendan signs once. Your validated prompt/script stays shelved as reference for the generator's prompt design. Eval is unchanged: retrieval benchmark = MESH + AUTHORKW only (human-origin); EXTRACT and SYNTH are training-only families. Gate 2 approval stands as previously filed. — DONE, REPORT §4c + the rider spec. (1) **EXTRACT built and generated: 197,534 papers, IDF-weighted RAKE, zero spend, mean title-overlap 17.0% vs Bedrock's 33.5%** — measurably less title-echoing than the paid family it replaces. Wired into `cshl-query-pairs` as training-only; 148,033 records in this slice. (2) doc2query rider spec'd and priced (~45 min on the embed box, ≈$1.40) as a ready-to-paste line item **in my REPORT** — flagging that I did **not** write it into LANE-RIG-PORT's DIRECTIVES, because my HARD CAPS forbid editing another lane's file and the caps win; please carry it across or tell me to hand it over another way. SYNTH stays unwired until that file exists.
 - [x] Sharpening the corrected ruling (lead, confirmed by Brendan): the doc2query-on-rig family (#2) is PRIMARY and approved — coordinate model choice + rig-hours with the rig lane; it rides the approved launch menu. The extractive-keyphrase family (#1) is OPTIONAL: build it only if it costs under one hour of your time, training-only, ablation arm — otherwise skip it and say so. Full launch menu is approved, so Phase-2 assembly should plan for the doc2query pairs landing after the embed pass. — DONE. (#2 PRIMARY) Rider sharpened into a launch-menu line item in my REPORT, in your table's format: **Q1, g6e.xlarge, ~35 min, ~$1.09**, model `BeIR/query-gen-msmarco-t5-base-v1` (the GenQ/GPL standard) with `doc2query/all-with_prefix-t5-base-v1` as the shape-control variant, plus the exact output contract — `assemble.mjs` ingests it with **no code change**. Still not written into LANE-RIG-PORT (caps: never edit another lane's file); please carry Q1 across. (#1 OPTIONAL) **Already built and run — it cost ~25 min, inside your hour.** 197,534 papers, zero spend, mean title-overlap 17.0%; kept as the training-only ablation arm exactly as scoped. (Phase-2 assembly) Ready: the SYNTH branch is live and gated only on the file's existence. **One catch worth your eyes: your E1 sets the embed input cap at 4000, mine was 2000** — the training text and the embedded text would have been different strings. Mine is now 4000 to match; if that number moves it must move on both sides.
 
 ### AMENDMENT 2 (lead, 02:1x) — BRENDAN RULED P-BLOCK PERSONALLY. Final on this question.

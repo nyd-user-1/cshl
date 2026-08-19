@@ -490,7 +490,11 @@ async function freeze() {
   const text = new Map();
   // Carry the canonical embed string into the frozen files alongside the
   // display fields: the benchmark must encode exactly what the index encoded.
-  for await (const r of readJsonl(TEXT)) if (need.has(r.key)) text.set(r.key, { title: r.title, abstract: r.abstract, embed_text: r.embed_text });
+  // `embed_text` already contains title + abstract, so carrying a separate
+  // `abstract` alongside it doubles the size of a file we intend to publish for
+  // no information. Keep `title` (what a human reads in a result list) and
+  // `embed_text` (what a model encodes); the abstract is the tail of the latter.
+  for await (const r of readJsonl(TEXT)) if (need.has(r.key)) text.set(r.key, { title: r.title, embed_text: r.embed_text });
   const T = (k) => ({ slug: k, ...(text.get(k) || {}) });
 
   const written = {};
@@ -637,10 +641,10 @@ async function verify() {
       if (k) evalKeys.add(k);
       if (f.startsWith("cshl-eval-v1.retrieval")) evalFam[r.meta?.family ?? "?"] = (evalFam[r.meta?.family ?? "?"] || 0) + 1;
       const t = r.positive ?? r;
-      if (!t.title && !t.abstract) noText++;              // the benchmark must be self-contained
+      if (!t.embed_text) noText++;                        // the benchmark must be self-contained
     }
     log(`  ${f.padEnd(38)} ${String(n).padStart(7)} rows`);
-    ok(noText === 0, `${f}: every row carries hydrated text (${noText} without)`);
+    ok(noText === 0, `${f}: every row carries the canonical embed_text (${noText} without)`);
   }
   ok([...evalKeys].every(isHeldOut), `every benchmark query paper is inside the held-out reservation`);
   ok(Object.keys(evalFam).every((f) => ["MESH", "AUTHORKW"].includes(f)),
