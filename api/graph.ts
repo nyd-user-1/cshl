@@ -270,7 +270,11 @@ export default async function handler(req: any, res: any) {
     if (op === "similar") {
       const k = Math.min(8, Math.max(1, Number(req.query?.k ?? 6) || 6));
       const table = vectorTable(activeEncoder());
-      const model = table === "nsr_embeddings" ? "bge-m3" : "nsr-encoder-bge-m3";
+      // Name the model that actually produced the vectors in `table`. This read
+      // `"nsr_embeddings"` — a table that no longer exists — so it always reported the
+      // fine-tuned model, including when serving stock vectors. A label that cannot be
+      // wrong is worth more than one that is usually right.
+      const model = table === "preprint_embeddings" ? "bge-m3" : "cshl-encoder-bge-m3";
       const anchor = await q(`SELECT embedding::text AS v FROM ${table} WHERE key_number = $1`, [id]);
       if (!anchor[0]) return res.status(200).json({ model, nodes: [], reason: "no embedding for this paper" });
       const rows = await q(

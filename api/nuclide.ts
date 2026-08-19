@@ -135,7 +135,9 @@ export default async function handler(req: any, res: any) {
       );
       // NNDC's order is by Z, not alphabetical symbol — resolve Z from nuclide_dict when possible.
       const zRows = await sql.query(`SELECT DISTINCT regexp_replace(nuclide_code, '^[0-9]+', '') AS sym, z FROM nuclide_dict WHERE a = $1`, [a]).catch(() => [] as Record<string, unknown>[]);
-      const zOf = new Map<string, number>(zRows.map((r) => [String(r.sym), Number(r.z)]));
+      const zOf = new Map<string, number>(
+        zRows.map((r) => [String(r.sym), Number(r.z)] as [string, number]),
+      );
       const sym = (nucid: string) => nucid.replace(/^\d+/, "");
       const sorted = [...rows].sort((x, y) => {
         const sx = sym(String(x.nucid)), sy = sym(String(y.nucid));
