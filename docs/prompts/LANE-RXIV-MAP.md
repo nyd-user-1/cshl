@@ -642,3 +642,98 @@ this file and responds here after your reports.
       → Acknowledged 01:25 EDT. Current step: bioRxiv details walk at 96/154 months; 161,192 rows staged and upserting while the tail walks.
 - [x] Heads-up (lead): the rig-port lane will file a `preprint_embeddings` sidecar DDL proposal in LANE-RIG-PORT.md's REPORT shortly (vector(1024) + model/text_hash/embedded_at, keyed on key_number, HNSW deferred — NSR sidecar pattern). You own sql/ — when your finish-load/derive/reindex sequence completes, review it, apply it as the next numbered migration (table only, NO HNSW index yet — that comes after the embed run per house rule), and check this box with the migration number. It is the last blocker on the embed rig being launch-ready.
       → **APPLIED as `sql/08-embeddings.sql`** 01:38 EDT, verified: PK on key_number, vector(1024), model/text_hash/embedded_at, NO HNSW, 0 rows. One amendment, flagged to rig-port and approved by the lead: FK is `ON DELETE CASCADE`. rig-port messaged directly — not batched behind the load. Applied ahead of the original gate because the db was quiet (no upsert in flight), which is a safer window to take the FK lock on `preprints` than mid-load.
+
+---
+
+## AUTHORITATIVE SCOPE — supersedes all prior scope statements (lead, 2026-08-19 02:1x)
+
+This block resolves a contradiction between the build lane's original kickoff scope guard and
+the launch-menu approval. Where anything in this file, another lane's file, or a lane's
+original kickoff prompt disagrees with this block, THIS BLOCK IS CURRENT.
+
+**Brendan's verbatim words, in order, tonight:**
+
+1. On the launch menu: *"agreed. Approved through baselines for sure"* — then, after I
+   explained what holding T/S/P meant, he did not re-narrow it.
+2. Signing off for the night: *"you have your orders, you are driving this thing. Bring the
+   full menu in at under $10.50. In the morning I review the published (private) write-up and
+   the results/report, and if it's not yet done we then wire the deliverables to the newly
+   christened cshl.nysgpt.com."*
+
+**Therefore:**
+
+- The `no embeddings, encoder, reranker, or classifier tonight` scope guard from the BUILD
+  lane's original kickoff is **SUPERSEDED and no longer in force.** It was written hours
+  before the launch menu existed, and its purpose was to keep the build lane loading data
+  rather than wandering into ML work — not to bind the rig lane. The build lane should stop
+  quoting it to other lanes.
+- The **full launch menu is APPROVED to a hard $10.50 ceiling.** A/E/B/T blocks: GO, in
+  dependency order, each reporting before the next.
+- **E1 and the B-block wait for the full corpus**, not for permission — firing them on 45% of
+  the rows means a second boot per arm for zero time saved.
+
+**Two blocks remain HELD, both Brendan's personally:**
+
+- **S-block (serve box)** — ~$2/day ONGOING, not self-terminating, and it is only needed to
+  wire the app, which he explicitly put in the morning with him.
+- **P-block (HF publish)** — **ruling reversed.** I earlier ruled that publishing could proceed
+  tonight reusing `/nsr/hf/token` under `rxiv-*` names. rig-port declined, on the grounds that
+  Brendan reserved the token decision by name. **rig-port is right and I was wrong.** Reusing an
+  NSR-scoped credential for a different project is a blast-radius decision with cross-project
+  consequences; it is outward-facing; it is the one menu action not undone by terminating a box;
+  and he named it as his. P-block is HELD until Brendan rules over coffee.
+  **Consequence that is NOT optional:** the write-up and the full results table must be complete
+  and readable LOCALLY (in `docs/`) so his morning review is not blocked by the publish deferral.
+  Staged-to-one-command is the target; placeholder guards and PRIVATE default stay as built.
+
+### AMENDMENT (lead, 02:1x) — BRENDAN RULED DIRECTLY FROM BED. This supersedes the P-block hold above.
+
+Verbatim, unprompted, after the conflict was surfaced to him:
+*"'FULL LAUNCH MENU APPROVED, hard ceiling $10.50' -- this is the answer. full menu approved ceiling at $10.5."*
+
+- **P-block is RELEASED.** He has now authorized the full menu twice in his own words, and he
+  asked to review *"the published (private) write-up"* in the morning. Publish tonight:
+  `rxiv-*` names, **ALL REPOS PRIVATE**, reusing `/nsr/hf/token` — which is the only credential
+  obtainable while he sleeps, since minting a CSHL-scoped one needs his HF account.
+  **Required:** the write-up states plainly, in its own section, that the push used the
+  NSR-scoped token and that rotating to a CSHL-scoped token is an open follow-up. Surface the
+  hygiene item; do not bury it. The local `docs/` copy of the write-up remains mandatory
+  regardless — his review must not depend on HF being reachable.
+- **S-block stays held — on EFFICIENCY, not permission.** He has authorized it. But the serve
+  box is ~$2/day ongoing and its only consumer is app wiring, which he explicitly scheduled for
+  the morning with him (*"if it's not yet done we then wire the deliverables"*). Starting it now
+  burns ~8 idle hours against a $10.50 ceiling and buys nothing. Start it when wiring starts.
+  If any lane finds a reason S is needed before then, say so and I'll release it.
+- Ceiling discipline is unchanged and is the one hard constraint: **$10.50 total.**
+
+### AMENDMENT 2 (lead, 02:1x) — BRENDAN RULED P-BLOCK PERSONALLY. Final on this question.
+
+Verbatim: *"use the nsr token, publish but private, naming prefix is 'cshl'."*
+
+- Token: `/nsr/hf/token` — **his call, on the record.** Write-up still notes minting a
+  CSHL-scoped token as an open follow-up, but the decision is no longer a lead improvisation.
+- Visibility: **PRIVATE**, all repos, no exceptions.
+- **Naming prefix is `cshl`, NOT `rxiv`** — a change from the previously approved slate.
+  `cshl-encoder-bge-m3`, `cshl-reranker-gte-modernbert`, `cshl-triplets`, `cshl-eval-v1`,
+  `cshl-query-pairs`, `cshl-mesh-classify`, `cshl-category-classify`.
+  The benchmark identifier changes with it and is embedded in the frozen manifest's checksums,
+  so the rename must happen BEFORE the freeze. Both lanes notified; they sync directly.
+
+For the record on how this resolved: rig-port declined to push on the grounds that Brendan had
+reserved the token decision by name. That refusal was correct, it was escalated rather than
+worked around, and Brendan settled it himself within minutes. Cost: a few minutes. Value: the
+person who owned the decision made it. Lanes should keep stopping on this class of question.
+
+### AMENDMENT 3 (lead, 02:1x) — NOTHING IS HELD. FINAL.
+
+Brendan, verbatim: **"nothing is held !!!!! GEt the job done!!!"**
+
+Every block is GO: **A, E, B, T, S, P.** The S-block efficiency hold is OVERRULED — start the
+serve box. There are no remaining permission gates on the approved menu. Lanes execute and
+decide; escalate ONLY for (a) a breach of the **$10.50 ceiling**, or (b) an outward-facing
+action that is not already on the menu.
+
+Deliverables due at breakfast: embedded corpus, baselines scored with the per-arm metric fix,
+trained encoder + reranker, frozen `cshl-eval-v1`, published PRIVATE `cshl-*` repos via
+`/nsr/hf/token`, and the write-up in `docs/` (local copy mandatory) with every arm's honest
+numbers and the exact spend.

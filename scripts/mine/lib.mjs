@@ -243,9 +243,9 @@ export const human = (n) => (n > 1e9 ? (n / 1e9).toFixed(2) + " GB" : n > 1e6 ? 
 export const h32 = (s) => parseInt(createHash("md5").update(s).digest("hex").slice(0, 8), 16) / 0xffffffff;
 
 // The frozen benchmark reservation. A paper under the holdout line never appears
-// as a training anchor, positive, or negative — it exists only in rxiv-eval-v1.
+// as a training anchor, positive, or negative — it exists only in cshl-eval-v1.
 export const HOLDOUT_SEED = "holdout:";
-export const SPLIT_SEED = "rxiv-training-pairs-2026-08-19";
+export const SPLIT_SEED = "cshl-training-pairs-2026-08-19";
 
 export const DOI_SUFFIX = (doi) => String(doi || "").replace(/^https?:\/\/doi\.org\//i, "").replace(/^10\.\d{4,9}\//, "");
 export const bareDoi = (doi) => String(doi || "").replace(/^https?:\/\/doi\.org\//i, "").toLowerCase();

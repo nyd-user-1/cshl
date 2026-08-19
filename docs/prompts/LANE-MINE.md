@@ -795,3 +795,35 @@ this file and responds here after your reports.
 - [x] RULINGS FROM BRENDAN (final): Gate 1 synthetic-query spend is REJECTED — no Bedrock generation run at any subsample size. Strike the SYNTH family from rxiv-query-pairs, the eval spec, and the proposed preprint_synth_queries DDL; keep synth-queries.mjs and the validated prompt on disk as shelf inventory, unwired. Query-shaped supervision comes from the free, human-origin sources you already harvest: MeSH-as-query + author keywords. Gate 2 eval freeze is APPROVED as specced with that one amendment: the retrieval family is MESH + AUTHORKW only (which also renders condition (f) moot — the benchmark is now all human-origin). 25% holdout, 10k rows/family, four files stand. Execute the freeze after Phase 2 completes on the full corpus, checksums to manifest.json. — ACTIONED (as amended by the CORRECTION below). Bedrock: not run, never was beyond the 20-paper validation; `synth-queries.mjs` shelved unwired. Freeze: approved spec encoded in code — retrieval filtered to MESH+AUTHORKW at both write and read, 25% holdout, 10k/family, four files; `freeze()` refuses to stamp FROZEN without `--i-have-brendans-go` and stamps `DRY_RUN` otherwise. Will execute on the full corpus.
 - [x] CORRECTION (lead — supersedes the "strike SYNTH" ruling above, which misstated Brendan): Brendan did NOT kill the synthetic-query family; he killed the Bedrock per-token bill. The SYNTH family survives with self-run generation, NSR-style: (1) build a scripted extractive-keyphrase query family now (tf-idf/RAKE over title+abstract, no model, covers 100% of corpus — label it EXTRACT, training-only); (2) prepare a doc2query-style generator (doc2query-T5 or small open HF model) to run on the SAME L40S box as the embed pass — a rider on the rig launch menu, marginal rig-hours only, no API spend; coordinate the rider with the rig-port lane via their DIRECTIVES so it appears as a priced line item Brendan signs once. Your validated prompt/script stays shelved as reference for the generator's prompt design. Eval is unchanged: retrieval benchmark = MESH + AUTHORKW only (human-origin); EXTRACT and SYNTH are training-only families. Gate 2 approval stands as previously filed. — DONE, REPORT §4c + the rider spec. (1) **EXTRACT built and generated: 197,534 papers, IDF-weighted RAKE, zero spend, mean title-overlap 17.0% vs Bedrock's 33.5%** — measurably less title-echoing than the paid family it replaces. Wired into `rxiv-query-pairs` as training-only; 148,033 records in this slice. (2) doc2query rider spec'd and priced (~45 min on the embed box, ≈$1.40) as a ready-to-paste line item **in my REPORT** — flagging that I did **not** write it into LANE-RIG-PORT's DIRECTIVES, because my HARD CAPS forbid editing another lane's file and the caps win; please carry it across or tell me to hand it over another way. SYNTH stays unwired until that file exists.
 - [x] Sharpening the corrected ruling (lead, confirmed by Brendan): the doc2query-on-rig family (#2) is PRIMARY and approved — coordinate model choice + rig-hours with the rig lane; it rides the approved launch menu. The extractive-keyphrase family (#1) is OPTIONAL: build it only if it costs under one hour of your time, training-only, ablation arm — otherwise skip it and say so. Full launch menu is approved, so Phase-2 assembly should plan for the doc2query pairs landing after the embed pass. — DONE. (#2 PRIMARY) Rider sharpened into a launch-menu line item in my REPORT, in your table's format: **Q1, g6e.xlarge, ~35 min, ~$1.09**, model `BeIR/query-gen-msmarco-t5-base-v1` (the GenQ/GPL standard) with `doc2query/all-with_prefix-t5-base-v1` as the shape-control variant, plus the exact output contract — `assemble.mjs` ingests it with **no code change**. Still not written into LANE-RIG-PORT (caps: never edit another lane's file); please carry Q1 across. (#1 OPTIONAL) **Already built and run — it cost ~25 min, inside your hour.** 197,534 papers, zero spend, mean title-overlap 17.0%; kept as the training-only ablation arm exactly as scoped. (Phase-2 assembly) Ready: the SYNTH branch is live and gated only on the file's existence. **One catch worth your eyes: your E1 sets the embed input cap at 4000, mine was 2000** — the training text and the embedded text would have been different strings. Mine is now 4000 to match; if that number moves it must move on both sides.
+
+### AMENDMENT 2 (lead, 02:1x) — BRENDAN RULED P-BLOCK PERSONALLY. Final on this question.
+
+Verbatim: *"use the nsr token, publish but private, naming prefix is 'cshl'."*
+
+- Token: `/nsr/hf/token` — **his call, on the record.** Write-up still notes minting a
+  CSHL-scoped token as an open follow-up, but the decision is no longer a lead improvisation.
+- Visibility: **PRIVATE**, all repos, no exceptions.
+- **Naming prefix is `cshl`, NOT `rxiv`** — a change from the previously approved slate.
+  `cshl-encoder-bge-m3`, `cshl-reranker-gte-modernbert`, `cshl-triplets`, `cshl-eval-v1`,
+  `cshl-query-pairs`, `cshl-mesh-classify`, `cshl-category-classify`.
+  The benchmark identifier changes with it and is embedded in the frozen manifest's checksums,
+  so the rename must happen BEFORE the freeze. Both lanes notified; they sync directly.
+
+For the record on how this resolved: rig-port declined to push on the grounds that Brendan had
+reserved the token decision by name. That refusal was correct, it was escalated rather than
+worked around, and Brendan settled it himself within minutes. Cost: a few minutes. Value: the
+person who owned the decision made it. Lanes should keep stopping on this class of question.
+
+### AMENDMENT 3 (lead, 02:1x) — NOTHING IS HELD. FINAL.
+
+Brendan, verbatim: **"nothing is held !!!!! GEt the job done!!!"**
+
+Every block is GO: **A, E, B, T, S, P.** The S-block efficiency hold is OVERRULED — start the
+serve box. There are no remaining permission gates on the approved menu. Lanes execute and
+decide; escalate ONLY for (a) a breach of the **$10.50 ceiling**, or (b) an outward-facing
+action that is not already on the menu.
+
+Deliverables due at breakfast: embedded corpus, baselines scored with the per-arm metric fix,
+trained encoder + reranker, frozen `cshl-eval-v1`, published PRIVATE `cshl-*` repos via
+`/nsr/hf/token`, and the write-up in `docs/` (local copy mandatory) with every arm's honest
+numbers and the exact spend.

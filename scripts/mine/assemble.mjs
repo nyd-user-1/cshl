@@ -20,7 +20,7 @@
 // exception: they inline text so the benchmark is self-contained and publishable.
 //
 // SPLIT DISCIPLINE (NSR's, verbatim): split by PAPER hash, never by row. A paper
-// under the holdout line is reserved for rxiv-eval-v1 and may not appear in any
+// under the holdout line is reserved for cshl-eval-v1 and may not appear in any
 // training record in any role. A training record whose papers straddle two
 // splits is DROPPED, not assigned — a positive that shows up in another split's
 // query is a leak, and a leak is worth more than the rows it costs.
@@ -31,6 +31,11 @@ import {
 } from "./lib.mjs";
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// THE canonical embed-input definition, owned by the rig lane and sourced from
+// scripts/embed-nsr/worker.mjs. Imported, not copied: two lanes that *agree* on
+// a recipe drift; two lanes that *share* one cannot. assertWorkerMatches() reads
+// the worker source and throws if the box-side literal has moved.
+import { CAP as RECIPE_CAP, recipeSql, embeddableSql, assertWorkerMatches } from "../eval/recipe.mjs";
 
 const MINE = "data/mine";
 const EVAL = `${MINE}/eval`;
@@ -43,10 +48,10 @@ const EXTRACTQ = `${MINE}/queries-extract.jsonl`;
 mkdirSync(EVAL, { recursive: true });
 
 const HOLDOUT = numArg("--holdout", 0.25);      // NSR parity
-// Must match the embed rig's input recipe or the text a model trains on and the
-// text it embeds diverge. LANE-RIG-PORT's launch menu item E1 settled on 4000
-// (98.9% of documents left whole vs 69.2% at 2000, for +$0.11), so 4000 it is.
-const TEXT_CAP = numArg("--text-cap", 4000);
+// Defaults to the shared recipe's cap. Overriding it locally is a three-lane
+// decision (this lane, the rig, whoever writes the model cards) — the flag
+// exists for experiments, not for routine use.
+const TEXT_CAP = numArg("--text-cap", RECIPE_CAP);
 const NEG_TARGET = numArg("--negs", 8);
 const POS_PER_ANCHOR = numArg("--pos", 2);
 const EVAL_CAP = numArg("--eval-cap", 10000);   // NSR froze 9,995 held-out queries
@@ -77,42 +82,74 @@ const sha256 = (path) => new Promise((res, rej) => {
 
 // ── the shared text sidecar ──────────────────────────────────────────────────
 async function buildText() {
-  // psql -A -t emits one row per line; abstracts contain newlines, so pull the
-  // whole row as a single json object per line and let the field boundaries be
-  // the parser's problem rather than ours.
+  // ── THE CANONICAL EMBED STRING ─────────────────────────────────────────────
+  // Not written here. `recipeSql()` comes from scripts/eval/recipe.mjs, whose
+  // source of truth is scripts/embed-nsr/worker.mjs — the string the GPU box
+  // actually sends to TEI. assertWorkerMatches() re-reads the worker and throws
+  // if that literal has drifted, so this build fails loudly rather than quietly
+  // emitting text the embedder never saw.
+  //
+  // The cap applies to the CONCATENATION, not the abstract alone: for the ~1% of
+  // papers where title + 2 + abstract exceeds it, the title eats into the
+  // abstract's budget. `title` and `abstract` remain separate fields for display
+  // and eval rendering — but anything that feeds a MODEL consumes `embed_text`.
+  //
+  // `embeddableSql()` is the rig's exclusion predicate: under 20 non-whitespace
+  // characters and the row is never embedded, so it can never be retrieved, so
+  // it must never be a positive.
+  await assertWorkerMatches();
+  log(`embed recipe: shared with the rig via scripts/eval/recipe.mjs (cap ${TEXT_CAP}) — worker literal verified`);
+
   const out = jsonlWriter(TEXT, { append: false });
-  let n = 0, last = "";
+  let n = 0, notEmbeddable = 0, truncated = 0, last = "";
   for (;;) {
     const rows = await psqlRows(
       `SELECT json_build_object(
-                'key', key_number, 'server', server, 'year', pub_year,
-                'category', categories[1],
-                'title', title,
-                'abstract', left(abstract, ${TEXT_CAP}),
-                'published_doi', published_doi)::text
-         FROM preprints
-        WHERE key_number > '${last.replace(/'/g, "''")}'
-        ORDER BY key_number LIMIT 20000;`
+                'key', p.key_number, 'server', p.server, 'year', p.pub_year,
+                'category', p.categories[1],
+                'title', p.title,
+                'abstract', p.abstract,
+                'embed_text', ${recipeSql("p", TEXT_CAP)},
+                'embeddable', ${embeddableSql("p")},
+                'over_cap', length(${recipeSql("p", TEXT_CAP + 1)}) > ${TEXT_CAP},
+                'published_doi', p.published_doi)::text
+         FROM preprints p
+        WHERE p.key_number > '${last.replace(/'/g, "''")}'
+        ORDER BY p.key_number LIMIT 20000;`
     );
     if (!rows.length) break;
-    for (const [j] of rows) { const o = JSON.parse(j); await out.write(o); last = o.key; n++; }
+    for (const [j] of rows) {
+      const o = JSON.parse(j);
+      // Store the abstract capped for display, but only AFTER embed_text was
+      // built from the uncapped one — otherwise we would be capping twice.
+      if (o.abstract) o.abstract = o.abstract.slice(0, TEXT_CAP);
+      await out.write(o);
+      last = o.key; n++;
+      if (!o.embeddable) notEmbeddable++;
+      if (o.over_cap) truncated++;
+    }
     if (rows.length < 20000) break;
     if (n % 100000 === 0) log(`  ${n} papers…`);
   }
   await out.drain(); await out.close();
   log(`corpus-text.jsonl: ${n} papers · ${human(bytesOf(TEXT))}`);
+  log(`  embed recipe (worker.mjs:94, cap ${TEXT_CAP}): ${truncated} papers (${((truncated / n) * 100).toFixed(2)}%) truncated by the cap`);
+  log(`  ${notEmbeddable} papers (${((notEmbeddable / n) * 100).toFixed(3)}%) fail the rig's ≥20-char predicate — they get NO embedding, so they are excluded as positives`);
 }
 
 // Load only what a stage needs: keys + category, never the abstracts.
 async function loadIndex() {
-  const cat = new Map(), server = new Map(), byCat = new Map(), all = [];
+  const cat = new Map(), server = new Map(), byCat = new Map(), all = [], noEmbed = new Set();
   for await (const r of readJsonl(TEXT)) {
     all.push(r.key); server.set(r.key, r.server);
+    // A paper the rig will not embed can never be retrieved. It stays in the
+    // index of what exists, but it is barred from being a positive below.
+    if (r.embeddable === false) noEmbed.add(r.key);
     const c = r.category || "uncategorized";
     cat.set(r.key, c);
     (byCat.get(c) ?? byCat.set(c, []).get(c)).push(r.key);
   }
-  return { cat, server, byCat, all };
+  return { cat, server, byCat, all, noEmbed };
 }
 
 // ── task 4a: citation triplets (SPECTER recipe) ──────────────────────────────
@@ -127,11 +164,11 @@ async function triplets() {
   for await (const r of readJsonl(CITES)) if (r.refs_in?.length) refs.set(r.key, r.refs_in);
   log(`citation graph: ${refs.size} papers with ≥1 in-corpus reference, ${[...refs.values()].reduce((a, x) => a + x.length, 0)} edges`);
 
-  const ws = Object.fromEntries(["train", "val", "test"].map((s) => [s, jsonlWriter(`${MINE}/rxiv-triplets.${s}.jsonl`, { append: false })]));
+  const ws = Object.fromEntries(["train", "val", "test"].map((s) => [s, jsonlWriter(`${MINE}/cshl-triplets.${s}.jsonl`, { append: false })]));
   const heldOutAnchors = [];
   const counts = { train: 0, val: 0, test: 0 };
   const negSrc = {};
-  let anchors = 0, straddle = 0, thin = 0, held = 0;
+  let anchors = 0, straddle = 0, thin = 0, held = 0, unembeddable = 0;
   const anchorSets = { train: new Set(), val: new Set(), test: new Set() };
   const cap = numArg("--anchors", 0);
 
@@ -142,7 +179,8 @@ async function triplets() {
     // never enter a training file — that is what makes the eval honest.
     const bucket = isHeldOut(anchor);
 
-    const positives = pick(cited.filter((k) => idx.cat.has(k)), POS_PER_ANCHOR, r);
+    if (idx.noEmbed.has(anchor)) { unembeddable++; continue; }
+    const positives = pick(cited.filter((k) => idx.cat.has(k) && !idx.noEmbed.has(k)), POS_PER_ANCHOR, r);
     if (!positives.length) { thin++; continue; }
     const citedSet = new Set(cited);
 
@@ -204,9 +242,9 @@ async function triplets() {
 
   const inter = (a, b) => [...anchorSets[a]].filter((x) => anchorSets[b].has(x)).length;
   log("");
-  log(`── rxiv-triplets ──`);
+  log(`── cshl-triplets ──`);
   log(`  anchors used ${anchors} · records train ${counts.train} val ${counts.val} test ${counts.test} · held-out reserved ${held}`);
-  log(`  dropped: ${straddle} straddling a split boundary${has("--strict-split") ? " (--strict-split)" : ""}, ${thin} with too few in-corpus neighbours`);
+  log(`  dropped: ${straddle} straddling a split boundary${has("--strict-split") ? " (--strict-split)" : ""}, ${thin} with too few in-corpus neighbours, ${unembeddable} anchors the rig will not embed`);
   log(`  negatives by source: ${JSON.stringify(negSrc)}`);
   log(`  ANCHOR-DISJOINTNESS  |train∩val|=${inter("train", "val")} |train∩test|=${inter("train", "test")} |val∩test|=${inter("val", "test")}  → ${inter("train", "val") + inter("train", "test") + inter("val", "test") === 0 ? "PASS" : "FAIL"}`);
 }
@@ -217,8 +255,8 @@ async function classify() {
 
   // category — free, 100% coverage, straight from the DB
   {
-    const ws = Object.fromEntries(["train", "val", "test"].map((s) => [s, jsonlWriter(`${MINE}/rxiv-category-classify.${s}.jsonl`, { append: false })]));
-    const held = jsonlWriter(`${EVAL}/rxiv-category-classify.heldout.jsonl`, { append: false });
+    const ws = Object.fromEntries(["train", "val", "test"].map((s) => [s, jsonlWriter(`${MINE}/cshl-category-classify.${s}.jsonl`, { append: false })]));
+    const held = jsonlWriter(`${EVAL}/cshl-category-classify.heldout.jsonl`, { append: false });
     const counts = { train: 0, val: 0, test: 0, held: 0 };
     const labels = new Map();
     for await (const r of readJsonl(TEXT)) {
@@ -229,15 +267,15 @@ async function classify() {
       else { const s = splitOf(r.key); await ws[s].write(rec); counts[s]++; }
     }
     await Promise.all([...Object.values(ws), held].map(async (w) => { await w.drain(); await w.close(); }));
-    log(`── rxiv-category-classify ── ${labels.size} classes · train ${counts.train} val ${counts.val} test ${counts.test} · heldout ${counts.held}`);
+    log(`── cshl-category-classify ── ${labels.size} classes · train ${counts.train} val ${counts.val} test ${counts.test} · heldout ${counts.held}`);
     writeFileSync(`${MINE}/raw/category-labels.json`, JSON.stringify([...labels].sort((a, b) => b[1] - a[1]), null, 2));
   }
 
   // MeSH — the published half only
-  if (!existsSync(MESH)) { log(`SKIP rxiv-mesh-classify: ${MESH} not built yet`); return; }
+  if (!existsSync(MESH)) { log(`SKIP cshl-mesh-classify: ${MESH} not built yet`); return; }
   {
-    const ws = Object.fromEntries(["train", "val", "test"].map((s) => [s, jsonlWriter(`${MINE}/rxiv-mesh-classify.${s}.jsonl`, { append: false })]));
-    const held = jsonlWriter(`${EVAL}/rxiv-mesh-classify.heldout.jsonl`, { append: false });
+    const ws = Object.fromEntries(["train", "val", "test"].map((s) => [s, jsonlWriter(`${MINE}/cshl-mesh-classify.${s}.jsonl`, { append: false })]));
+    const held = jsonlWriter(`${EVAL}/cshl-mesh-classify.heldout.jsonl`, { append: false });
     const counts = { train: 0, val: 0, test: 0, held: 0 };
     const desc = new Map();
     let noMesh = 0;
@@ -256,7 +294,7 @@ async function classify() {
       else { const s = splitOf(r.key); await ws[s].write(rec); counts[s]++; }
     }
     await Promise.all([...Object.values(ws), held].map(async (w) => { await w.drain(); await w.close(); }));
-    log(`── rxiv-mesh-classify ── ${desc.size} distinct descriptors · train ${counts.train} val ${counts.val} test ${counts.test} · heldout ${counts.held} · ${noMesh} PubMed records carried no MeSH`);
+    log(`── cshl-mesh-classify ── ${desc.size} distinct descriptors · train ${counts.train} val ${counts.val} test ${counts.test} · heldout ${counts.held} · ${noMesh} PubMed records carried no MeSH`);
     writeFileSync(`${MINE}/raw/mesh-descriptors.json`, JSON.stringify([...desc].sort((a, b) => b[1] - a[1]).slice(0, 500), null, 2));
   }
 }
@@ -307,10 +345,11 @@ async function pairs() {
     log(`  descriptor→paper index: ${byDesc.size} descriptors over ${descOf.size} papers`);
   }
 
-  const ws = Object.fromEntries(["train", "val", "test"].map((s) => [s, jsonlWriter(`${MINE}/rxiv-query-pairs.${s}.jsonl`, { append: false })]));
-  const held = jsonlWriter(`${EVAL}/rxiv-query-pairs.heldout.jsonl`, { append: false });
+  const ws = Object.fromEntries(["train", "val", "test"].map((s) => [s, jsonlWriter(`${MINE}/cshl-query-pairs.${s}.jsonl`, { append: false })]));
+  const held = jsonlWriter(`${EVAL}/cshl-query-pairs.heldout.jsonl`, { append: false });
   const counts = { train: 0, val: 0, test: 0, held: 0 };
   const byFamily = {}, negSrc = {};
+  let unembeddable = 0;
 
   // Brendan's ruling: the retrieval BENCHMARK is human-origin only (MESH +
   // AUTHORKW). EXTRACT and SYNTH are training-only — so for those families a
@@ -319,6 +358,7 @@ async function pairs() {
   const TRAINING_ONLY = new Set(["EXTRACT", "SYNTH"]);
   const emit = async (key, query, family, extra = {}) => {
     if (!query || !idx.cat.has(key)) return;
+    if (idx.noEmbed.has(key)) { unembeddable++; return; }   // cannot be retrieved → cannot be a positive
     if (TRAINING_ONLY.has(family) && isHeldOut(key)) return;
     const r = rng(`q:${family}:${key}:${query}`);
     const negatives = [];
@@ -396,7 +436,7 @@ async function pairs() {
   } else log(`  (no ${SYNTH} — SYNTH family skipped: Bedrock spend rejected, doc2query rider not run)`);
 
   await Promise.all([...Object.values(ws), held].map(async (w) => { await w.drain(); await w.close(); }));
-  log(`── rxiv-query-pairs ── train ${counts.train} val ${counts.val} test ${counts.test} · heldout ${counts.held} · families ${JSON.stringify(byFamily)} · negatives ${JSON.stringify(negSrc)}`);
+  log(`── cshl-query-pairs ── train ${counts.train} val ${counts.val} test ${counts.test} · heldout ${counts.held} · families ${JSON.stringify(byFamily)} · negatives ${JSON.stringify(negSrc)} · ${unembeddable} dropped (rig will not embed the positive)`);
 }
 
 // ── task 4d: freeze the eval holdouts ────────────────────────────────────────
@@ -430,10 +470,10 @@ async function freeze() {
   // where it is written.
   const HUMAN = new Set(["MESH", "AUTHORKW"]);
   const picked = {
-    retrieval: (await takeLowest(`${EVAL}/rxiv-query-pairs.heldout.jsonl`, "retrieval", EVAL_CAP * 4, posSlug))
+    retrieval: (await takeLowest(`${EVAL}/cshl-query-pairs.heldout.jsonl`, "retrieval", EVAL_CAP * 4, posSlug))
       .filter((r) => HUMAN.has(r.meta?.family)).slice(0, EVAL_CAP),
-    classify_mesh: await takeLowest(`${EVAL}/rxiv-mesh-classify.heldout.jsonl`, "mesh", EVAL_CAP, posSlug),
-    classify_category: await takeLowest(`${EVAL}/rxiv-category-classify.heldout.jsonl`, "category", EVAL_CAP, posSlug),
+    classify_mesh: await takeLowest(`${EVAL}/cshl-mesh-classify.heldout.jsonl`, "mesh", EVAL_CAP, posSlug),
+    classify_category: await takeLowest(`${EVAL}/cshl-category-classify.heldout.jsonl`, "category", EVAL_CAP, posSlug),
   };
   const heldTrip = existsSync(`${MINE}/raw/triplets-heldout.json`)
     ? JSON.parse(readFileSync(`${MINE}/raw/triplets-heldout.json`, "utf8")) : [];
@@ -448,7 +488,9 @@ async function freeze() {
   log(`eval freeze: ${need.size} distinct papers to hydrate from ${TEXT}`);
 
   const text = new Map();
-  for await (const r of readJsonl(TEXT)) if (need.has(r.key)) text.set(r.key, { title: r.title, abstract: r.abstract });
+  // Carry the canonical embed string into the frozen files alongside the
+  // display fields: the benchmark must encode exactly what the index encoded.
+  for await (const r of readJsonl(TEXT)) if (need.has(r.key)) text.set(r.key, { title: r.title, abstract: r.abstract, embed_text: r.embed_text });
   const T = (k) => ({ slug: k, ...(text.get(k) || {}) });
 
   const written = {};
@@ -459,18 +501,18 @@ async function freeze() {
     written[name] = rows.length;
   };
 
-  await emitFile("rxiv-eval-v1.retrieval.jsonl", picked.retrieval, (r) => ({
+  await emitFile("cshl-eval-v1.retrieval.jsonl", picked.retrieval, (r) => ({
     query: r.query, positive: T(posSlug(r)),
     negatives: (r.negatives || []).map((x) => ({ ...T(x.slug), source: x.source })), meta: r.meta,
   }));
-  await emitFile("rxiv-eval-v1.docdoc.jsonl", picked.docdoc, (t) => ({
+  await emitFile("cshl-eval-v1.docdoc.jsonl", picked.docdoc, (t) => ({
     query: T(t.anchor), positive: T(t.positive),
     negatives: t.negatives.map((x) => ({ ...T(x.slug), source: x.source })), meta: { family: "CITE" },
   }));
-  await emitFile("rxiv-eval-v1.mesh-classify.jsonl", picked.classify_mesh, (r) => ({
+  await emitFile("cshl-eval-v1.mesh-classify.jsonl", picked.classify_mesh, (r) => ({
     ...T(r.slug), labels: r.labels, major_labels: r.major_labels, author_keywords: r.author_keywords, meta: r.meta,
   }));
-  await emitFile("rxiv-eval-v1.category-classify.jsonl", picked.classify_category, (r) => ({
+  await emitFile("cshl-eval-v1.category-classify.jsonl", picked.classify_category, (r) => ({
     ...T(r.slug), label: r.label, meta: r.meta,
   }));
 
@@ -480,7 +522,7 @@ async function freeze() {
   // never be mistaken for the benchmark.
   const authorized = has("--i-have-brendans-go");
   const manifest = {
-    name: "rxiv-eval-v1",
+    name: "cshl-eval-v1",
     DRY_RUN: authorized ? undefined : true,
     status: authorized ? "FROZEN" : "DRY RUN — not the benchmark. Freeze needs Brendan's go (see LANE-MINE gates).",
     frozen_at: new Date().toISOString(),
@@ -493,6 +535,12 @@ async function freeze() {
       eval_cap: EVAL_CAP,
     },
     text_cap_chars: TEXT_CAP,
+    embed_recipe: {
+      source_of_truth: "scripts/embed-nsr/worker.mjs:94",
+      sql: `left(trim(coalesce(title,'') || E'\\n\\n' || coalesce(abstract,'')), ${TEXT_CAP})`,
+      field: "embed_text",
+      note: "Anything that feeds a model must consume embed_text. `title` and `abstract` are display fields; the cap applies to the CONCATENATION, not the abstract alone. Papers failing the rig's >=20 non-whitespace-char predicate get no embedding and are excluded as positives.",
+    },
     // Scoring contract (lead directive, 2026-08-19). Encoded here rather than
     // left in prose so the harness reads it instead of a human remembering it.
     scoring: {
@@ -516,7 +564,7 @@ async function freeze() {
   writeFileSync(`${EVAL}/manifest.json`, JSON.stringify(manifest, null, 2));
   const fam = {};
   for (const r of picked.retrieval) fam[r.meta?.family ?? "?"] = (fam[r.meta?.family ?? "?"] || 0) + 1;
-  log(`── rxiv-eval-v1 ${authorized ? "FROZEN" : "DRY RUN (not the benchmark — needs Brendan's go)"} · cap ${EVAL_CAP}/family ──`);
+  log(`── cshl-eval-v1 ${authorized ? "FROZEN" : "DRY RUN (not the benchmark — needs Brendan's go)"} · cap ${EVAL_CAP}/family ──`);
   log(`  retrieval by family: ${JSON.stringify(fam)}  · human-origin only (EXTRACT/SYNTH are training-only)`);
   for (const [f, m] of Object.entries(manifest.files)) {
     log(`  ${f.padEnd(38)} ${String(m.rows).padStart(7)} rows  ${human(m.bytes).padStart(9)}  sha256 ${m.sha256.slice(0, 16)}…`);
@@ -535,10 +583,10 @@ async function verify() {
 
   const sets = {};
   const files = [
-    ["rxiv-triplets", ["train", "val", "test"]],
-    ["rxiv-query-pairs", ["train", "val", "test"]],
-    ["rxiv-category-classify", ["train", "val", "test"]],
-    ["rxiv-mesh-classify", ["train", "val", "test"]],
+    ["cshl-triplets", ["train", "val", "test"]],
+    ["cshl-query-pairs", ["train", "val", "test"]],
+    ["cshl-category-classify", ["train", "val", "test"]],
+    ["cshl-mesh-classify", ["train", "val", "test"]],
   ];
 
   log("── split integrity ──");
@@ -558,7 +606,7 @@ async function verify() {
         const negs = (r.negatives || []).map((x) => x.slug);
         if (negs.includes(k)) selfNeg++;                  // query is its own distractor
         if (r.positive?.slug && negs.includes(r.positive.slug)) posInNeg++;
-        if (base === "rxiv-query-pairs" && !["MESH", "AUTHORKW", "EXTRACT", "SYNTH"].includes(r.meta?.family)) badFamily++;
+        if (base === "cshl-query-pairs" && !["MESH", "AUTHORKW", "EXTRACT", "SYNTH"].includes(r.meta?.family)) badFamily++;
       }
       sets[`${base}.${sp}`] = keys;
       log(`  ${(base + "." + sp).padEnd(34)} ${String(n).padStart(8)} records, ${String(keys.size).padStart(7)} distinct query papers`);
@@ -579,7 +627,7 @@ async function verify() {
   log("── benchmark isolation ──");
   const evalKeys = new Set();
   let evalFam = {};
-  for (const f of ["rxiv-eval-v1.retrieval.jsonl", "rxiv-eval-v1.docdoc.jsonl", "rxiv-eval-v1.mesh-classify.jsonl", "rxiv-eval-v1.category-classify.jsonl"]) {
+  for (const f of ["cshl-eval-v1.retrieval.jsonl", "cshl-eval-v1.docdoc.jsonl", "cshl-eval-v1.mesh-classify.jsonl", "cshl-eval-v1.category-classify.jsonl"]) {
     const path = `${EVAL}/${f}`;
     if (!existsSync(path)) continue;
     let n = 0, noText = 0;
@@ -587,7 +635,7 @@ async function verify() {
       n++;
       const k = qslug(r);
       if (k) evalKeys.add(k);
-      if (f.startsWith("rxiv-eval-v1.retrieval")) evalFam[r.meta?.family ?? "?"] = (evalFam[r.meta?.family ?? "?"] || 0) + 1;
+      if (f.startsWith("cshl-eval-v1.retrieval")) evalFam[r.meta?.family ?? "?"] = (evalFam[r.meta?.family ?? "?"] || 0) + 1;
       const t = r.positive ?? r;
       if (!t.title && !t.abstract) noText++;              // the benchmark must be self-contained
     }
@@ -600,6 +648,42 @@ async function verify() {
   let crossover = 0;
   for (const [name, keys] of Object.entries(sets)) for (const k of keys) if (evalKeys.has(k)) crossover++;
   ok(crossover === 0, `no benchmark query paper appears as a training query anywhere (found ${crossover})`);
+
+  // ── the seam guard ────────────────────────────────────────────────────────
+  // Recompute the rig's expression in the database and compare md5s against
+  // what we wrote. This is the check that would have caught the cap-scope drift
+  // on its own instead of needing two lanes to diff their source by hand — and
+  // md5 is the right comparison because md5-of-the-exact-string is literally
+  // what worker.mjs stores as text_hash.
+  log("── embed-recipe seam (vs scripts/eval/recipe.mjs → scripts/embed-nsr/worker.mjs) ──");
+  try { await assertWorkerMatches(); ok(true, "the box-side worker literal still matches the shared recipe"); }
+  catch (e) { ok(false, `RECIPE DRIFT: ${e.message}`); }
+  {
+    const sample = [];
+    for await (const r of readJsonl(TEXT)) {
+      if (h32(`seamcheck:${r.key}`) < 0.002 && sample.length < 400) sample.push(r);
+      if (sample.length >= 400) break;
+    }
+    if (!sample.length) log("  (no corpus-text.jsonl — skipped)");
+    else {
+      const keys = sample.map((r) => `'${r.key.replace(/'/g, "''")}'`).join(",");
+      const rows = await psqlRows(
+        `SELECT key_number, md5(left(trim(coalesce(title,'') || E'\n\n' || coalesce(abstract,'')), ${TEXT_CAP}))
+           FROM preprints WHERE key_number IN (${keys});`
+      );
+      const dbHash = new Map(rows.map(([k, h]) => [k, h]));
+      let checked = 0, mismatch = 0, missingField = 0;
+      for (const r of sample) {
+        if (typeof r.embed_text !== "string") { missingField++; continue; }
+        const want = dbHash.get(r.key);
+        if (!want) continue;
+        checked++;
+        if (createHash("md5").update(r.embed_text).digest("hex") !== want) mismatch++;
+      }
+      ok(missingField === 0, `every sampled row carries an embed_text field (${missingField} without)`);
+      ok(checked > 0 && mismatch === 0, `${checked} sampled embed_text values are byte-identical to the shared recipe's output (${mismatch} mismatches)`);
+    }
+  }
 
   log("── manifest ──");
   const mp = `${EVAL}/manifest.json`;

@@ -2,7 +2,7 @@
 # scripts/mine/phase2.sh — the whole Phase-2 harvest + assembly, in order.
 #
 #   scripts/mine/phase2.sh                     # harvest + assemble, eval stays a DRY RUN
-#   scripts/mine/phase2.sh --freeze            # ... and stamp rxiv-eval-v1 FROZEN
+#   scripts/mine/phase2.sh --freeze            # ... and stamp cshl-eval-v1 FROZEN
 #
 # Every step is resumable, so a rerun after any failure picks up where it
 # stopped rather than re-spending. The order is load-bearing: the text sidecar
@@ -59,7 +59,7 @@ step "7/7 freeze + verify"
 if [ "${1:-}" = "--freeze" ]; then
   timed $RUN scripts/mine/assemble.mjs --eval --verify --i-have-brendans-go
 else
-  echo "eval left as a DRY RUN — pass --freeze to stamp rxiv-eval-v1 FROZEN" | tee -a "$LOG"
+  echo "eval left as a DRY RUN — pass --freeze to stamp cshl-eval-v1 FROZEN" | tee -a "$LOG"
   timed $RUN scripts/mine/assemble.mjs --eval --verify
 fi
 
