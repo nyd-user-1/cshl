@@ -1,5 +1,5 @@
 import { TexText } from "./TexText";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { ThumbsUp, ThumbsDown, Copy, Check, BookOpen, ExternalLink, GraduationCap, FileText } from "lucide-react";
 import { toast } from "sonner";
 import type { MessageSources } from "@/hooks/useChat";
@@ -30,15 +30,40 @@ export function ChatResponseFooter({
 
   const { data: paperData } = usePaperLookup(pdfUrl);
 
-  // Our own /api/pdf proxy wins when present: it is same-origin and therefore always
-  // frameable. Preferring S2 here would be a trap — its open-access URL for a preprint
-  // usually points straight back at bioRxiv/medRxiv, which send
-  // `x-frame-options: SAMEORIGIN` and render as a silent blank panel rather than an error.
-  const proxyPdfUrl = pdfUrl && pdfUrl.startsWith("/api/pdf") ? pdfUrl : undefined;
-  const effectivePdfUrl =
-    proxyPdfUrl ??
+  // Preprints resolve through /api/pdf, which returns the canonical PDF URL plus a
+  // Google-viewer URL — the same technique the sibling `policy` project uses for bill
+  // PDFs. We never fetch the PDF ourselves: bioRxiv/medRxiv sit behind bot protection
+  // that answers any non-browser client with 429, so a server-side proxy cannot work.
+  // Google's fetcher is not blocked, and its viewer is frameable.
+  const [preprintPdf, setPreprintPdf] = useState<{ url: string; viewerUrl: string } | null>(null);
+  const isPreprintRef = Boolean(pdfUrl && pdfUrl.startsWith("/api/pdf"));
+
+  useEffect(() => {
+    if (!isPreprintRef || !pdfUrl) return setPreprintPdf(null);
+    let cancelled = false;
+    fetch(pdfUrl)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => {
+        if (!cancelled && d?.viewerUrl) setPreprintPdf({ url: d.url, viewerUrl: d.viewerUrl });
+      })
+      .catch(() => {
+        if (!cancelled) setPreprintPdf(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pdfUrl, isPreprintRef]);
+
+  // What the iframe loads.
+  const frameUrl =
+    preprintPdf?.viewerUrl ??
     paperData?.openAccessPdfUrl ??
-    (pdfUrl && pdfUrl.toLowerCase().endsWith(".pdf") ? pdfUrl : undefined);
+    (pdfUrl && !isPreprintRef && pdfUrl.toLowerCase().endsWith(".pdf") ? pdfUrl : undefined);
+  // What "Open in new tab" points at — the real PDF, never the viewer wrapper.
+  const effectivePdfUrl =
+    preprintPdf?.url ??
+    paperData?.openAccessPdfUrl ??
+    (pdfUrl && !isPreprintRef && pdfUrl.toLowerCase().endsWith(".pdf") ? pdfUrl : undefined);
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(content);
@@ -290,12 +315,12 @@ export function ChatResponseFooter({
       )}
 
       {/* Inline PDF viewer */}
-      {pdfOpen && effectivePdfUrl && (
+      {pdfOpen && frameUrl && (
         <div ref={pdfRef} className="mt-2 border rounded-lg overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
           <div className="flex items-center justify-between px-3 py-2 bg-muted/40 border-b">
             <span className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
               <FileText className="h-3 w-3" />
-              {proxyPdfUrl ? "Preprint PDF" : paperData ? "Paper PDF" : "Report PDF"}
+              {preprintPdf ? "Preprint PDF" : paperData ? "Paper PDF" : "Report PDF"}
             </span>
             <a
               href={effectivePdfUrl}
@@ -308,8 +333,8 @@ export function ChatResponseFooter({
             </a>
           </div>
           <iframe
-            src={`${effectivePdfUrl}#navpanes=0&view=FitH`}
-            title={paperData ? "Paper PDF" : "ENDF Report PDF"}
+            src={preprintPdf ? frameUrl! : `${frameUrl}#navpanes=0&view=FitH`}
+            title={preprintPdf ? "Preprint PDF" : paperData ? "Paper PDF" : "Report PDF"}
             className="w-full h-[50vh] md:h-[600px] bg-background"
           />
         </div>
