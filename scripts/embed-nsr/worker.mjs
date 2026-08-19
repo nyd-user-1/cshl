@@ -8,7 +8,7 @@
 //     built from them once at startup instead of being hardcoded to nsr.
 //   - the upsert writes `model` explicitly (the sidecar has a model column and
 //     a fine-tuned run must not silently masquerade as stock bge-m3).
-//   - BOUNDS_NSR -> BOUNDS_KEYS.
+//   - BOUNDS_NSR -> BOUNDS_KEYS; DIM knob (768-d baseline arms reuse this rig).
 //   - CHUNK defaults to 64, not 128: rxiv inputs are ~4x longer than NSR's
 //     (measured mean 1,754 chars at cap 2000 / 2,034 at cap 4000 vs NSR's
 //     mostly title-only rows), so 128 long texts per TEI call would push a
@@ -18,8 +18,10 @@
 // LANES, PAGE, CHUNK, TEI url.
 // Resume-safe by construction: claims come from preprints LEFT JOIN
 // preprint_embeddings WHERE e.key_number IS NULL — done rows never re-claim.
-import pg from 'pg'
 import { createHash } from 'crypto'
+// `pg` is installed by user-data on the GPU box, not in this repo — so import it
+// lazily. That keeps DRY_SQL=1 (below) runnable from the laptop, which is the
+// only way to read this worker's SQL without paying for a boot.
 
 const PART = Number(process.env.PART ?? 0)
 const PARTS = Number(process.env.PARTS ?? 1)
@@ -33,6 +35,19 @@ const TABLE = process.env.TABLE ?? 'preprints'
 const EMB_TABLE = process.env.EMB_TABLE ?? 'preprint_embeddings'
 const KEY = process.env.KEY ?? 'key_number'
 const EMB_MODEL = process.env.EMB_MODEL ?? 'bge-m3'
+// Baseline arms are not all 1024-d: MedCPT / SPECTER2 / SciNCL are 768. The same
+// rig embeds the corpus for every eval arm, so the dimension is a knob.
+// RECLAIM_STALE=1 also claims rows whose stored text_hash no longer matches the
+// current recipe. The sidecar's ON DELETE CASCADE handles a paper being REMOVED;
+// nothing handles a paper being REVISED — a v2 that rewrites the abstract keeps
+// its v1 vector, and text_hash is the only thing that can see it. Run this after
+// any version refresh, or after a CAP change.
+const RECLAIM_STALE = !!process.env.RECLAIM_STALE
+const STALE_PRED = RECLAIM_STALE
+  ? ` OR e.text_hash <> md5(left(trim(coalesce(p.title,'') || E'\\n\\n' || coalesce(p.abstract,'')), ${CAP}))`
+  : ''
+const DIM = Number(process.env.DIM ?? 1024)
+if (!Number.isInteger(DIM) || DIM < 1 || DIM > 16000) throw new Error(`DIM=${process.env.DIM} is not a plausible vector dimension`)
 
 // Identifiers come from the launcher, not from user input, but they are still
 // interpolated into SQL — so validate their shape rather than trusting them.
@@ -46,6 +61,7 @@ const B = (env) => (process.env[env] || '').split(',').filter(Boolean)
 // measured what happens when a big unnest write flips the planner: turn seq
 // scans off.
 async function mkClient() {
+  const pg = (await import('pg')).default
   const c = new pg.Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } })
   // Background socket errors must not crash the process (Neon law: an
   // unhandled 'error' once killed a box silently); the lane's next query
@@ -67,14 +83,22 @@ const JOB = {
   page: `SELECT p.${KEY} AS id,
                 left(trim(coalesce(p.title,'') || E'\n\n' || coalesce(p.abstract,'')), ${CAP}) AS text
            FROM ${TABLE} p LEFT JOIN ${EMB_TABLE} e ON e.${KEY} = p.${KEY}
-          WHERE e.${KEY} IS NULL AND p.${KEY} > $1 AND ($3::text IS NULL OR p.${KEY} <= $3)
+          WHERE (e.${KEY} IS NULL${STALE_PRED}) AND p.${KEY} > $1 AND ($3::text IS NULL OR p.${KEY} <= $3)
             AND length(regexp_replace(coalesce(p.title,'') || coalesce(p.abstract,''), '\\s+', '', 'g')) >= 20
           ORDER BY p.${KEY} LIMIT $2`,
   upd: `INSERT INTO ${EMB_TABLE} (${KEY}, embedding, model, text_hash)
-        SELECT unnest($1::text[]), unnest($2::text[])::vector(1024), $4::text, unnest($3::text[])
+        SELECT unnest($1::text[]), unnest($2::text[])::vector(${DIM}), $4::text, unnest($3::text[])
             ON CONFLICT (${KEY}) DO UPDATE
            SET embedding = EXCLUDED.embedding, model = EXCLUDED.model,
                text_hash = EXCLUDED.text_hash, embedded_at = now()`,
+}
+
+// DRY_SQL=1 prints the two statements this worker will run and exits. The rig
+// only ever runs on a box you have to SSM into, so being able to see its SQL
+// from the laptop is the difference between a 30-second check and a $1 boot.
+if (process.env.DRY_SQL) {
+  console.log('--- page ---\n' + JOB.page + '\n--- upsert ---\n' + JOB.upd)
+  process.exit(0)
 }
 
 // ── embed one chunk via TEI, with one retry then per-item fallback ───────────
@@ -130,9 +154,10 @@ const t0 = Date.now()
 // LO_CAP floors lane 0 — without it a bounded rehearsal silently claims the
 // entire corpus below its first boundary key (learned the hard way on NSR,
 // 2026-08-16: the "3,000-row" rehearsal swept 232,802 rows because lane 0
-// started at ''). It matters MORE here: rxiv's pre-2019 keys are bare
-// integers ('001891', '19000109') that sort below every dotted key, so an
-// unfloored lane 0 sweeps the whole legacy tail.
+// started at ''). rxiv makes it easier to get wrong, not harder: keys come in
+// two shapes (dotted '2024.01.02.123456' and bare legacy '229468'/'001891')
+// which INTERLEAVE under lexical ordering, so a key prefix does not carve out
+// a clean date slice and an unfloored lane 0 sweeps everything below it.
 const laneRange = (bounds, lane) => ({
   lo: lane === 0 ? (process.env.LO_CAP ?? '') : bounds[lane - 1],
   hi: lane >= bounds.length ? null : bounds[lane],

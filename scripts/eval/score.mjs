@@ -1,52 +1,69 @@
 #!/usr/bin/env node
-// score.mjs — LANE-EVAL Phase 3. Scores frozen KW/EX queries against the
-// 277,068-vector universe: Arm A (production FTS, sql/19 weighted path),
-// Arm B (bge-m3 dense, HNSW), RRF fusion (free extra ordering), and Arm C
-// (Cohere embed-v4 via Bedrock, run only if both sides are embedded).
-// One JSON result file per arm in data/eval/nsr-eval-v1/results/, written as
-// each arm finishes — a death costs one arm, not the run.
+// score.mjs — score the frozen rxiv benchmark. Ported from the NSR scorer at
+// 8c1b05b (LANE-EVAL Phase 3).
+//
+// CHANGED vs the NSR original:
+//   - NSR hardcoded five arms as five near-identical functions (runArmA..D,
+//     each with its own query-embedding loader and its own table name). That
+//     is exactly the shape that makes "add MedCPT" a code change. Replaced
+//     with an ARM REGISTRY: every dense baseline is a table name + a dimension
+//     + a query-embedding file, and `ARMS=fts,bge-m3,medcpt,specter2,scincl`
+//     is the whole interface. Adding an arm is one registry entry.
+//   - RRF and rerank are now COMPOSITE arms parsed from the flag
+//     (`rrf:fts+bge-m3`, `rerank:bge-m3@http://ip:8081`), not bespoke code.
+//   - per-arm vector dimension: MedCPT / SPECTER2 / SciNCL are 768-d, bge-m3
+//     is 1024-d. NSR could assume one dimension; we cannot.
+//   - query embeddings live in data/eval/<v>/qemb/<arm>.jsonl instead of
+//     columns on an eval table — sql/ is not this lane's, and a per-arm column
+//     for every baseline is the wrong shape anyway.
+//   - segments are rxiv's (server / era / published / abstract length).
+//
+// Env: DATABASE_URL_UNPOOLED, ARMS, EVAL_VERSION, LIMIT, TOPK.
 import { neon } from '@neondatabase/serverless'
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-const ROOT = join(process.cwd(), 'data/eval/nsr-eval-v1')
-const RESULTS = join(ROOT, 'results')
-mkdirSync(RESULTS, { recursive: true })
-const ARMS = (process.env.ARMS || 'A,B,RRF').split(',').map((s) => s.trim())
-const TOPK = 50
-const CONC = 15
-
-function mkClient() {
-  return neon(process.env.DATABASE_URL_UNPOOLED)
+for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
+  const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
+  if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '')
 }
 
-// ── small concurrency pool ──────────────────────────────────────────────
+const VERSION = process.env.EVAL_VERSION ?? 'rxiv-eval-v1'
+const ROOT = join(process.cwd(), 'data/eval', VERSION)
+const RESULTS = join(ROOT, 'results')
+const QEMB = join(ROOT, 'qemb')
+mkdirSync(RESULTS, { recursive: true })
+const TOPK = Number(process.env.TOPK ?? 50)
+const CONC = Number(process.env.CONC ?? 12)
+
+// ── the arm registry. Adding a baseline is one line here. ────────────────────
+export const REGISTRY = {
+  fts:        { kind: 'fts' },
+  'bge-m3':   { kind: 'dense', table: 'preprint_embeddings',           dim: 1024, doc: 'BAAI/bge-m3',                   query: 'BAAI/bge-m3' },
+  rxiv:       { kind: 'dense', table: 'preprint_embeddings_rxiv',      dim: 1024, doc: 'NYSgpt/rxiv-encoder-bge-m3',    query: 'NYSgpt/rxiv-encoder-bge-m3' },
+  medcpt:     { kind: 'dense', table: 'preprint_embeddings_medcpt',    dim: 768,  doc: 'ncbi/MedCPT-Article-Encoder',   query: 'ncbi/MedCPT-Query-Encoder' },
+  specter2:   { kind: 'dense', table: 'preprint_embeddings_specter2',  dim: 768,  doc: 'allenai/specter2_base',         query: 'allenai/specter2_base' },
+  scincl:     { kind: 'dense', table: 'preprint_embeddings_scincl',    dim: 768,  doc: 'malteos/scincl',                query: 'malteos/scincl' },
+}
+
+const sql = neon(process.env.DATABASE_URL_UNPOOLED)
+const q = (t, p = []) => sql.query(t, p)
+
 async function pool(items, conc, fn) {
   const out = new Array(items.length)
   let i = 0
-  async function worker() {
-    for (;;) {
-      const idx = i++
-      if (idx >= items.length) return
-      out[idx] = await fn(items[idx], idx)
-    }
-  }
-  await Promise.all(Array.from({ length: conc }, worker))
+  await Promise.all(Array.from({ length: conc }, async () => {
+    for (;;) { const idx = i++; if (idx >= items.length) return; out[idx] = await fn(items[idx], idx) }
+  }))
   return out
 }
 async function withRetry(fn, tries = 4) {
   for (let a = 1; ; a++) {
-    try { return await fn() } catch (e) {
-      if (a >= tries) throw e
-      await new Promise((r) => setTimeout(r, 300 * a))
-    }
+    try { return await fn() } catch (e) { if (a >= tries) throw e; await new Promise((r) => setTimeout(r, 300 * a)) }
   }
 }
 
-// ── load frozen benchmark ───────────────────────────────────────────────
-function loadQueries() {
-  return readFileSync(join(ROOT, 'queries.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
-}
+const loadQueries = () => readFileSync(join(ROOT, 'queries.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
 function loadQrels() {
   const map = new Map()
   for (const line of readFileSync(join(ROOT, 'qrels.tsv'), 'utf8').split('\n').filter(Boolean)) {
@@ -57,388 +74,202 @@ function loadQrels() {
   return map
 }
 
-// ── metrics ──────────────────────────────────────────────────────────────
+// ── metrics ──────────────────────────────────────────────────────────────────
 function metricsFor(ranked, positives) {
-  const firstRank = (() => {
-    for (let i = 0; i < ranked.length; i++) if (positives.has(ranked[i])) return i + 1
-    return Infinity
-  })()
+  let firstRank = Infinity
+  for (let i = 0; i < ranked.length; i++) if (positives.has(ranked[i])) { firstRank = i + 1; break }
   const recallAt = (k) => (ranked.slice(0, k).some((id) => positives.has(id)) ? 1 : 0)
-  const mrr = Number.isFinite(firstRank) ? 1 / firstRank : 0
   const idealRel = Math.min(positives.size, 10)
   const idcg = Array.from({ length: idealRel }, (_, i) => 1 / Math.log2(i + 2)).reduce((a, b) => a + b, 0)
   const dcg = ranked.slice(0, 10).reduce((s, id, i) => s + (positives.has(id) ? 1 / Math.log2(i + 2) : 0), 0)
-  const ndcg10 = idcg > 0 ? dcg / idcg : 0
-  return { r1: recallAt(1), r5: recallAt(5), r10: recallAt(10), r50: recallAt(50), mrr, ndcg10 }
+  return {
+    r1: recallAt(1), r5: recallAt(5), r10: recallAt(10), r50: recallAt(50),
+    mrr: Number.isFinite(firstRank) ? 1 / firstRank : 0,
+    ndcg10: idcg > 0 ? dcg / idcg : 0,
+  }
 }
-
-function segmentsFor(q) {
-  return ['blended', `era:${q.era}`, `richness:${q.richness}`, `reftype:${q.reftype}`]
-}
+export const era = (y) => (y == null ? 'unknown' : y < 2020 ? 'pre2020' : y < 2023 ? '2020-2022' : '2023+')
+export const lenBand = (n) => (n < 1000 ? 'short' : n < 2500 ? 'medium' : 'long')
+const segmentsFor = (q) => ['blended', `server:${q.server}`, `era:${era(q.pub_year)}`, `published:${q.published ? 'yes' : 'no'}`, `abstract:${lenBand(q.abs_len)}`]
 
 function aggregate(perQuery, queries) {
-  // perQuery: qid -> metrics. Returns { family -> { segment -> {metric: mean, n} } }
   const byFamily = {}
-  for (const q of queries) {
-    const m = perQuery.get(q.qid)
+  const M = ['r1', 'r5', 'r10', 'r50', 'mrr', 'ndcg10']
+  for (const qq of queries) {
+    const m = perQuery.get(qq.qid)
     if (!m) continue
-    for (const family of [q.family]) {
-      byFamily[family] ??= {}
-      for (const seg of segmentsFor(q)) {
-        byFamily[family][seg] ??= { n: 0, r1: 0, r5: 0, r10: 0, r50: 0, mrr: 0, ndcg10: 0 }
-        const acc = byFamily[family][seg]
-        acc.n++
-        acc.r1 += m.r1; acc.r5 += m.r5; acc.r10 += m.r10; acc.r50 += m.r50
-        acc.mrr += m.mrr; acc.ndcg10 += m.ndcg10
-      }
+    byFamily[qq.family] ??= {}
+    for (const seg of segmentsFor(qq)) {
+      byFamily[qq.family][seg] ??= Object.fromEntries([['n', 0], ...M.map((k) => [k, 0])])
+      const acc = byFamily[qq.family][seg]
+      acc.n++
+      for (const k of M) acc[k] += m[k]
     }
   }
-  for (const family of Object.keys(byFamily)) {
-    for (const seg of Object.keys(byFamily[family])) {
-      const acc = byFamily[family][seg]
-      for (const k of ['r1', 'r5', 'r10', 'r50', 'mrr', 'ndcg10']) acc[k] = +(acc[k] / acc.n).toFixed(4)
-    }
+  for (const f of Object.keys(byFamily)) for (const s of Object.keys(byFamily[f])) {
+    const acc = byFamily[f][s]
+    for (const k of M) acc[k] = +(acc[k] / acc.n).toFixed(4)
   }
   return byFamily
 }
+const percentile = (arr, p) => { const s = [...arr].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))] : null }
 
-function percentile(arr, p) {
-  const s = [...arr].sort((a, b) => a - b)
-  if (!s.length) return null
-  const idx = Math.min(s.length - 1, Math.floor((p / 100) * s.length))
-  return s[idx]
-}
-
-// ── Arm A: production FTS (sql/19 weighted path), restricted to the
-// 277,068-vector universe for cross-arm comparability. ─────────────────────
-async function runArmA(sql, queries) {
-  console.log('=== Arm A: FTS ===')
+// ── arm runners ──────────────────────────────────────────────────────────────
+// FTS: the production weighted path (preprints.fts), restricted to the arm
+// universe only if a dense table is named — otherwise the whole corpus.
+async function runFts(queries) {
   let fallbacks = 0
   const latencies = []
   const perQuery = new Map()
-  await pool(queries, CONC, async (q) => {
+  await pool(queries, CONC, async (qq) => {
     const t0 = Date.now()
-    let rows = await withRetry(() => sql.query(
-      `SELECT n.key_number
-         FROM nsr n JOIN nsr_embeddings e ON e.key_number = n.key_number
-        WHERE n.fts @@ websearch_to_tsquery('english', $1)
-        ORDER BY ts_rank_cd(n.fts, websearch_to_tsquery('english', $1)) DESC
-        LIMIT ${TOPK}`,
-      [q.text]
-    ))
-    if (rows.length === 0) {
-      const [{ is_empty }] = await withRetry(() => sql.query(
-        `SELECT (websearch_to_tsquery('english', $1) = ''::tsquery) AS is_empty`, [q.text]
-      ))
+    let rows = await withRetry(() => q(
+      `SELECT key_number FROM preprints
+        WHERE fts @@ websearch_to_tsquery('english', $1)
+        ORDER BY ts_rank_cd(fts, websearch_to_tsquery('english', $1)) DESC LIMIT ${TOPK}`, [qq.text]))
+    if (!rows.length) {
+      const [{ is_empty }] = await withRetry(() => q(`SELECT (websearch_to_tsquery('english', $1) = ''::tsquery) AS is_empty`, [qq.text]))
       if (is_empty) {
         fallbacks++
-        const words = q.text.split(/\s+/).filter((w) => w.length > 2).slice(0, 24).join(' ')
-        rows = await withRetry(() => sql.query(
-          `SELECT n.key_number
-             FROM nsr n JOIN nsr_embeddings e ON e.key_number = n.key_number
-            WHERE n.fts @@ plainto_tsquery('english', $1)
-            ORDER BY ts_rank_cd(n.fts, plainto_tsquery('english', $1)) DESC
-            LIMIT ${TOPK}`,
-          [words]
-        ))
+        const words = qq.text.split(/\s+/).filter((w) => w.length > 2).slice(0, 24).join(' ')
+        rows = await withRetry(() => q(
+          `SELECT key_number FROM preprints WHERE fts @@ plainto_tsquery('english', $1)
+            ORDER BY ts_rank_cd(fts, plainto_tsquery('english', $1)) DESC LIMIT ${TOPK}`, [words]))
       }
     }
     latencies.push(Date.now() - t0)
-    perQuery.set(q.qid, { ranked: rows.map((r) => r.key_number) })
+    perQuery.set(qq.qid, rows.map((r) => r.key_number))
   })
-  console.log(`Arm A: websearch-empty fallback used ${fallbacks}/${queries.length} times`)
-  return { perQuery, fallbacks, latencies }
+  console.log(`  fts: websearch-empty fallback used ${fallbacks}/${queries.length}`)
+  return { perQuery, latencies, extra: { fallbacks_used: fallbacks } }
 }
 
-// ── Arm B: bge-m3 dense, HNSW. Query embedding as a bound $1::vector param
-// (never join-sourced — that defeats the index). ───────────────────────────
-async function loadQueryEmbeddings(sql, family) {
+function loadQueryEmbeddings(arm) {
+  const f = join(QEMB, `${arm}.jsonl`)
+  if (!existsSync(f)) throw new Error(`no query embeddings for arm '${arm}' — run scripts/eval/embed-queries.mjs ARM=${arm} first (${f})`)
   const map = new Map()
-  let last = ''
-  for (;;) {
-    const rows = await withRetry(() => sql.query(
-      `SELECT qid, embedding::text AS emb FROM nsr_eval_queries
-        WHERE family = $1 AND qid > $2 AND embedding IS NOT NULL
-        ORDER BY qid LIMIT 2000`,
-      [family, last]
-    ))
-    if (!rows.length) break
-    for (const r of rows) map.set(r.qid, r.emb)
-    last = rows[rows.length - 1].qid
-    if (rows.length < 2000) break
+  for (const l of readFileSync(f, 'utf8').split('\n').filter(Boolean)) {
+    const o = JSON.parse(l)
+    map.set(o.qid, `[${o.v.join(',')}]`)
   }
   return map
 }
 
-async function runArmB(sql, queries) {
-  console.log('=== Arm B: bge-m3 dense (HNSW) ===')
-  const kwEmb = await loadQueryEmbeddings(sql, 'KW')
-  const exEmb = await loadQueryEmbeddings(sql, 'EX')
-  const embFor = (q) => (q.family === 'KW' ? kwEmb : exEmb).get(q.qid)
+async function runDense(arm, queries) {
+  const spec = REGISTRY[arm]
+  const emb = loadQueryEmbeddings(arm)
+  const [{ n: corpusN }] = await q(`SELECT count(*)::int AS n FROM ${spec.table}`)
+  console.log(`  ${arm}: corpus ${corpusN} vectors (dim ${spec.dim}), ${emb.size} query vectors`)
 
-  // Confirm the plan uses the index on the first query.
-  const probe = queries.find((q) => embFor(q))
+  const probe = queries.find((qq) => emb.has(qq.qid))
   if (probe) {
-    const plan = await sql.query(
-      `EXPLAIN SELECT key_number FROM nsr_embeddings ORDER BY embedding <=> $1::vector LIMIT ${TOPK}`,
-      [embFor(probe)]
-    )
-    const planText = plan.map((r) => Object.values(r)[0]).join(' | ')
-    console.log(`Arm B plan check: ${planText.includes('Index Scan') ? 'Index Scan CONFIRMED' : 'WARNING: no Index Scan — ' + planText}`)
+    const plan = await q(`EXPLAIN SELECT key_number FROM ${spec.table} ORDER BY embedding <=> $1::vector LIMIT ${TOPK}`, [emb.get(probe.qid)])
+    const text = plan.map((r) => Object.values(r)[0]).join(' | ')
+    console.log(`  ${arm} plan: ${text.includes('Index Scan') ? 'Index Scan CONFIRMED' : 'WARNING no Index Scan — ' + text}`)
   }
-
   const latencies = []
   const perQuery = new Map()
-  await pool(queries, CONC, async (q) => {
-    const vec = embFor(q)
-    if (!vec) return // no embedding for this query (shouldn't happen post-Phase-2)
+  await pool(queries, CONC, async (qq) => {
+    const v = emb.get(qq.qid)
+    if (!v) return
     const t0 = Date.now()
-    const result = await withRetry(() => sql.transaction([
-      sql.query(`SET LOCAL hnsw.ef_search = 100`),
-      sql.query(`SELECT key_number FROM nsr_embeddings ORDER BY embedding <=> $1::vector LIMIT ${TOPK}`, [vec]),
+    const res = await withRetry(() => sql.transaction([
+      sql.query(`SET LOCAL hnsw.ef_search = ${process.env.EF_SEARCH ?? 100}`),
+      sql.query(`SELECT key_number FROM ${spec.table} ORDER BY embedding <=> $1::vector LIMIT ${TOPK}`, [v]),
     ]))
-    const rows = result[1]
     latencies.push(Date.now() - t0)
-    perQuery.set(q.qid, { ranked: rows.map((r) => r.key_number) })
+    perQuery.set(qq.qid, res[1].map((r) => r.key_number))
   })
-  return { perQuery, latencies }
+  return { perQuery, latencies, extra: { corpus_vectors: corpusN, dim: spec.dim, doc_model: spec.doc, query_model: spec.query } }
 }
 
-// ── Arm D: nsr-encoder-bge-m3 (LANE-TRAIN's fine-tuned candidate), same
-// query/corpus shape as Arm B but against nsr_embeddings_candidate /
-// nsr_eval_queries_candidate. Added here (LANE-EVAL never knew about the
-// candidate table) rather than a separate script, per LANE-TRAIN.md Phase 3
-// ("Score with LANE-EVAL's scripts/eval/score.mjs, arm D"). No run_id filter
-// in the query itself — nsr_embeddings_candidate's PK is key_number only
-// (one row per paper, whichever run wrote it last), so the table's current
-// contents already ARE "the" candidate run; run_id is carried in the result
-// file for provenance, not as a query predicate (a non-indexed extra filter
-// risks the planner skipping the HNSW scan, same trap Arm B guards against).
-async function loadQueryEmbeddingsCandidate(sql) {
-  const map = new Map()
-  let last = ''
-  for (;;) {
-    const rows = await withRetry(() => sql.query(
-      `SELECT qid, embedding::text AS emb FROM nsr_eval_queries_candidate
-        WHERE qid > $1
-        ORDER BY qid LIMIT 2000`,
-      [last]
-    ))
-    if (!rows.length) break
-    for (const r of rows) map.set(r.qid, r.emb)
-    last = rows[rows.length - 1].qid
-    if (rows.length < 2000) break
-  }
-  return map
+const rrf = (lists, k = 60) => {
+  const s = new Map()
+  for (const list of lists) list?.forEach((id, i) => s.set(id, (s.get(id) ?? 0) + 1 / (k + i + 1)))
+  return [...s.entries()].sort((a, b) => b[1] - a[1]).slice(0, TOPK).map(([id]) => id)
 }
 
-async function runArmD(sql, queries) {
-  console.log('=== Arm D: nsr-encoder-bge-m3 (candidate, HNSW) ===')
-  const emb = await loadQueryEmbeddingsCandidate(sql)
-  const embFor = (q) => emb.get(q.qid)
-
-  const probe = queries.find((q) => embFor(q))
-  if (probe) {
-    const plan = await sql.query(
-      `EXPLAIN SELECT key_number FROM nsr_embeddings_candidate ORDER BY embedding <=> $1::vector LIMIT ${TOPK}`,
-      [embFor(probe)]
-    )
-    const planText = plan.map((r) => Object.values(r)[0]).join(' | ')
-    console.log(`Arm D plan check: ${planText.includes('Index Scan') ? 'Index Scan CONFIRMED' : 'WARNING: no Index Scan — ' + planText}`)
-  }
-
+// rerank:<base>@<tei-base-url> — cross-encoder over the base arm's top-K.
+async function runRerank(baseRanked, queries, url, key, poolSize) {
+  const perQuery = new Map()
   const latencies = []
-  const perQuery = new Map()
-  await pool(queries, CONC, async (q) => {
-    const vec = embFor(q)
-    if (!vec) return
+  const docs = new Map()
+  const need = [...new Set([...baseRanked.values()].flatMap((r) => r.slice(0, poolSize)))]
+  for (let i = 0; i < need.length; i += 5000) {
+    const rows = await q(`SELECT key_number, left(trim(coalesce(title,'') || E'\n\n' || coalesce(abstract,'')), 900) AS t FROM preprints WHERE key_number = ANY($1)`, [need.slice(i, i + 5000)])
+    for (const r of rows) docs.set(r.key_number, r.t)
+  }
+  await pool(queries, 4, async (qq) => {
+    const base = baseRanked.get(qq.qid)
+    if (!base?.length) return
+    const cand = base.slice(0, poolSize)
     const t0 = Date.now()
-    const result = await withRetry(() => sql.transaction([
-      sql.query(`SET LOCAL hnsw.ef_search = 100`),
-      sql.query(`SELECT key_number FROM nsr_embeddings_candidate ORDER BY embedding <=> $1::vector LIMIT ${TOPK}`, [vec]),
-    ]))
-    const rows = result[1]
+    const r = await fetch(`${url.replace(/\/$/, '')}/rerank`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) },
+      body: JSON.stringify({ query: qq.text.slice(0, 600), texts: cand.map((k2) => docs.get(k2) ?? ''), truncate: true }),
+    })
+    if (!r.ok) throw new Error(`rerank ${r.status}: ${(await r.text()).slice(0, 200)}`)
+    const scored = await r.json()
+    const order = scored.sort((a, b) => b.score - a.score).map((s) => cand[s.index])
     latencies.push(Date.now() - t0)
-    perQuery.set(q.qid, { ranked: rows.map((r) => r.key_number) })
+    perQuery.set(qq.qid, [...order, ...base.slice(poolSize)].slice(0, TOPK))
   })
-  return { perQuery, latencies }
+  return { perQuery, latencies, extra: { pool: poolSize, endpoint: url.replace(/\/\/.*@/, '//') } }
 }
 
-// ── Arm C: Cohere embed-v4 via Bedrock, same-space corpus + queries. ──────
-async function runArmC(sql, queries) {
-  console.log('=== Arm C: Cohere embed-v4 (Bedrock) ===')
-  const kwEmb = await loadQueryEmbeddingsCommercial(sql, 'KW')
-  const exEmb = await loadQueryEmbeddingsCommercial(sql, 'EX')
-  const embFor = (q) => (q.family === 'KW' ? kwEmb : exEmb).get(q.qid)
-  const latencies = []
-  const perQuery = new Map()
-  await pool(queries, CONC, async (q) => {
-    const vec = embFor(q)
-    if (!vec) return
-    const t0 = Date.now()
-    const rows = await withRetry(() => sql.query(
-      `SELECT key_number FROM nsr_embeddings_commercial ORDER BY embedding <=> $1::vector LIMIT ${TOPK}`,
-      [vec]
-    ))
-    latencies.push(Date.now() - t0)
-    perQuery.set(q.qid, { ranked: rows.map((r) => r.key_number) })
-  })
-  return { perQuery, latencies }
+// ── main ─────────────────────────────────────────────────────────────────────
+let queries = loadQueries()
+if (process.env.LIMIT) {
+  const n = Number(process.env.LIMIT)
+  const byFam = new Map()
+  queries = queries.filter((qq) => { const c = byFam.get(qq.family) ?? 0; if (c >= n) return false; byFam.set(qq.family, c + 1); return true })
 }
-async function loadQueryEmbeddingsCommercial(sql, family) {
-  const map = new Map()
-  let last = ''
-  for (;;) {
-    const rows = await withRetry(() => sql.query(
-      `SELECT qid, embedding_commercial::text AS emb FROM nsr_eval_queries
-        WHERE family = $1 AND qid > $2 AND embedding_commercial IS NOT NULL
-        ORDER BY qid LIMIT 2000`,
-      [family, last]
-    ))
-    if (!rows.length) break
-    for (const r of rows) map.set(r.qid, r.emb)
-    last = rows[rows.length - 1].qid
-    if (rows.length < 2000) break
-  }
-  return map
-}
+const qrels = loadQrels()
+console.log(`${VERSION}: ${queries.length} queries, ${qrels.size} qrels groups`)
 
-// ── RRF fusion (k=60), computed from A+B results already in hand. ─────────
-function runRRF(armA, armB, k = 60) {
-  const perQuery = new Map()
-  for (const [qid, a] of armA.perQuery) {
-    const b = armB.perQuery.get(qid)
-    const scores = new Map()
-    a.ranked.forEach((id, i) => scores.set(id, (scores.get(id) || 0) + 1 / (k + i + 1)))
-    if (b) b.ranked.forEach((id, i) => scores.set(id, (scores.get(id) || 0) + 1 / (k + i + 1)))
-    const ranked = [...scores.entries()].sort((x, y) => y[1] - x[1]).slice(0, TOPK).map(([id]) => id)
-    perQuery.set(qid, { ranked })
-  }
-  return { perQuery }
-}
+const requested = (process.env.ARMS ?? 'fts').split(',').map((s) => s.trim()).filter(Boolean)
+const ranked = new Map() // arm -> Map(qid -> ranked keys)
 
-// ── latency: EXPLAIN ANALYZE on 200 warm queries, server-side ms ──────────
-async function serverLatency(sql, queries, arm, embMapKW, embMapEX) {
-  const sample = queries.slice(0, 200)
-  const times = []
-  for (const q of sample) {
-    let plan
-    if (arm === 'A') {
-      plan = await withRetry(() => sql.query(
-        `EXPLAIN (ANALYZE, FORMAT JSON)
-         SELECT n.key_number FROM nsr n JOIN nsr_embeddings e ON e.key_number = n.key_number
-          WHERE n.fts @@ websearch_to_tsquery('english', $1)
-          ORDER BY ts_rank_cd(n.fts, websearch_to_tsquery('english', $1)) DESC LIMIT ${TOPK}`,
-        [q.text]
-      ))
+for (const arm of requested) {
+  console.log(`=== ${arm} ===`)
+  let res
+  try {
+    if (arm.startsWith('rrf:')) {
+      const parts = arm.slice(4).split('+')
+      const missing = parts.filter((p) => !ranked.has(p))
+      if (missing.length) { console.log(`  skipped — needs ${missing.join(', ')} scored first (put them earlier in ARMS)`); continue }
+      const perQuery = new Map()
+      for (const qq of queries) perQuery.set(qq.qid, rrf(parts.map((p) => ranked.get(p).get(qq.qid))))
+      res = { perQuery, latencies: [], extra: { fused: parts, k: 60 } }
+    } else if (arm.startsWith('rerank:')) {
+      const [base, url] = arm.slice(7).split('@')
+      if (!ranked.has(base)) { console.log(`  skipped — needs ${base} scored first`); continue }
+      res = await runRerank(ranked.get(base), queries, url, process.env.NSR_SERVE_KEY ?? process.env.HF_TOKEN ?? '', Number(process.env.RERANK_POOL ?? 20))
+    } else if (REGISTRY[arm]?.kind === 'fts') {
+      res = await runFts(queries)
+    } else if (REGISTRY[arm]?.kind === 'dense') {
+      res = await runDense(arm, queries)
     } else {
-      const vec = (q.family === 'KW' ? embMapKW : embMapEX).get(q.qid)
-      if (!vec) continue
-      plan = await withRetry(() => sql.query(
-        `EXPLAIN (ANALYZE, FORMAT JSON)
-         SELECT key_number FROM nsr_embeddings ORDER BY embedding <=> $1::vector LIMIT ${TOPK}`,
-        [vec]
-      ))
+      console.log(`  unknown arm '${arm}' — registry has: ${Object.keys(REGISTRY).join(', ')} (+ rrf:A+B, rerank:A@url)`); continue
     }
-    const j = plan[0]?.['QUERY PLAN']
-    const execMs = Array.isArray(j) ? j[0]?.['Execution Time'] : undefined
-    if (typeof execMs === 'number') times.push(execMs)
+  } catch (e) {
+    console.log(`  ${arm} FAILED: ${e.message}`)   // a dead arm costs one arm, not the run
+    continue
   }
-  return { p50: percentile(times, 50), p95: percentile(times, 95), n: times.length }
+  ranked.set(arm, res.perQuery)
+  const perQ = new Map([...res.perQuery].map(([qid, r]) => [qid, metricsFor(r, qrels.get(qid) ?? new Set())]))
+  const out = {
+    arm, version: VERSION, scored_at: new Date().toISOString(),
+    n_queries: res.perQuery.size, topk: TOPK,
+    end_to_end_latency_ms: { p50: percentile(res.latencies, 50), p95: percentile(res.latencies, 95) },
+    ...res.extra,
+    metrics: aggregate(perQ, queries),
+  }
+  writeFileSync(join(RESULTS, `${arm.replace(/[^a-zA-Z0-9._+-]/g, '_')}.json`), JSON.stringify(out, null, 2))
+  for (const [fam, segs] of Object.entries(out.metrics)) {
+    console.log(`  ${fam} blended: R@1 ${segs.blended.r1} R@10 ${segs.blended.r10} nDCG@10 ${segs.blended.ndcg10} (n=${segs.blended.n})`)
+  }
+  console.log(`  wrote results/${arm}.json`)
 }
-
-async function main() {
-  if (!process.env.DATABASE_URL_UNPOOLED) throw new Error('DATABASE_URL_UNPOOLED not set')
-  const sql = mkClient()
-  let queries = loadQueries()
-  if (process.env.LIMIT) {
-    const n = Number(process.env.LIMIT)
-    // Keep both families represented in a smoke test.
-    queries = [...queries.filter((q) => q.family === 'KW').slice(0, n), ...queries.filter((q) => q.family === 'EX').slice(0, n)]
-  }
-  const qrels = loadQrels()
-  console.log(`Loaded ${queries.length} queries, ${qrels.size} qrels groups`)
-
-  const write = (arm, data) => writeFileSync(join(RESULTS, `${arm}.json`), JSON.stringify(data, null, 2))
-
-  let armAResult, armBResult
-  if (ARMS.includes('A')) {
-    armAResult = await runArmA(sql, queries)
-    const perQ = new Map([...armAResult.perQuery].map(([qid, v]) => [qid, metricsFor(v.ranked, qrels.get(qid) || new Set())]))
-    const latA = await serverLatency(sql, queries, 'A')
-    write('A', {
-      arm: 'A-fts', n_queries: armAResult.perQuery.size, fallbacks_used: armAResult.fallbacks,
-      end_to_end_latency_ms: { p50: percentile(armAResult.latencies, 50), p95: percentile(armAResult.latencies, 95) },
-      server_latency_ms_warm200: latA,
-      metrics: aggregate(perQ, queries),
-    })
-    console.log('Wrote results/A.json')
-  }
-
-  if (ARMS.includes('B')) {
-    armBResult = await runArmB(sql, queries)
-    const perQ = new Map([...armBResult.perQuery].map(([qid, v]) => [qid, metricsFor(v.ranked, qrels.get(qid) || new Set())]))
-    const kwEmb = await loadQueryEmbeddings(sql, 'KW')
-    const exEmb = await loadQueryEmbeddings(sql, 'EX')
-    const latB = await serverLatency(sql, queries, 'B', kwEmb, exEmb)
-    write('B', {
-      arm: 'B-dense-bge-m3', n_queries: armBResult.perQuery.size,
-      end_to_end_latency_ms: { p50: percentile(armBResult.latencies, 50), p95: percentile(armBResult.latencies, 95) },
-      server_latency_ms_warm200: latB,
-      metrics: aggregate(perQ, queries),
-    })
-    console.log('Wrote results/B.json')
-  }
-
-  if (ARMS.includes('RRF') && armAResult && armBResult) {
-    const rrf = runRRF(armAResult, armBResult)
-    const perQ = new Map([...rrf.perQuery].map(([qid, v]) => [qid, metricsFor(v.ranked, qrels.get(qid) || new Set())]))
-    write('RRF', { arm: 'RRF-k60-A+B', n_queries: rrf.perQuery.size, metrics: aggregate(perQ, queries) })
-    console.log('Wrote results/RRF.json')
-  }
-
-  let armDResult
-  if (ARMS.includes('D')) {
-    const [{ corpus_n }] = await sql.query(`SELECT count(*)::int AS corpus_n FROM nsr_embeddings_candidate`)
-    const [{ query_n }] = await sql.query(`SELECT count(*)::int AS query_n FROM nsr_eval_queries_candidate`)
-    const [{ run_id }] = await sql.query(`SELECT run_id FROM nsr_embeddings_candidate LIMIT 1`)
-    console.log(`Arm D readiness: run_id=${run_id} corpus=${corpus_n} queries=${query_n}`)
-    armDResult = await runArmD(sql, queries)
-    const perQ = new Map([...armDResult.perQuery].map(([qid, v]) => [qid, metricsFor(v.ranked, qrels.get(qid) || new Set())]))
-    write('D', {
-      arm: 'D-nsr-encoder-bge-m3', run_id, n_queries: armDResult.perQuery.size,
-      end_to_end_latency_ms: { p50: percentile(armDResult.latencies, 50), p95: percentile(armDResult.latencies, 95) },
-      metrics: aggregate(perQ, queries),
-    })
-    console.log('Wrote results/D.json')
-  }
-
-  if (ARMS.includes('RRF-D') && armAResult && armDResult) {
-    const rrf = runRRF(armAResult, armDResult)
-    const perQ = new Map([...rrf.perQuery].map(([qid, v]) => [qid, metricsFor(v.ranked, qrels.get(qid) || new Set())]))
-    write('RRF-D', { arm: 'RRF-k60-A+D', n_queries: rrf.perQuery.size, metrics: aggregate(perQ, queries) })
-    console.log('Wrote results/RRF-D.json')
-  }
-
-  if (ARMS.includes('C')) {
-    const [{ corpus_n }] = await sql.query(`SELECT count(*)::int AS corpus_n FROM nsr_embeddings_commercial`)
-    const [{ query_n }] = await sql.query(`SELECT count(*)::int AS query_n FROM nsr_eval_queries WHERE embedding_commercial IS NOT NULL`)
-    console.log(`Arm C readiness: corpus=${corpus_n} queries=${query_n}`)
-    if (corpus_n < 270000 || query_n < 9900) {
-      console.log('Arm C not ready yet — skipping this run')
-    } else {
-      const armC = await runArmC(sql, queries)
-      const perQ = new Map([...armC.perQuery].map(([qid, v]) => [qid, metricsFor(v.ranked, qrels.get(qid) || new Set())]))
-      write('C', {
-        arm: 'C-cohere-embed-v4', n_queries: armC.perQuery.size,
-        end_to_end_latency_ms: { p50: percentile(armC.latencies, 50), p95: percentile(armC.latencies, 95) },
-        metrics: aggregate(perQ, queries),
-      })
-      console.log('Wrote results/C.json')
-    }
-  }
-
-  console.log('=== Phase 3 scoring complete for requested arms ===')
-}
-
-main().catch((e) => { console.error(e); process.exit(1) })
+console.log('=== scoring complete ===')

@@ -1,4 +1,9 @@
 #!/bin/bash
+# rerank rig launcher (CSHL / RxivGPT) — ported from the NSR rig at 8c1b05b.
+# CHANGED: role/SG/bucket/SSM/model-name parameterized with CSHL defaults; the
+# groups come from scripts/rerank-nsr/to-groups.mjs (miner contract) instead of
+# NSR pairs; 44b train.py still runs UNCHANGED, path flags only.
+# original header follows.
 # rerank-nsr launcher — same shape as scripts/train-nsr/launch.sh (role/SG/
 # SSM/S3/self-terminate/SUBNET/AMI), extended for the cross-encoder reranker:
 # pulls train.py (44b's, unchanged) + train.sh + a converted train-groups.jsonl
@@ -15,10 +20,10 @@
 set -euo pipefail
 REGION=us-east-1
 TYPE=${TYPE:-g6e.xlarge}
-PARAM=/nsr/embed/dburl
-ROLE=nsr-embed
-SG_NAME=nsr-embed-sg
-BUCKET=nsr-embed-v2
+PARAM=${PARAM:-/cshl/embed/dburl}
+ROLE=${ROLE:-cshl-embed}
+SG_NAME=${SG_NAME:-cshl-embed-sg}
+BUCKET=${BUCKET:-cshl-embed-rxiv}
 MODE=${MODE:?set MODE=rehearse, train, or manual}
 WATCHDOG_MIN=${WATCHDOG_MIN:-180}
 if [ "$MODE" != manual ]; then
@@ -46,7 +51,7 @@ fi
 # 3. train.py (44b's, unchanged) + train.sh to S3 (the box pulls both fresh
 #    every launch, same pattern as worker.mjs / train-nsr's train.sh).
 aws s3api head-bucket --bucket $BUCKET 2>/dev/null || aws s3 mb s3://$BUCKET --region $REGION >/dev/null
-aws s3 cp ../44b/scripts/reranker/train.py s3://$BUCKET/reranker/train.py >/dev/null
+aws s3 cp ${TRAIN_PY:-../44b/scripts/reranker/train.py} s3://$BUCKET/reranker/train.py >/dev/null
 aws s3 cp scripts/rerank-nsr/train.sh s3://$BUCKET/reranker/train.sh >/dev/null
 echo "train.py + train.sh uploaded: s3://$BUCKET/reranker/"
 if [ "$MODE" != manual ]; then
@@ -96,7 +101,7 @@ chmod +x train.sh
 export MODE=$MODE TRAIN_NAME=$TRAIN_NAME RUN_ID=$RUN_ID BUCKET=$BUCKET EPOCHS=${EPOCHS:-1} MAXHOURS=${MAXHOURS:-0.5}
 DATABASE_URL="\$DBURL" ./train.sh
 set -x
-aws s3 cp /var/log/train.log s3://$BUCKET/logs/nsr-reranker-$RUN_ID.log
+aws s3 cp /var/log/train.log s3://$BUCKET/logs/cshl-reranker-$RUN_ID.log
 shutdown -h now
 EOF
 )
@@ -108,6 +113,6 @@ aws ec2 run-instances --region $REGION \
   --security-group-ids "$SG" \
   --instance-initiated-shutdown-behavior terminate \
   --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":100,"VolumeType":"gp3","DeleteOnTermination":true}}]' \
-  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=nsr-reranker-$RUN_ID}]" \
+  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=cshl-reranker-$RUN_ID}]" \
   --user-data "$UD" \
   --query 'Instances[0].InstanceId' --output text

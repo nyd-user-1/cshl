@@ -19,6 +19,11 @@
 #   DRYRUN=1 N=1 ./scripts/embed-nsr/launch.sh                       # plan only, no AWS, no spend
 #   REHEARSE=3000 REHEARSE_LO=2024 N=1 ./scripts/embed-nsr/launch.sh  # bounded rehearsal
 #   N=2 ./scripts/embed-nsr/launch.sh                                 # full run, 2 boxes
+#   MODEL=ncbi/MedCPT-Article-Encoder DIM=768 EMB_TABLE=preprint_embeddings_medcpt \
+#     EMB_MODEL=medcpt CAP=2000 N=1 ./scripts/embed-nsr/launch.sh      # an eval baseline arm
+#   MODEL_S3=s3://cshl-embed-rxiv/models/rxiv-encoder-bge-m3/<run>/final \
+#     EMB_TABLE=preprint_embeddings_rxiv EMB_MODEL=rxiv-encoder-bge-m3 N=1 \
+#     ./scripts/embed-nsr/launch.sh                                    # train rig Phase 3
 set -euo pipefail
 REGION=${REGION:-us-east-1}
 N=${N:-1}
@@ -33,6 +38,13 @@ EMB_TABLE=${EMB_TABLE:-preprint_embeddings}
 KEY=${KEY:-key_number}
 CAP=${CAP:-4000}            # input-recipe char cap; see LANE-RIG-PORT REPORT §1
 MODEL=${MODEL:-BAAI/bge-m3}
+DIM=${DIM:-1024}          # 768 for the MedCPT/SPECTER2/SciNCL baseline arms
+# MODEL_S3 re-embeds the corpus with OUR fine-tuned weights instead of a Hub
+# model — this is the train rig's Phase 3, moved onto the rig that is already
+# sharded and resume-safe. Set it to s3://<bucket>/models/<name>/<run>/final .
+MODEL_S3=${MODEL_S3:-}
+RECLAIM_STALE=${RECLAIM_STALE:-}   # 1 = also re-embed rows whose text_hash no longer matches the recipe
+MODEL_ID=${MODEL_S3:+/data}; MODEL_ID=${MODEL_ID:-$MODEL}
 DRYRUN=${DRYRUN:-}
 EXPECT_HOST=${EXPECT_HOST:-ep-orange-water-aut2eymf}
 
@@ -101,9 +113,26 @@ say "sg: $SG"; say "ami: $AMI"
 # 6. Lane bounds, computed from the unembedded set at launch time.
 #    L = N*LANES upper-boundary keys (last = global cap), so a rehearsal is
 #    bounded above and the full run claims exactly what remains.
-#    REHEARSE=<rows> limits the claim set; REHEARSE_LO picks its key prefix
-#    (rxiv keys are DOI suffixes: '2024…' selects a recent slice; the pre-2019
-#    bare-integer keys sort BELOW every dotted key, so lane 0 must be floored).
+#    REHEARSE=<rows> limits the claim set; REHEARSE_LO picks its key prefix.
+#    Careful: rxiv keys are DOI suffixes of two shapes — dotted ('2024.01.02.
+#    123456') and bare legacy integers ('229468', '19000109') — and under
+#    lexical ordering they INTERLEAVE rather than segregating ('229468' sorts
+#    between '2022…' and '2023…', measured in a dry-run 2026-08-19). So
+#    REHEARSE_LO does not cleanly select "recent papers"; it selects a key
+#    range that happens to contain mostly recent ones plus some legacy strays.
+#    That is fine for a throughput rehearsal and wrong for anything else.
+# Preflight: the sidecar must exist before bounds can be computed. Without this
+# the launcher dies on a raw psql "relation does not exist" three steps into the
+# output, which reads like a rig bug rather than a missing migration.
+EXISTS=$(psql "$DBVAL" -X -q -t -A -c "SELECT to_regclass('$EMB_TABLE') IS NOT NULL")
+if [ "$EXISTS" != "t" ]; then
+  echo "MISSING TABLE: $EMB_TABLE does not exist in this database." >&2
+  echo "  Apply the embeddings sidecar DDL first (see docs/prompts/LANE-RIG-PORT.md REPORT §5-DDL)." >&2
+  exit 1
+fi
+
+STALE_SQL=""
+[ -n "$RECLAIM_STALE" ] && STALE_SQL=" OR e.text_hash <> md5(left(trim(coalesce(p.title,'') || E'\\n\\n' || coalesce(p.abstract,'')), $CAP))"
 L=$((N * LANES_UD))
 FILTER=""; LIMIT="rn <= 1000000000"
 [ -n "${REHEARSE:-}" ] && { FILTER="AND p.$KEY >= '${REHEARSE_LO:-2024}'"; LIMIT="rn <= ${REHEARSE}"; }
@@ -111,7 +140,7 @@ BOUNDS=$(psql "$DBVAL" -X -q -t -A -c "
 WITH todo AS (
   SELECT p.$KEY AS k, row_number() OVER (ORDER BY p.$KEY) AS rn
     FROM $TABLE p LEFT JOIN $EMB_TABLE e ON e.$KEY = p.$KEY
-   WHERE e.$KEY IS NULL
+   WHERE (e.$KEY IS NULL$STALE_SQL)
      AND length(regexp_replace(coalesce(p.title,'') || coalesce(p.abstract,''), '\s+', '', 'g')) >= 20
      $FILTER
 ), lim AS (SELECT * FROM todo WHERE $LIMIT),
@@ -130,14 +159,15 @@ set +x  # never trace: DB URL from SSM would land in the uploaded log
 shutdown -h +120   # watchdog: nothing runs past 2h
 export AWS_DEFAULT_REGION=$REGION
 DBURL=\$(aws ssm get-parameter --name $PARAM --with-decryption --query Parameter.Value --output text)
-docker run -d --gpus all -p 8080:80 --name tei ghcr.io/huggingface/text-embeddings-inference:89-1.8 \
-  --model-id $MODEL --dtype float16 --max-client-batch-size 256 --max-batch-tokens 131072
+${MODEL_S3:+mkdir -p /models/enc && aws s3 sync --only-show-errors $MODEL_S3 /models/enc}
+docker run -d --gpus all -p 8080:80 ${MODEL_S3:+-v /models/enc:/data} --name tei ghcr.io/huggingface/text-embeddings-inference:89-1.8 \
+  --model-id $MODEL_ID --dtype float16 --max-client-batch-size 256 --max-batch-tokens 131072
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs
 mkdir -p /opt/embed && cd /opt/embed && npm init -y >/dev/null && npm i pg >/dev/null
 aws s3 cp s3://$BUCKET/worker.mjs worker.mjs
 for t in \$(seq 1 60); do curl -sf http://127.0.0.1:8080/health && break; sleep 5; done
 export PART=$i PARTS=$N PAGE=${PAGE:-1024} LANES=$LANES_UD
-export TABLE=$TABLE EMB_TABLE=$EMB_TABLE KEY=$KEY CAP=$CAP EMB_MODEL=${EMB_MODEL:-bge-m3}
+export TABLE=$TABLE EMB_TABLE=$EMB_TABLE KEY=$KEY CAP=$CAP DIM=$DIM EMB_MODEL=${EMB_MODEL:-bge-m3}${RECLAIM_STALE:+ RECLAIM_STALE=1}
 export BOUNDS_KEYS='$BOUNDS' LO_CAP='${REHEARSE:+${REHEARSE_LO:-2024}}'
 DATABASE_URL="\$DBURL" node worker.mjs
 aws s3 cp /var/log/embed.log s3://$BUCKET/logs/cshl-embed-part$i-\$(date +%s).log
