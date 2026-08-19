@@ -498,6 +498,36 @@ instantly. **Both vector tables stay populated** — `preprint_embeddings` (stoc
 `preprint_embeddings_cshl` (ours), 433,449 rows each, both coverage-gated at 14:29Z. Nothing
 about the flip is one-way, and the stock path is never removed.
 
+**Verified end to end by the owning lane** (`api/` and the Vercel environment are theirs,
+not this lane's), before any environment change:
+
+```
+serve box /health .................. 200
+query embed via the box ............ 200 in 0.46 s, dim 1024, unit norm
+kNN vs preprint_embeddings_cshl .... 6 rows, 986 ms cold
+  0.794  AI-based decoding of long covid cognitive impairments in mice
+  0.791  COVCOG 2: Cognitive and Memory Deficits in Long COVID
+  0.782  COVCOG 1: Factors predicting Cognitive Symptoms in Long COVID
+```
+
+Two hardenings they added that are worth recording, because both prevent a *silent* wrong
+answer rather than an error:
+
+- **The dense arm now falls back to stock bge-m3 if the serve box is unreachable**, and the
+  vector table follows whichever encoder actually answered. Previously a box failure dropped
+  the dense arm entirely; now it costs retrieval quality (0.361 → 0.317 fused) instead of the
+  hybrid. Critically, querying one model's space with another model's vector returns confident
+  nonsense, so binding the table to the encoder that answered is the part that matters.
+- **`NSR_ENCODER_URL` / `NSR_SERVE_KEY` were still inherited from the NSR clone**, pointing at
+  the *nuclear-physics* serve box. A flip without repointing them would have queried the wrong
+  domain's encoder for preprint search — plausible vectors, no error. Repointed and redeployed,
+  verified through the API rather than `vercel env ls`, which reports *created* time and made
+  it look unchanged.
+
+**The flip itself was deliberately not made tonight.** It is one environment variable plus a
+redeploy, fully staged and verified up to that point. The owning lane declined to lift a
+condition set by another party on their behalf, which is the right call.
+
 *Handoff note recorded because it is the kind of thing that silently breaks a cutover:* the
 app's `vectorTable()` mapped the fine-tuned arm to `preprint_embeddings_ft`, while the
 populated table is `preprint_embeddings_cshl`. Flipping without reconciling those would leave
