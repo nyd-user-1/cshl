@@ -142,6 +142,13 @@ fi
 STALE_SQL=""
 [ -n "$RECLAIM_STALE" ] && STALE_SQL=" OR e.text_hash <> md5(left(trim(coalesce(p.title,'') || E'\\n\\n' || coalesce(p.abstract,'')), $CAP))"
 L=$((N * LANES_UD))
+# A rehearsal needs its TOP bounded — that is what makes it a rehearsal. A full
+# run must NOT be: bounds are computed from the rows that exist at launch, and
+# the corpus is still being upserted by another lane, so a hard upper boundary
+# at today's maximum key silently excludes every row that lands afterwards.
+# Emitting L-1 boundaries leaves the last lane unbounded (worker: hi=null).
+LAST_K=$L
+[ -z "${REHEARSE:-}" ] && LAST_K=$((L - 1))
 FILTER=""; LIMIT="rn <= 1000000000"
 [ -n "${REHEARSE:-}" ] && { FILTER="AND p.$KEY >= '${REHEARSE_LO:-2024}'"; LIMIT="rn <= ${REHEARSE}"; }
 BOUNDS=$(psql "$DBVAL" -X -q -t -A -c "
@@ -154,7 +161,7 @@ WITH todo AS (
 ), lim AS (SELECT * FROM todo WHERE $LIMIT),
    t AS (SELECT max(rn) AS total FROM lim)
 SELECT string_agg(k, ',' ORDER BY rn) FROM lim
- WHERE rn IN (SELECT (total * k) / $L FROM t, generate_series(1, $L) k)")
+ WHERE rn IN (SELECT (total * k) / $L FROM t, generate_series(1, $LAST_K) k)")
 [ -n "$BOUNDS" ] || { echo "no bounds — nothing unembedded?"; exit 1; }
 say "bounds ($L lanes): $BOUNDS"
 
@@ -171,7 +178,7 @@ ${MODEL_S3:+mkdir -p /models/enc && aws s3 sync --only-show-errors $MODEL_S3 /mo
 docker run -d --gpus all -p 8080:80 ${MODEL_S3:+-v /models/enc:/data} --name tei ghcr.io/huggingface/text-embeddings-inference:89-1.8 \
   --model-id $MODEL_ID --dtype float16 --max-client-batch-size 256 --max-batch-tokens 131072
 # Node from the official static tarball, NOT apt. The nodesource route wedged
-# `apt-get update` for 3+ minutes on E0 (2026-08-19) with the box billing at
+# apt-get update for 3+ minutes on E0 (2026-08-19) with the box billing at
 # \$0.031/min and TEI already healthy — the rig sat there paying for nothing and
 # would have run to the 2h watchdog. A tarball has no repo, no lock contention
 # and no mirror to hang on; node is only here to run one script.
@@ -182,7 +189,7 @@ mkdir -p /opt/embed && cd /opt/embed && npm init -y >/dev/null && npm i pg --no-
 aws s3 cp s3://$BUCKET/worker.mjs worker.mjs
 for t in \$(seq 1 60); do curl -sf http://127.0.0.1:8080/health && break; sleep 5; done
 export PART=$i PARTS=$N PAGE=${PAGE:-1024} LANES=$LANES_UD
-export TABLE=$TABLE EMB_TABLE=$EMB_TABLE KEY=$KEY CAP=$CAP DIM=$DIM NORMALIZE=$NORMALIZE EMB_MODEL=${EMB_MODEL:-bge-m3}${RECLAIM_STALE:+ RECLAIM_STALE=1}
+export TABLE=$TABLE EMB_TABLE=$EMB_TABLE KEY=$KEY CAP=$CAP DIM=$DIM NORMALIZE=$NORMALIZE EMB_MODEL=${EMB_MODEL:-bge-m3} DRAIN_WAIT_S=${DRAIN_WAIT_S:-0}${RECLAIM_STALE:+ RECLAIM_STALE=1}
 export BOUNDS_KEYS='$BOUNDS' LO_CAP='${REHEARSE:+${REHEARSE_LO:-2024}}'
 DATABASE_URL="\$DBURL" node worker.mjs
 aws s3 cp /var/log/embed.log s3://$BUCKET/logs/cshl-embed-part$i-\$(date +%s).log

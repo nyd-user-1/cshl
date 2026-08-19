@@ -52,6 +52,12 @@ const NORMALIZE = (process.env.NORMALIZE ?? '1') !== '0'
 // nothing handles a paper being REVISED — a v2 that rewrites the abstract keeps
 // its v1 vector, and text_hash is the only thing that can see it. Run this after
 // any version refresh, or after a CAP change.
+// DRAIN_WAIT_S > 0 makes a lane WAIT on an empty queue instead of finishing.
+// The corpus is being upserted by another lane while this runs, so "no rows
+// right now" does not mean "no more work" — without this the box drains what
+// exists, self-terminates, and the remainder needs a whole second boot
+// (~3.5 min of model download, billed). 0 = the old exit-immediately behaviour.
+const DRAIN_WAIT_S = Number(process.env.DRAIN_WAIT_S ?? 0)
 const RECLAIM_STALE = !!process.env.RECLAIM_STALE
 const STALE_PRED = RECLAIM_STALE
   ? ` OR e.text_hash <> md5(left(trim(coalesce(p.title,'') || E'\\n\\n' || coalesce(p.abstract,'')), ${CAP}))`
@@ -184,6 +190,8 @@ async function runRange(job, connOrMk, lo, hi, tag) {
   let errs = 0
   let cursor = lo
   let n = 0
+  let waiting = false
+  const deadline = Date.now() + DRAIN_WAIT_S * 1000
   const fetchPage = () => conn.query(job.page, [cursor, PAGE, hi])
   let pending = fetchPage()
   for (;;) {
@@ -200,7 +208,19 @@ async function runRange(job, connOrMk, lo, hi, tag) {
       pending = fetchPage()
       continue
     }
-    if (!rows.length) break
+    if (!rows.length) {
+      if (!DRAIN_WAIT_S || Date.now() > deadline) break
+      // Rows that land later can have ANY key in this lane's range, not just
+      // keys above where we stopped — so rewind the cursor to the lane floor.
+      // Re-claiming is free: the resume predicate skips anything already
+      // embedded, so a rewind costs one indexed anti-join, not re-embedding.
+      if (!waiting) { console.log(`${job.table} ${tag}: queue empty — waiting for more rows (up to ${DRAIN_WAIT_S}s)`); waiting = true }
+      cursor = lo
+      await new Promise((r) => setTimeout(r, 15000))
+      pending = fetchPage()
+      continue
+    }
+    if (waiting) { console.log(`${job.table} ${tag}: new rows arrived — resuming`); waiting = false }
     cursor = rows[rows.length - 1].id
     pending = fetchPage() // prefetch: DB leg overlaps the GPU leg
     // Pass-through, deliberately: SQL is the single author of the input string.
