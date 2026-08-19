@@ -469,6 +469,42 @@ Secondary levers, all unpulled: 40,000 of 132,793 available triplets, one epoch,
 A second run on `cshl-query-pairs` against this same frozen benchmark either closes the gap or
 refutes the hypothesis. **Both outcomes are publishable.** Staged and priced below; not fired.
 
+## Serving — the flip, and why it is worth making despite the loss
+
+Our encoder is served from a `t3.large` (`i-08d4dfab74ff44054`) running TEI on CPU,
+API-key gated, weights pulled from S3 rather than the Hub so serving has no external
+dependency. TEI reads `max tokens 384` from the checkpoint's own
+`sentence_bert_config.json`, matching what it was trained at.
+
+**Parity verified rather than assumed: cosine 0.999999** between the served encoder's output
+for one paper's exact recipe text and that paper's stored corpus vector. A wrong-model
+endpoint returns plausible vectors and raises nothing, so this check is the difference
+between a flip and a hope.
+
+**The case for flipping, given we lost head-to-head.** Our encoder alone scores MeSH R@10
+0.332 against MedCPT's 0.457. But production does not serve a bare dense arm — it serves a
+fusion of full-text search and a dense arm:
+
+| production configuration | MeSH R@10 |
+|---|---:|
+| RRF(FTS + **ours**) | **0.361** |
+| RRF(FTS + stock bge-m3) | 0.317 |
+
+**+14% on the live product.** The claim is not that we built the best encoder; it is that ours
+is a better dense arm than stock inside the fusion users actually hit.
+
+**One variable, fully reversible.** `SEARCH_ENCODER=bge` returns to the known-good stock path
+instantly. **Both vector tables stay populated** — `preprint_embeddings` (stock) and
+`preprint_embeddings_cshl` (ours), 433,449 rows each, both coverage-gated at 14:29Z. Nothing
+about the flip is one-way, and the stock path is never removed.
+
+*Handoff note recorded because it is the kind of thing that silently breaks a cutover:* the
+app's `vectorTable()` mapped the fine-tuned arm to `preprint_embeddings_ft`, while the
+populated table is `preprint_embeddings_cshl`. Flipping without reconciling those would leave
+`hasEmbeddings()` probing a non-existent table, the dense arm degrading to FTS-only, and
+`/chat` appearing to run on our encoder while serving keyword-only results — no error,
+plausible output. Flagged to the owning lane before the flip.
+
 ## Licensing — measured, for the record
 
 Everything publishes **private**, per standing policy — the same posture as the sibling NSR
