@@ -24,7 +24,7 @@ for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
   if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '')
 }
 
-const VERSION = process.env.EVAL_VERSION ?? 'rxiv-eval-v1'
+const VERSION = process.env.EVAL_VERSION ?? 'cshl-eval-v1'
 const ARM = process.env.ARM ?? 'bge-m3'
 const ROOT = join(process.cwd(), 'data/eval', VERSION)
 const QEMB = join(ROOT, 'qemb')

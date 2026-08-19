@@ -4,7 +4,7 @@ task_categories: [text-retrieval]
 tags: [benchmark, retrieval, biomedical, preprints, biorxiv, medrxiv]
 ---
 
-# rxiv-eval-v1
+# cshl-eval-v1
 
 A **frozen retrieval benchmark** over the bioRxiv + medRxiv corpus. Queries, gold
 labels, and the exact arm configurations used to produce the published numbers.
@@ -49,7 +49,7 @@ R@1, R@5, R@10, R@50, MRR, nDCG@10 — per family and per segment
 ## Arms measured
 
 Postgres FTS · stock `BAAI/bge-m3` · `ncbi/MedCPT` (query + article encoders) ·
-`allenai/specter2_base` · `malteos/scincl` · `NYSgpt/rxiv-encoder-bge-m3` ·
+`allenai/specter2_base` · `malteos/scincl` · `NYSgpt/cshl-encoder-bge-m3` ·
 RRF fusions · cross-encoder rerank stages.
 
 {{RESULTS_TABLE}}

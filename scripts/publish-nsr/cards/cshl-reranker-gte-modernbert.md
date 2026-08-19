@@ -6,7 +6,7 @@ pipeline_tag: text-ranking
 tags: [reranker, cross-encoder, biomedical, preprints, biorxiv, medrxiv]
 ---
 
-# rxiv-reranker-gte-modernbert
+# cshl-reranker-gte-modernbert
 
 A cross-encoder reranker for **bioRxiv + medRxiv preprints**, fine-tuned from
 [`Alibaba-NLP/gte-reranker-modernbert-base`](https://huggingface.co/Alibaba-NLP/gte-reranker-modernbert-base).
@@ -28,14 +28,14 @@ reranker trained against random negatives learns topicality, not ranking.
 
 ## Evaluation
 
-Applied to the top-{{RERANK_POOL}} of a base arm on the frozen `rxiv-eval-v1`
+Applied to the top-{{RERANK_POOL}} of a base arm on the frozen `cshl-eval-v1`
 benchmark. The number that matters is the **delta over the arm it reranks**, so it
 is reported that way:
 
 | base arm | base nDCG@10 | + this reranker | Δ |
 |---|---|---|---|
 | stock bge-m3 | {{BASE_BGE_NDCG}} | {{RR_BGE_NDCG}} | {{RR_BGE_DELTA}} |
-| rxiv-encoder-bge-m3 | {{BASE_RXIV_NDCG}} | {{RR_RXIV_NDCG}} | {{RR_RXIV_DELTA}} |
+| cshl-encoder-bge-m3 | {{BASE_RXIV_NDCG}} | {{RR_RXIV_NDCG}} | {{RR_RXIV_DELTA}} |
 | — vs `ncbi/MedCPT-Cross-Encoder` on the same pool | {{MEDCPT_CE_NDCG}} | | {{MEDCPT_CE_DELTA}} |
 
 ## Serving cost, honestly

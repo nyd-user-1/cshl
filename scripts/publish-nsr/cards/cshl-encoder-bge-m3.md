@@ -6,7 +6,7 @@ pipeline_tag: feature-extraction
 tags: [retrieval, biomedical, preprints, biorxiv, medrxiv, bge-m3]
 ---
 
-# rxiv-encoder-bge-m3
+# cshl-encoder-bge-m3
 
 A dense retrieval encoder for **bioRxiv + medRxiv preprints**, contrastively
 fine-tuned from [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3).
@@ -33,11 +33,11 @@ adaptation**, not a general-purpose upgrade: outside this corpus, use stock bge-
 | hardware / wall-clock | 1× NVIDIA L40S (g6e.xlarge), {{TRAIN_MINUTES}} min |
 
 Supervision comes from {{SUPERVISION_SOURCES}}. Triplets are published separately
-as `NYSgpt/rxiv-triplets`.
+as `NYSgpt/cshl-triplets`.
 
 ## Evaluation
 
-Scored on the frozen `rxiv-eval-v1` benchmark (`NYSgpt/rxiv-eval-v1`), never on
+Scored on the frozen `cshl-eval-v1` benchmark (`NYSgpt/cshl-eval-v1`), never on
 training data. Baselines were measured on the **same** queries and the **same**
 corpus, not quoted from their own papers.
 
@@ -66,7 +66,7 @@ Per-segment numbers (server, era, published vs unpublished, abstract length) are
 
 ```python
 from sentence_transformers import SentenceTransformer
-m = SentenceTransformer("NYSgpt/rxiv-encoder-bge-m3")
+m = SentenceTransformer("NYSgpt/cshl-encoder-bge-m3")
 v = m.encode(["CRISPR base editing off-target effects"], normalize_embeddings=True)
 ```
 

@@ -34,10 +34,10 @@ CREATE TABLE IF NOT EXISTS preprint_embeddings_scincl (
   embedded_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS preprint_embeddings_rxiv (
+CREATE TABLE IF NOT EXISTS preprint_embeddings_cshl (
   key_number  text PRIMARY KEY REFERENCES preprints(key_number) ON DELETE CASCADE,
   embedding   vector(1024) NOT NULL,           -- our fine-tune of BAAI/bge-m3
-  model       text NOT NULL DEFAULT 'rxiv-encoder-bge-m3',
+  model       text NOT NULL DEFAULT 'cshl-encoder-bge-m3',
   text_hash   text NOT NULL,
   embedded_at timestamptz NOT NULL DEFAULT now()
 );

@@ -28,7 +28,7 @@ for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
   if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '')
 }
 
-const VERSION = process.env.EVAL_VERSION ?? 'rxiv-eval-v1'
+const VERSION = process.env.EVAL_VERSION ?? 'cshl-eval-v1'
 const ROOT = join(process.cwd(), 'data/eval', VERSION)
 const RESULTS = join(ROOT, 'results')
 const QEMB = join(ROOT, 'qemb')
@@ -49,7 +49,7 @@ export const OPS = { cosine: '<=>', ip: '<#>' }
 export const REGISTRY = {
   fts:        { kind: 'fts' },
   'bge-m3':   { kind: 'dense', table: 'preprint_embeddings',           dim: 1024, metric: 'cosine', doc: 'BAAI/bge-m3',                 query: 'BAAI/bge-m3' },
-  rxiv:       { kind: 'dense', table: 'preprint_embeddings_rxiv',      dim: 1024, metric: 'cosine', doc: 'NYSgpt/rxiv-encoder-bge-m3',  query: 'NYSgpt/rxiv-encoder-bge-m3' },
+  cshl:       { kind: 'dense', table: 'preprint_embeddings_cshl',      dim: 1024, metric: 'cosine', doc: 'NYSgpt/cshl-encoder-bge-m3',  query: 'NYSgpt/cshl-encoder-bge-m3' },
   medcpt:     { kind: 'dense', table: 'preprint_embeddings_medcpt',    dim: 768,  metric: 'ip',     doc: 'ncbi/MedCPT-Article-Encoder', query: 'ncbi/MedCPT-Query-Encoder' },
   specter2:   { kind: 'dense', table: 'preprint_embeddings_specter2',  dim: 768,  metric: 'ip',     doc: 'allenai/specter2_base',       query: 'allenai/specter2_base' },
   scincl:     { kind: 'dense', table: 'preprint_embeddings_scincl',    dim: 768,  metric: 'ip',     doc: 'malteos/scincl',              query: 'malteos/scincl' },

@@ -28,7 +28,12 @@ const NAME = process.env.NAME ?? 'full'
 const OUT = process.env.OUT ?? `data/reranker/${NAME}`
 const NEGS = Number(process.env.NEGS ?? 7)
 const QUERY_CHARS = Number(process.env.QUERY_CHARS ?? 600)
-const DOC_CHARS = Number(process.env.DOC_CHARS ?? 900)   // matches api/_lib/embed.ts rerank()
+// NOT the embed recipe, deliberately. A cross-encoder sees (query, document)
+// pairs bounded by what the SERVING path sends — api/_lib/embed.ts rerank()
+// slices query to 600 and each document to 900. Training on 4,000-char
+// documents it will never see at serve time is the mismatch, not the fix.
+// If those serving limits change, change these with them.
+const DOC_CHARS = Number(process.env.DOC_CHARS ?? 900)
 const HOLDOUT = Number(process.env.HOLDOUT ?? 0.25)
 const h32 = (s) => parseInt(createHash('md5').update(s).digest('hex').slice(0, 8), 16) / 0xffffffff
 const isHeldOut = (k) => h32(`holdout:${k}`) < HOLDOUT

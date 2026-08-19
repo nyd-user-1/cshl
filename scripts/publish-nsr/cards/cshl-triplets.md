@@ -4,11 +4,11 @@ task_categories: [text-retrieval]
 tags: [retrieval, contrastive, biomedical, preprints, biorxiv, medrxiv]
 ---
 
-# rxiv-triplets
+# cshl-triplets
 
 Contrastive training data for preprint retrieval: `{query, positive, negatives[]}`
-over the **bioRxiv + medRxiv** corpus. This is the set `NYSgpt/rxiv-encoder-bge-m3`
-and `NYSgpt/rxiv-reranker-gte-modernbert` were trained on.
+over the **bioRxiv + medRxiv** corpus. This is the set `NYSgpt/cshl-encoder-bge-m3`
+and `NYSgpt/cshl-reranker-gte-modernbert` were trained on.
 
 ## Contents
 

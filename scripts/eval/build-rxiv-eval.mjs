@@ -16,7 +16,7 @@
 //     because "which harvest produced this benchmark" is the question a frozen
 //     set has to answer six weeks later.
 //
-// Read-only against Neon; writes data/eval/rxiv-eval-v1/.
+// Read-only against Neon; writes data/eval/cshl-eval-v1/.
 // Env: DATABASE_URL_UNPOOLED. FAMILIES=TITLE,MESH,CITE,SYNTH (default: all found)
 //      CENSUS=1 reports what is available and writes nothing.
 import { neon } from '@neondatabase/serverless'
@@ -29,7 +29,7 @@ for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
   if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '')
 }
 
-const VERSION = process.env.EVAL_VERSION ?? 'rxiv-eval-v1'
+const VERSION = process.env.EVAL_VERSION ?? 'cshl-eval-v1'
 const OUT = join(process.cwd(), 'data/eval', VERSION)
 const MINE = join(process.cwd(), 'data/mine')
 const HOLDOUT = Number(process.env.HOLDOUT ?? 0.25)

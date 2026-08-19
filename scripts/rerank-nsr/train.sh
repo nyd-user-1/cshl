@@ -101,8 +101,8 @@ PY
 #    upload under set -e and the box self-terminated with the trained model on
 #    a delete-on-termination volume — 43 GPU-minutes lost. Never again: weights
 #    go up first, everything after is `|| true`.
-aws s3 cp --only-show-errors --recursive "$DIR/model/final" "s3://$BUCKET/models/rxiv-reranker-gte-modernbert/$RUN_ID/final/"
-aws s3 cp --only-show-errors --recursive "$DIR/model" "s3://$BUCKET/models/rxiv-reranker-gte-modernbert/$RUN_ID/" || true
-[ -f "/opt/reranker/reranked-$RUN_ID.json" ] && aws s3 cp --only-show-errors "/opt/reranker/reranked-$RUN_ID.json" "s3://$BUCKET/models/rxiv-reranker-gte-modernbert/$RUN_ID/reranked-$RUN_ID.json" || true
+aws s3 cp --only-show-errors --recursive "$DIR/model/final" "s3://$BUCKET/models/cshl-reranker-gte-modernbert/$RUN_ID/final/"
+aws s3 cp --only-show-errors --recursive "$DIR/model" "s3://$BUCKET/models/cshl-reranker-gte-modernbert/$RUN_ID/" || true
+[ -f "/opt/reranker/reranked-$RUN_ID.json" ] && aws s3 cp --only-show-errors "/opt/reranker/reranked-$RUN_ID.json" "s3://$BUCKET/models/cshl-reranker-gte-modernbert/$RUN_ID/reranked-$RUN_ID.json" || true
 aws s3 cp --only-show-errors "$DIR/train.log" "s3://$BUCKET/logs/cshl-reranker-$RUN_ID-inner.log" || true
-echo "[train.sh] done. weights: s3://$BUCKET/models/rxiv-reranker-gte-modernbert/$RUN_ID/final/"
+echo "[train.sh] done. weights: s3://$BUCKET/models/cshl-reranker-gte-modernbert/$RUN_ID/final/"

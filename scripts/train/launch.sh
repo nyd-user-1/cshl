@@ -6,15 +6,15 @@
 #
 # CHANGED vs the NSR original:
 #   - names/paths parameterized (cshl-embed role, cshl-embed-rxiv bucket,
-#     /cshl/embed/dburl, rxiv-encoder-bge-m3).
+#     /cshl/embed/dburl, cshl-encoder-bge-m3).
 #   - DRYRUN=1 plans without touching AWS (same contract as the other rigs).
 #   - NSR's Phase 3 ran a bespoke candidate-embed.py on the training box to
 #     re-embed the corpus with the fresh checkpoint. DROPPED: that was a
 #     single-threaded loop over 277k rows on the box that just finished
 #     training. Our corpus is 433k and the embed rig already does this job,
 #     sharded and resume-safe — so Phase 3 is now
-#       MODEL_S3=s3://<bucket>/models/rxiv-encoder-bge-m3/<run>/final \
-#       EMB_TABLE=preprint_embeddings_rxiv N=1 scripts/embed-nsr/launch.sh
+#       MODEL_S3=s3://<bucket>/models/cshl-encoder-bge-m3/<run>/final \
+#       EMB_TABLE=preprint_embeddings_cshl N=1 scripts/embed-nsr/launch.sh
 #     which is one command against a rig that is already dry-run verified.
 #   - TRAIN_ARGS passthrough so query/passage_max_len can be raised for this
 #     corpus without editing the box script.
@@ -31,7 +31,7 @@ PARAM=${PARAM:-/cshl/embed/dburl}
 ROLE=${ROLE:-cshl-embed}
 SG_NAME=${SG_NAME:-cshl-embed-sg}
 BUCKET=${BUCKET:-cshl-embed-rxiv}
-MODEL_NAME=${MODEL_NAME:-rxiv-encoder-bge-m3}
+MODEL_NAME=${MODEL_NAME:-cshl-encoder-bge-m3}
 BASE_MODEL=${BASE_MODEL:-BAAI/bge-m3}
 MODE=${MODE:?set MODE=rehearse, train, or manual}
 WATCHDOG_MIN=${WATCHDOG_MIN:-360}

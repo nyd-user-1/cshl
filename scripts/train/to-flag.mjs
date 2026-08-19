@@ -20,6 +20,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { neon } from '@neondatabase/serverless'
+import { recipeSql, assertWorkerMatches, CAP as CANON_CAP } from '../eval/recipe.mjs'
 
 for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
   const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
@@ -30,7 +31,9 @@ const IN = process.env.IN ?? 'data/mine/triplets.jsonl'
 const NAME = process.env.NAME ?? 'full'
 const OUT = process.env.OUT ?? `data/train/${NAME}/train.jsonl`
 const NEGS = Number(process.env.NEGS ?? 8)
-const CAP = Number(process.env.CAP ?? 4000)
+// The training string MUST be the embedded string. Do not re-derive it here —
+// scripts/eval/recipe.mjs is canonical and worker.mjs is its source of truth.
+const CAP = Number(process.env.CAP ?? CANON_CAP)
 const HOLDOUT = Number(process.env.HOLDOUT ?? 0.25)
 const ALLOW = process.argv.includes('--allow-holdout-negatives')
 
@@ -52,15 +55,16 @@ const host = url.replace(/^[^@]+@/, '').replace(/[/?].*$/, '')
 if (!host.startsWith('ep-orange-water-aut2eymf.')) throw new Error(`FENCE FAIL: ${host}`)
 const sql = neon(url)
 
+await assertWorkerMatches()   // fails loudly if the box-side recipe has drifted
 const rows = readFileSync(IN, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
-console.log(`${rows.length} mined records from ${IN}`)
+console.log(`${rows.length} mined records from ${IN} (recipe cap ${CAP}, canonical)`)
 
 // resolve every key we need, in one pass
 const keys = [...new Set(rows.flatMap((r) => [r.anchor_key, ...(r.positives ?? []), ...(r.negatives ?? [])]).filter(Boolean))]
 const text = new Map()
 for (let i = 0; i < keys.length; i += 5000) {
   const got = await sql.query(
-    `SELECT key_number, left(trim(coalesce(title,'') || E'\n\n' || coalesce(abstract,'')), ${CAP}) AS t
+    `SELECT key_number, ${recipeSql('preprints', CAP)} AS t
        FROM preprints WHERE key_number = ANY($1)`, [keys.slice(i, i + 5000)])
   for (const g of got) text.set(g.key_number, g.t)
 }

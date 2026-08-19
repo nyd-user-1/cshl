@@ -15,8 +15,8 @@
 #   - PRIVATE=1 by default and stated in the output, because the failure mode
 #     here is not cost, it is publishing something before it is ready.
 #
-#   usage: DRYRUN=1 SRC=s3://cshl-embed-rxiv/models/rxiv-encoder-bge-m3/<run>/final/ \
-#            REPO=NYSgpt/rxiv-encoder-bge-m3 CARD=scripts/publish-nsr/cards/rxiv-encoder-bge-m3.md \
+#   usage: DRYRUN=1 SRC=s3://cshl-embed-rxiv/models/cshl-encoder-bge-m3/<run>/final/ \
+#            REPO=NYSgpt/cshl-encoder-bge-m3 CARD=scripts/publish-nsr/cards/cshl-encoder-bge-m3.md \
 #            ./scripts/publish-nsr/launch.sh
 set -euo pipefail
 REGION=${REGION:-us-east-1}

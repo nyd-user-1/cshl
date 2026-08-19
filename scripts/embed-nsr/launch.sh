@@ -22,8 +22,8 @@
 #   N=2 ./scripts/embed-nsr/launch.sh                                 # full run, 2 boxes
 #   MODEL=ncbi/MedCPT-Article-Encoder DIM=768 EMB_TABLE=preprint_embeddings_medcpt \
 #     EMB_MODEL=medcpt-article CAP=2000 NORMALIZE=0 N=1 ./scripts/embed-nsr/launch.sh  # a baseline arm
-#   MODEL_S3=s3://cshl-embed-rxiv/models/rxiv-encoder-bge-m3/<run>/final \
-#     EMB_TABLE=preprint_embeddings_rxiv EMB_MODEL=rxiv-encoder-bge-m3 N=1 \
+#   MODEL_S3=s3://cshl-embed-rxiv/models/cshl-encoder-bge-m3/<run>/final \
+#     EMB_TABLE=preprint_embeddings_cshl EMB_MODEL=cshl-encoder-bge-m3 N=1 \
 #     ./scripts/embed-nsr/launch.sh                                    # train rig Phase 3
 set -euo pipefail
 REGION=${REGION:-us-east-1}
@@ -187,14 +187,44 @@ EOF
     echo "  [dry-run] would run: aws ec2 run-instances --region $REGION --image-id $AMI --instance-type $TYPE --count 1 ${SUBNET:+--subnet-id $SUBNET} --iam-instance-profile Name=$ROLE --security-group-ids $SG --instance-initiated-shutdown-behavior terminate --block-device-mappings '[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":100,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]' --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=cshl-embed-$i}]' --user-data <above>"
     continue
   fi
-  aws ec2 run-instances --region $REGION \
-    --image-id "$AMI" --instance-type $TYPE --count 1 \
-    ${SUBNET:+--subnet-id $SUBNET} \
-    --iam-instance-profile Name=$ROLE \
-    --security-group-ids "$SG" \
-    --instance-initiated-shutdown-behavior terminate \
-    --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":100,"VolumeType":"gp3","DeleteOnTermination":true}}]' \
-    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=cshl-embed-$i}]" \
-    --user-data "$UD" \
-    --query 'Instances[0].InstanceId' --output text
+  # g6e capacity is patchy and the failure is per-AZ, not regional: NSR's first
+  # launch died on InsufficientInstanceCapacity in the default AZ while
+  # us-east-1b had stock, and ours did the same tonight. Retrying by hand is
+  # fine for N=1 and actively dangerous for N>1, where box 0 can succeed and
+  # box 1 fail and leave a half-launched sweep. So: walk the AZs that actually
+  # offer this instance type until one takes it.
+  launch_in() {
+    aws ec2 run-instances --region $REGION \
+      --image-id "$AMI" --instance-type $TYPE --count 1 \
+      ${1:+--subnet-id $1} \
+      --iam-instance-profile Name=$ROLE \
+      --security-group-ids "$SG" \
+      --instance-initiated-shutdown-behavior terminate \
+      --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":100,"VolumeType":"gp3","DeleteOnTermination":true}}]' \
+      --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=cshl-embed-$i}]" \
+      --user-data "$UD" \
+      --query 'Instances[0].InstanceId' --output text 2>&1
+  }
+  if [ -n "${SUBNET:-}" ]; then
+    CANDIDATES="$SUBNET"
+  else
+    OFFERED=$(aws ec2 describe-instance-type-offerings --region $REGION --location-type availability-zone \
+      --filters Name=instance-type,Values=$TYPE --query 'InstanceTypeOfferings[].Location' --output text)
+    CANDIDATES=""
+    for az in $OFFERED; do
+      sn=$(aws ec2 describe-subnets --region $REGION --filters Name=vpc-id,Values=$VPC Name=availability-zone,Values=$az \
+             --query 'Subnets[0].SubnetId' --output text)
+      [ "$sn" != "None" ] && CANDIDATES="$CANDIDATES $sn"
+    done
+  fi
+  ID=""
+  for sn in $CANDIDATES; do
+    OUT=$(launch_in "$sn")
+    case "$OUT" in
+      i-*) ID="$OUT"; echo "box $i: $ID ($sn)"; break ;;
+      *InsufficientInstanceCapacity*|*Unsupported*) echo "box $i: no capacity in $sn — next AZ" ;;
+      *) echo "box $i: launch failed in $sn: $OUT"; break ;;
+    esac
+  done
+  [ -n "$ID" ] || { echo "box $i: NO CAPACITY IN ANY AZ for $TYPE. Nothing launched." >&2; exit 1; }
 done

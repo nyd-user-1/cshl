@@ -32,7 +32,7 @@
 #     slice's own passages. One less credential on the box.
 set -euo pipefail
 : "${MODE:?}" "${TRAIN_NAME:?}" "${RUN_ID:?}" "${BUCKET:?}"
-MODEL_NAME=${MODEL_NAME:-rxiv-encoder-bge-m3}
+MODEL_NAME=${MODEL_NAME:-cshl-encoder-bge-m3}
 BASE_MODEL=${BASE_MODEL:-BAAI/bge-m3}
 EPOCHS=${EPOCHS:-1}
 BATCH=${BATCH:-8}

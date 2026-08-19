@@ -16,6 +16,7 @@
 import { neon } from '@neondatabase/serverless'
 import { createHash } from 'crypto'
 import { readFileSync } from 'node:fs'
+import { recipeSql, CAP as CANON_CAP } from '../eval/recipe.mjs'
 
 for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
   const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
@@ -24,7 +25,7 @@ for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
 
 const EXPECT_HOST = 'ep-orange-water-aut2eymf'
 const N = Number(process.env.N ?? 100)
-const CAP = Number(process.env.CAP ?? 4000)
+const CAP = Number(process.env.CAP ?? CANON_CAP)
 const SCRATCH = process.env.SCRATCH ?? 'preprint_embeddings_smoke'
 const MODEL = 'bge-m3'
 const CF_MODEL = '@cf/baai/bge-m3'
@@ -72,7 +73,7 @@ try {
   // 2. claim rows with the worker's exact page query (resume predicate included)
   const { rows } = await c.query(
     `SELECT p.key_number AS id,
-            left(trim(coalesce(p.title,'') || E'\n\n' || coalesce(p.abstract,'')), ${CAP}) AS text
+            ${recipeSql('p', CAP)} AS text
        FROM preprints p LEFT JOIN ${SCRATCH} e ON e.key_number = p.key_number
       WHERE e.key_number IS NULL AND p.key_number > $1 AND ($3::text IS NULL OR p.key_number <= $3)
         AND length(regexp_replace(coalesce(p.title,'') || coalesce(p.abstract,''), '\\s+', '', 'g')) >= 20
@@ -123,7 +124,7 @@ try {
     SELECT count(*)::int AS hash_mismatches
       FROM ${SCRATCH} e JOIN preprints p USING (key_number)
      WHERE e.key_number = ANY($1)
-       AND e.text_hash <> md5(left(trim(coalesce(p.title,'') || E'\n\n' || coalesce(p.abstract,'')), ${CAP}))`, [keys])).rows
+       AND e.text_hash <> md5(${recipeSql('p', CAP)})`, [keys])).rows
   console.log(`text_hash parity vs the SQL recipe: ${hash_mismatches} mismatches`)
 
   // resume predicate: these keys must no longer claim

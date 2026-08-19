@@ -15,7 +15,7 @@ set -euo pipefail
 REGION=${REGION:-us-east-1}
 BUCKET=${BUCKET:-cshl-embed-rxiv}
 KEY_PARAM=${KEY_PARAM:-/cshl/serve/api-key}
-RR_MODEL_NAME=${RR_MODEL_NAME:-rxiv-reranker-gte-modernbert}
+RR_MODEL_NAME=${RR_MODEL_NAME:-cshl-reranker-gte-modernbert}
 INSTANCE=${INSTANCE:?set INSTANCE=i-...}
 RR_RUN=${RR_RUN:-}; RR_ID=${RR_ID:-}
 [ -n "$RR_RUN" ] || [ -n "$RR_ID" ] || { echo "set RR_RUN=<run-id> (S3 weights) or RR_ID=<hub id>"; exit 1; }

@@ -42,8 +42,8 @@ BUCKET=${BUCKET:-cshl-embed-rxiv}
 KEY_PARAM=${KEY_PARAM:-/cshl/serve/api-key}
 NAME=${NAME:-cshl-serve-$ARM}
 SG_NAME=${SG_NAME:-cshl-serve-sg}
-ENC_MODEL_NAME=${ENC_MODEL_NAME:-rxiv-encoder-bge-m3}
-RR_MODEL_NAME=${RR_MODEL_NAME:-rxiv-reranker-gte-modernbert}
+ENC_MODEL_NAME=${ENC_MODEL_NAME:-cshl-encoder-bge-m3}
+RR_MODEL_NAME=${RR_MODEL_NAME:-cshl-reranker-gte-modernbert}
 DRYRUN=${DRYRUN:-}
 run() { if [ -n "$DRYRUN" ]; then echo "  [dry-run] would run: $*"; else "$@"; fi; }
 
