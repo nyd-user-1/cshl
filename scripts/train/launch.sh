@@ -26,7 +26,10 @@
 #   MODE=manual ./scripts/train/launch.sh                          # boot only, SSM in
 set -euo pipefail
 REGION=${REGION:-us-east-1}
-TYPE=${TYPE:-g6e.xlarge}
+# TYPE_MENU: comma-separated instance types, walked in order, each across
+# every AZ that offers it, before moving to the next type. TYPE alone still
+# works (becomes a one-item menu) for back-compat / SUBNET-pinned launches.
+TYPE_MENU=${TYPE_MENU:-${TYPE:-g6e.xlarge}}
 PARAM=${PARAM:-/cshl/embed/dburl}
 ROLE=${ROLE:-cshl-embed}
 SG_NAME=${SG_NAME:-cshl-embed-sg}
@@ -59,7 +62,13 @@ else aws ssm put-parameter --name $PARAM --type SecureString --value "$DBVAL" --
 if [ -z "$DRYRUN" ] && ! aws iam get-role --role-name $ROLE >/dev/null 2>&1; then
   echo "role $ROLE does not exist — run scripts/embed-nsr/launch.sh once first"; exit 1
 fi
-run aws iam put-role-policy --role-name $ROLE --policy-name read-dburl --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"ssm:GetParameter\",\"Resource\":\"arn:aws:ssm:$REGION:*:parameter$PARAM\"},{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::$BUCKET/*\"},{\"Effect\":\"Allow\",\"Action\":\"s3:PutObject\",\"Resource\":[\"arn:aws:s3:::$BUCKET/logs/*\",\"arn:aws:s3:::$BUCKET/models/*\"]}]}"
+# s3:ListBucket is REQUIRED for checkpoint resume (`aws s3 ls` to find the
+# latest checkpoint-*, and `aws s3 sync` in either direction needs it to
+# diff local against remote) — GetObject alone is not enough. Its absence
+# would be exactly the silent-until-exercised failure mode this project keeps
+# finding: the box would sit spinning on an AccessDenied inside a background
+# sync loop that nobody is watching.
+run aws iam put-role-policy --role-name $ROLE --policy-name read-dburl --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"ssm:GetParameter\",\"Resource\":\"arn:aws:ssm:$REGION:*:parameter$PARAM\"},{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::$BUCKET/*\"},{\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:GetBucketLocation\"],\"Resource\":\"arn:aws:s3:::$BUCKET\"},{\"Effect\":\"Allow\",\"Action\":\"s3:PutObject\",\"Resource\":[\"arn:aws:s3:::$BUCKET/logs/*\",\"arn:aws:s3:::$BUCKET/models/*\"]}]}"
 
 # 3. train.sh to S3 (the box pulls it fresh every launch, same as worker.mjs)
 if [ -z "$DRYRUN" ]; then
@@ -117,6 +126,9 @@ aws s3 cp s3://$BUCKET/train.sh train.sh
 chmod +x train.sh
 export MODE=$MODE TRAIN_NAME=$TRAIN_NAME RUN_ID=$RUN_ID BUCKET=$BUCKET MODEL_NAME=$MODEL_NAME BASE_MODEL=$BASE_MODEL EVAL_VERSION=${EVAL_VERSION:-cshl-eval-v1}
 export EPOCHS=${EPOCHS:-1} BATCH=${BATCH:-16} QUERY_MAX_LEN=${QUERY_MAX_LEN:-128} PASSAGE_MAX_LEN=${PASSAGE_MAX_LEN:-512} GROUP_SIZE=${GROUP_SIZE:-8}
+export SAVE_STEPS=${SAVE_STEPS:-600} SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-3} CKPT_SYNC_INTERVAL=${CKPT_SYNC_INTERVAL:-60}
+${RESUME_FROM:+export RESUME_FROM=$RESUME_FROM}
+${NPROC:+export NPROC=$NPROC}
 DATABASE_URL="\$DBURL" ./train.sh
 set -x
 aws s3 cp /var/log/train.log s3://$BUCKET/logs/cshl-train-$RUN_ID.log
@@ -124,18 +136,97 @@ shutdown -h now
 EOF
 )
 fi
+IFS=',' read -r -a TYPES <<< "$TYPE_MENU"
 if [ -n "$DRYRUN" ]; then
   echo "───── dry-run: user-data ─────"; echo "$UD"; echo "───── end ─────"
-  echo "  [dry-run] would run: aws ec2 run-instances --image-id $AMI --instance-type $TYPE --iam-instance-profile Name=$ROLE --security-group-ids $SG --instance-initiated-shutdown-behavior terminate --tag Name=cshl-train-$RUN_ID"
+  echo "  [dry-run] would walk TYPE_MENU in order, each type across every AZ that offers it:"
+  for t in "${TYPES[@]}"; do
+    echo "  [dry-run]   try $t: aws ec2 run-instances --image-id $AMI --instance-type $t --iam-instance-profile Name=$ROLE --security-group-ids $SG --instance-initiated-shutdown-behavior terminate --tag Name=cshl-train-$RUN_ID (per offered AZ, until one accepts)"
+  done
   exit 0
 fi
-aws ec2 run-instances --region $REGION \
-  --image-id "$AMI" --instance-type $TYPE --count 1 \
-  ${SUBNET:+--subnet-id $SUBNET} \
-  --iam-instance-profile Name=$ROLE \
-  --security-group-ids "$SG" \
-  --instance-initiated-shutdown-behavior terminate \
-  --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":150,"VolumeType":"gp3","DeleteOnTermination":true}}]' \
-  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=cshl-train-$RUN_ID}]" \
-  --user-data "$UD" \
-  --query 'Instances[0].InstanceId' --output text
+
+# 6. Launch: walk TYPE_MENU type-by-type, each across every AZ that offers it.
+#    Ported from the embed rig's AZ walk (scripts/embed-nsr/launch.sh), which
+#    is itself the fix for a bug that shipped once and never fired: under
+#    `set -e`, `OUT=$(launch_in "$sn")` exits the WHOLE SCRIPT the instant a
+#    capacity error comes back from a command substitution used in an
+#    assignment — so a loop whose only purpose is "try the next AZ" can never
+#    reach its second iteration. `|| true` on that assignment is load-bearing,
+#    not decorative; see CSHL-CPT-REPORT.md "Two rig bugs found by the
+#    capacity failure". Extended here to also walk types, not just AZs,
+#    because g6e vanished region-wide the night this was written and only a
+#    type fallback (not an AZ fallback) would have helped.
+launch_in() {
+  local type="$1" subnet="$2"
+  aws ec2 run-instances --region $REGION \
+    --image-id "$AMI" --instance-type "$type" --count 1 \
+    ${subnet:+--subnet-id "$subnet"} \
+    --iam-instance-profile Name=$ROLE \
+    --security-group-ids "$SG" \
+    --instance-initiated-shutdown-behavior terminate \
+    --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":150,"VolumeType":"gp3","DeleteOnTermination":true}}]' \
+    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=cshl-train-$RUN_ID},{Key=InstanceType,Value=$type}]" \
+    --user-data "$UD" \
+    --query 'Instances[0].InstanceId' --output text 2>&1
+}
+
+# FAKE_CAPACITY_FAIL: test-only hook, zero AWS spend, zero real launches.
+# Set to a number of leading calls to fake as InsufficientInstanceCapacity
+# (proves the loop survives repeated failures under set -e and keeps
+# walking), optionally followed by ":i-xxxx" to fake a success on the call
+# right after the failures run out (proves the loop captures the ID and
+# breaks cleanly once something works). Never read outside this script.
+FAKE_CAPACITY_FAIL=${FAKE_CAPACITY_FAIL:-}
+if [ -n "$FAKE_CAPACITY_FAIL" ]; then
+  FAKE_N="${FAKE_CAPACITY_FAIL%%:*}"
+  FAKE_SUCCEED_ID=""
+  case "$FAKE_CAPACITY_FAIL" in *:*) FAKE_SUCCEED_ID="${FAKE_CAPACITY_FAIL#*:}";; esac
+  # File-based counter: launch_in is invoked as `OUT=$(launch_in ...)`, a
+  # subshell — a plain shell-variable increment inside it would never be
+  # visible on the next call, so the counter has to live in a file.
+  FAKE_COUNTER_FILE=$(mktemp)
+  echo 0 > "$FAKE_COUNTER_FILE"
+  launch_in() {
+    local type="$1" subnet="$2"
+    local calls
+    calls=$(($(cat "$FAKE_COUNTER_FILE") + 1))
+    echo "$calls" > "$FAKE_COUNTER_FILE"
+    if [ "$calls" -le "$FAKE_N" ]; then
+      echo "An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (FAKE #$calls: $type in ${subnet:-<no-subnet>})"
+    elif [ -n "$FAKE_SUCCEED_ID" ]; then
+      echo "$FAKE_SUCCEED_ID"
+    else
+      echo "An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (FAKE #$calls: $type in ${subnet:-<no-subnet>})"
+    fi
+  }
+fi
+
+ID=""; PICKED_TYPE=""
+for TYPE in "${TYPES[@]}"; do
+  if [ -n "${SUBNET:-}" ]; then
+    CANDIDATES="$SUBNET"
+  else
+    OFFERED=$(aws ec2 describe-instance-type-offerings --region $REGION --location-type availability-zone \
+      --filters Name=instance-type,Values=$TYPE --query 'InstanceTypeOfferings[].Location' --output text)
+    CANDIDATES=""
+    for az in $OFFERED; do
+      sn=$(aws ec2 describe-subnets --region $REGION --filters Name=vpc-id,Values=$VPC Name=availability-zone,Values=$az \
+             --query 'Subnets[0].SubnetId' --output text)
+      [ "$sn" != "None" ] && CANDIDATES="$CANDIDATES $sn"
+    done
+  fi
+  [ -n "$CANDIDATES" ] || { echo "type $TYPE: not offered in any AZ with a subnet — next type"; continue; }
+  for sn in $CANDIDATES; do
+    # `|| true` is load-bearing: see the comment above launch_in(). Without it
+    # the FIRST capacity error anywhere in the menu kills the whole script.
+    OUT=$(launch_in "$TYPE" "$sn") || true
+    case "$OUT" in
+      i-*) ID="$OUT"; PICKED_TYPE="$TYPE"; echo "launched: $ID ($TYPE, $sn)"; break 2 ;;
+      *InsufficientInstanceCapacity*|*Unsupported*) echo "type $TYPE: no capacity in $sn — next AZ" ;;
+      *) echo "type $TYPE: launch failed in $sn (non-capacity error) — next type: $OUT"; break ;;
+    esac
+  done
+done
+[ -n "$ID" ] || { echo "NO CAPACITY IN ANY AZ FOR ANY TYPE IN MENU: $TYPE_MENU. Nothing launched." >&2; exit 1; }
+echo "$ID"
