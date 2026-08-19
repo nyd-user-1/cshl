@@ -17,7 +17,9 @@ Budget: **hard cap $5.00 AWS**, approved by Brendan. Every box self-terminates o
 
 **PHASE: train — running.** Instance `i-09938e30bd1f42c3d`, `g6e.2xlarge`, `us-east-1c`,
 run id `20260819-192100-train`, launched 2026-08-19T23:21Z.
-**Expected: ~10-15 min setup + ~45-75 min training, so DONE BY ~2026-08-20T00:50Z.**
+**Training at batch 8 (NOT 16 — it OOMed, see 23:29Z). 4,999 steps at 1.52 it/s measured on
+the box = ~55 min, so training ends ~2026-08-20T00:25Z and the box should self-terminate
+~00:35Z after the query embed and the 2.3 GB weight upload.**
 Watchdog hard-stops the box at 120 min (2026-08-20T01:21Z). If this file has not moved past
 this line by 01:30Z, the run died silently and the box is gone — that is the deadline the
 silence is measured against.
@@ -227,11 +229,51 @@ watchdog kill loses the entire run.
 [train.sh] attempt: batch=16 warmup_steps=250 gradient_checkpointing=off
 ```
 
-**`batch=16` held — the OOM guard did not fire.** That is the second lever, and on the CITE
-run it was lost silently: the guard halved 8 → 4 on a 24 GB A10G and nobody named it until the
-next day. 2,500 steps (39,999 / 16), warmup 250. If it OOMs later the marker
-`OOM — halving batch to 8` is one of the strings the poller emits, so a quiet downgrade cannot
-happen twice.
+`batch=16` started, 2,500 steps (39,999 / 16), warmup 250.
+
+### 2026-08-19T23:29Z — batch 16 did NOT hold. It OOMed on the L40S and the guard halved to 8
+
+```
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 384.00 MiB.
+  GPU 0 has a total capacity of 44.39 GiB of which 151.38 MiB is free.
+[train.sh] OOM — halving batch to 8
+[train.sh] attempt: batch=8 warmup_steps=500 gradient_checkpointing=off
+```
+
+**This is the thing the rig doctrine says must never happen quietly, and this time it did not
+— but it still happened.** It is recorded here in the same breath as the plan that claimed
+batch 16, because the alternative is a report that says "trained at batch 16" while the
+weights say otherwise.
+
+Verified the fallback is genuinely healthy rather than merely running, from the box:
+
+```
+4,999 steps · 1.52 it/s · ETA 54 min
+NVIDIA L40S · 33,883 MiB / 46,068 MiB used · GPU utilization 100%
+```
+
+**Where this leaves the experiment.** Effective batch is **8**, which is 2× the CITE run's 4,
+not the 4× the plan assumed. So the in-batch-negative count goes from ~3 to ~7, not ~15. The
+batch lever is *partially* pulled, and the headline claim has to be "query-shaped supervision
+at batch 8," never "at batch 16."
+
+**Why not chase batch 16.** Priced the alternatives rather than assuming:
+- *A bigger single GPU.* g6e.2xlarge already carries a full 48 GB L40S; g6e.4xlarge is the
+  same one GPU. The next real step is 80 GB A100/H100 at $32+/hr — six times the entire lane
+  budget for one hour.
+- *Multi-GPU data parallel.* Four L40S would multiply effective batch by 4 at roughly the same
+  total cost, which is exactly what the rig doctrine recommends — but this rig has no
+  multi-GPU support. That gap is already a named open item and it is not this lane's to fix
+  mid-flight while another lane holds the rig files.
+- *`gradient_checkpointing`.* Would fit batch 16, but `train.sh` only reaches for it at
+  batch 1 and `train.sh` is fenced.
+- *Shorter passages.* `PASSAGE_MAX_LEN=256` would halve activations and fit batch 16 — and it
+  is the one option I actively do not want, because the embed rig indexes the full 4,000-char
+  document. Training on half of what is served is a train/serve mismatch, which is a worse
+  defect than a smaller batch and a much quieter one.
+
+Proceeding at batch 8. Cost of the OOM: about 3 minutes of a $2.242/hr box, **$0.11**, itemised
+as waste in the ledger.
 
 ### 2026-08-19T23:30Z — the re-embed priced from measurement, not from the estimate
 
