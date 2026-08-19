@@ -198,7 +198,7 @@ EOF
 )
   if [ -n "$DRYRUN" ]; then
     echo "───── dry-run: box $i user-data ─────"; echo "$UD"; echo "───── end user-data ─────"
-    echo "  [dry-run] would run: aws ec2 run-instances --region $REGION --image-id $AMI --instance-type $TYPE --count 1 ${SUBNET:+--subnet-id $SUBNET} --iam-instance-profile Name=$ROLE --security-group-ids $SG --instance-initiated-shutdown-behavior terminate --block-device-mappings '[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":100,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]' --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=cshl-embed-$i}]' --user-data <above>"
+    echo "  [dry-run] would run: aws ec2 run-instances --region $REGION --image-id $AMI --instance-type $TYPE --count 1 ${SUBNET:+--subnet-id $SUBNET} --iam-instance-profile Name=$ROLE --security-group-ids $SG --instance-initiated-shutdown-behavior terminate --block-device-mappings '[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":100,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]' --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=cshl-embed-${EMB_MODEL:-bge-m3}-$i},{Key=Arm,Value=${EMB_MODEL:-bge-m3}},{Key=Table,Value=$EMB_TABLE},{Key=Part,Value=$i}]' --user-data <above>"
     continue
   fi
   # g6e capacity is patchy and the failure is per-AZ, not regional: NSR's first
@@ -215,7 +215,7 @@ EOF
       --security-group-ids "$SG" \
       --instance-initiated-shutdown-behavior terminate \
       --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":100,"VolumeType":"gp3","DeleteOnTermination":true}}]' \
-      --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=cshl-embed-$i}]" \
+      --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=cshl-embed-${EMB_MODEL:-bge-m3}-$i},{Key=Arm,Value=${EMB_MODEL:-bge-m3}},{Key=Table,Value=$EMB_TABLE},{Key=Part,Value=$i}]" \
       --user-data "$UD" \
       --query 'Instances[0].InstanceId' --output text 2>&1
   }

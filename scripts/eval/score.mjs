@@ -22,6 +22,7 @@
 import { neon } from '@neondatabase/serverless'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
   const m = line.match(/^([A-Z0-9_]+)=(.*)$/)
@@ -233,57 +234,64 @@ async function runRerank(baseRanked, queries, url, key, poolSize) {
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
-let queries = loadQueries()
-if (process.env.LIMIT) {
-  const n = Number(process.env.LIMIT)
-  const byFam = new Map()
-  queries = queries.filter((qq) => { const c = byFam.get(qq.family) ?? 0; if (c >= n) return false; byFam.set(qq.family, c + 1); return true })
-}
-const qrels = loadQrels()
-console.log(`${VERSION}: ${queries.length} queries, ${qrels.size} qrels groups`)
+// Guarded: this file is also the arm registry, imported by embed-queries.mjs and
+// coverage-gate.mjs. Without this, importing REGISTRY runs a full scoring job —
+// which is how a coverage assertion ends up failing on a missing benchmark file
+// instead of telling you about your corpus.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  let queries = loadQueries()
+  if (process.env.LIMIT) {
+    const n = Number(process.env.LIMIT)
+    const byFam = new Map()
+    queries = queries.filter((qq) => { const c = byFam.get(qq.family) ?? 0; if (c >= n) return false; byFam.set(qq.family, c + 1); return true })
+  }
+  const qrels = loadQrels()
+  console.log(`${VERSION}: ${queries.length} queries, ${qrels.size} qrels groups`)
 
-const requested = (process.env.ARMS ?? 'fts').split(',').map((s) => s.trim()).filter(Boolean)
-const ranked = new Map() // arm -> Map(qid -> ranked keys)
+  const requested = (process.env.ARMS ?? 'fts').split(',').map((s) => s.trim()).filter(Boolean)
+  const ranked = new Map() // arm -> Map(qid -> ranked keys)
 
-for (const arm of requested) {
-  console.log(`=== ${arm} ===`)
-  let res
-  try {
-    if (arm.startsWith('rrf:')) {
-      const parts = arm.slice(4).split('+')
-      const missing = parts.filter((p) => !ranked.has(p))
-      if (missing.length) { console.log(`  skipped — needs ${missing.join(', ')} scored first (put them earlier in ARMS)`); continue }
-      const perQuery = new Map()
-      for (const qq of queries) perQuery.set(qq.qid, rrf(parts.map((p) => ranked.get(p).get(qq.qid))))
-      res = { perQuery, latencies: [], extra: { fused: parts, k: 60 } }
-    } else if (arm.startsWith('rerank:')) {
-      const [base, url] = arm.slice(7).split('@')
-      if (!ranked.has(base)) { console.log(`  skipped — needs ${base} scored first`); continue }
-      res = await runRerank(ranked.get(base), queries, url, process.env.NSR_SERVE_KEY ?? process.env.HF_TOKEN ?? '', Number(process.env.RERANK_POOL ?? 20))
-    } else if (REGISTRY[arm]?.kind === 'fts') {
-      res = await runFts(queries)
-    } else if (REGISTRY[arm]?.kind === 'dense') {
-      res = await runDense(arm, queries)
-    } else {
-      console.log(`  unknown arm '${arm}' — registry has: ${Object.keys(REGISTRY).join(', ')} (+ rrf:A+B, rerank:A@url)`); continue
+  for (const arm of requested) {
+    console.log(`=== ${arm} ===`)
+    let res
+    try {
+      if (arm.startsWith('rrf:')) {
+        const parts = arm.slice(4).split('+')
+        const missing = parts.filter((p) => !ranked.has(p))
+        if (missing.length) { console.log(`  skipped — needs ${missing.join(', ')} scored first (put them earlier in ARMS)`); continue }
+        const perQuery = new Map()
+        for (const qq of queries) perQuery.set(qq.qid, rrf(parts.map((p) => ranked.get(p).get(qq.qid))))
+        res = { perQuery, latencies: [], extra: { fused: parts, k: 60 } }
+      } else if (arm.startsWith('rerank:')) {
+        const [base, url] = arm.slice(7).split('@')
+        if (!ranked.has(base)) { console.log(`  skipped — needs ${base} scored first`); continue }
+        res = await runRerank(ranked.get(base), queries, url, process.env.NSR_SERVE_KEY ?? process.env.HF_TOKEN ?? '', Number(process.env.RERANK_POOL ?? 20))
+      } else if (REGISTRY[arm]?.kind === 'fts') {
+        res = await runFts(queries)
+      } else if (REGISTRY[arm]?.kind === 'dense') {
+        res = await runDense(arm, queries)
+      } else {
+        console.log(`  unknown arm '${arm}' — registry has: ${Object.keys(REGISTRY).join(', ')} (+ rrf:A+B, rerank:A@url)`); continue
+      }
+    } catch (e) {
+      console.log(`  ${arm} FAILED: ${e.message}`)   // a dead arm costs one arm, not the run
+      continue
     }
-  } catch (e) {
-    console.log(`  ${arm} FAILED: ${e.message}`)   // a dead arm costs one arm, not the run
-    continue
+    ranked.set(arm, res.perQuery)
+    const perQ = new Map([...res.perQuery].map(([qid, r]) => [qid, metricsFor(r, qrels.get(qid) ?? new Set())]))
+    const out = {
+      arm, version: VERSION, scored_at: new Date().toISOString(),
+      n_queries: res.perQuery.size, topk: TOPK,
+      end_to_end_latency_ms: { p50: percentile(res.latencies, 50), p95: percentile(res.latencies, 95) },
+      ...res.extra,
+      metrics: aggregate(perQ, queries),
+    }
+    writeFileSync(join(RESULTS, `${arm.replace(/[^a-zA-Z0-9._+-]/g, '_')}.json`), JSON.stringify(out, null, 2))
+    for (const [fam, segs] of Object.entries(out.metrics)) {
+      console.log(`  ${fam} blended: R@1 ${segs.blended.r1} R@10 ${segs.blended.r10} nDCG@10 ${segs.blended.ndcg10} (n=${segs.blended.n})`)
+    }
+    console.log(`  wrote results/${arm}.json`)
   }
-  ranked.set(arm, res.perQuery)
-  const perQ = new Map([...res.perQuery].map(([qid, r]) => [qid, metricsFor(r, qrels.get(qid) ?? new Set())]))
-  const out = {
-    arm, version: VERSION, scored_at: new Date().toISOString(),
-    n_queries: res.perQuery.size, topk: TOPK,
-    end_to_end_latency_ms: { p50: percentile(res.latencies, 50), p95: percentile(res.latencies, 95) },
-    ...res.extra,
-    metrics: aggregate(perQ, queries),
-  }
-  writeFileSync(join(RESULTS, `${arm.replace(/[^a-zA-Z0-9._+-]/g, '_')}.json`), JSON.stringify(out, null, 2))
-  for (const [fam, segs] of Object.entries(out.metrics)) {
-    console.log(`  ${fam} blended: R@1 ${segs.blended.r1} R@10 ${segs.blended.r10} nDCG@10 ${segs.blended.ndcg10} (n=${segs.blended.n})`)
-  }
-  console.log(`  wrote results/${arm}.json`)
+  console.log('=== scoring complete ===')
+
 }
-console.log('=== scoring complete ===')
