@@ -111,6 +111,19 @@ try {
   values.TOTAL_N ??= total.toLocaleString()
   values.TOTAL_PUBLISHED ??= `${totalPub.toLocaleString()} (${((totalPub / total) * 100).toFixed(1)}%)`
   const licTotal = lic.reduce((a, r) => a + r.n, 0)
+  values.LICENSE_TABLE ??= [
+    '| licence | share | derivatives redistributable? |',
+    '|---|---:|---|',
+    ...lic.map((r) => {
+      const pct = ((r.n / lic.reduce((a, x) => a + x.n, 0)) * 100).toFixed(1)
+      const ok = /^cc_by$|^cc0/.test(r.lic) ? 'yes'
+        : r.lic === 'cc_by_nc' ? 'yes, non-commercial'
+        : r.lic === 'cc_no' ? '**no — all rights reserved**'
+        : r.lic === 'unstated' ? 'unknown'
+        : '**no — no derivatives**'
+      return `| \`${r.lic}\` | ${pct}% | ${ok} |`
+    }),
+  ].join('\n')
   values.LICENSE_MIX ??= lic
     .map((r) => `\`${r.lic}\` ${((r.n / licTotal) * 100).toFixed(1)}%`)
     .join(', ')

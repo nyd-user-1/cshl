@@ -32,6 +32,29 @@ PRIVATE=${PRIVATE:-True}
 DRYRUN=${DRYRUN:-}
 NAME=cshl-publish-$(echo "$REPO" | tr '/' '-')
 [ -f "$CARD" ] || { echo "card not found: $CARD"; exit 1; }
+# TEXT-BEARING ARTIFACT GUARD. cshl-triplets and cshl-eval-v1 inline abstract
+# text; ~72% of this corpus carries a licence restricting derivative
+# redistribution or commercial use, and `cc_no` (29.9%) reserves all rights.
+# Private hosting is fine — public distribution is a decision only Brendan
+# makes, so make the tool refuse rather than trusting anyone to remember.
+# Override exists so the refusal is a speed bump for an authorized human, not a
+# wall; it is deliberately ugly to type and it is logged.
+case "$REPO" in
+  *triplets*|*eval-v1*|*corpus*|*query-pairs*)
+    if [ "$PRIVATE" != "True" ] && [ "${I_HAVE_BRENDANS_EXPLICIT_GO_TO_PUBLISH_TEXT:-}" != "yes" ]; then
+      echo "REFUSING: $REPO carries abstract text and PRIVATE=$PRIVATE." >&2
+      echo "  ~72% of this corpus restricts derivative redistribution (cc_no 29.9% = all rights reserved)." >&2
+      echo "  Public distribution is Brendan's call. See the Licensing section of docs/CSHL-CPT-REPORT.md." >&2
+      echo "  Recommended alternative: publish keys only (doi + server are on every frozen row)." >&2
+      exit 1
+    fi
+    if ! grep -q "cc_no" "$CARD"; then
+      echo "REFUSING: $REPO carries abstract text but its card has no licence table." >&2
+      echo "  Run scripts/publish-nsr/fill-card.mjs so {{LICENSE_TABLE}} is populated." >&2
+      exit 1
+    fi
+    ;;
+esac
 if grep -q '{{' "$CARD"; then
   echo "REFUSING: $CARD still contains {{PLACEHOLDER}} markers:"; grep -o '{{[A-Z_]*}}' "$CARD" | sort -u | sed 's/^/  /'
   echo "Fill them from the actual run before publishing. A card with placeholders is worse than no card."

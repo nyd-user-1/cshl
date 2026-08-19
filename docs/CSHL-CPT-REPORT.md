@@ -222,6 +222,27 @@ published slice to the ~21% that is `cc_by`/`cc0`, or get CSHL's explicit positi
 sibling NSR project has the same question open with NNDC and it has not been answered there
 either.
 
+**Two questions that get conflated, and shouldn't be.** *Displaying* abstracts in the search
+UI, with attribution and a link to source, is what the servers' public API exists for; every
+literature-search surface does it, and the production cutover is not implicated by any of
+this. *Redistributing* them in bulk as a downloadable dataset is the different question, and
+the only one at issue here.
+
+**Recommended path, if and when someone wants a public release: keys only.** Every frozen
+benchmark row already carries `doi` and `server` — lane-mine added them so a team with a
+longer-context model could build an untruncated variant, and the same field does double duty
+here. A consumer re-fetches text from `https://api.{server}.org/details/{server}/{doi}/na/json`
+and reconstructs the dataset themselves. It costs us a build script and it moves the
+redistribution question to the party that already has a licence to answer it.
+
+**This is now enforced, not remembered.** `scripts/publish-nsr/launch.sh` refuses to push any
+repo whose name matches a text-bearing artifact (`*triplets*`, `*eval-v1*`, `*corpus*`,
+`*query-pairs*`) unless `PRIVATE=True`, and separately refuses if the card does not contain
+the licence table — so anyone reaching for the visibility toggle reads the table first. The
+override is a deliberately unwieldy environment variable rather than a flag. Verified against
+all three paths: public text-bearing repo refuses, private-without-licence-table refuses, and
+a weights-only model repo passes through untouched.
+
 I am flagging this rather than deciding it. It is a redistribution question about someone
 else's content, and nothing about tonight's deadline makes it urgent enough to guess at.
 
