@@ -634,6 +634,50 @@ Worth it for `preprint_mesh` above all — it restores the facet/chip vocabulary
 with NSR's expert keywords, and would let the fts B-weight carry real controlled vocabulary
 instead of the category/journal/institution stand-in.
 
+### 4h The benchmark card — stated properties and documented limitations
+
+`cshl-eval-v1`'s `manifest.json` now carries a `properties` and a `limitations` block, because these
+are credibility lines for an outside reader and they belong in the artifact rather than in a chat log:
+
+- **`positives_guaranteed_embeddable: true`**, with the predicate spelled out. A paper the encoder
+  refuses to embed has no vector, so it can never be retrieved, so a benchmark containing it as a
+  positive is unwinnable by construction — and that failure reads as *model weakness*, sending
+  someone hunting through the training data for a bug that was in the benchmark.
+- **`text_is_truncated`** — the honest cost of shipping the single canonical `embed_text` string.
+  Every arm scoring on byte-identical input is more rigorous, not less, but it bakes our 4000-char
+  recipe into a benchmark others will compare against. Stated: cap 4000, applied to the
+  concatenation, **2,083 of 197,539 papers (1.05%)** affected — measured at build time and carried
+  into the card, not quoted from memory.
+- **Mitigation, enforced in `--verify`:** every frozen row carries `slug`, `doi` and `server`, so
+  full untruncated text is re-fetchable from `https://api.{server}.org/details/{server}/{doi}/na/json`.
+  A team with a longer-context model can build a full-text variant without our cooperation. The
+  verifier fails if any row is missing that provenance.
+- **`mesh_coverage`** — the ~36% ceiling and, more importantly, its *bias*, in the artifact itself.
+
+### 4i The end-to-end seam check — because agreeing with SQL is not agreeing with the encoder
+
+I told rig-port that md5 was the right comparison "because md5-of-the-exact-string is what your
+worker stores as `text_hash`". That instinct was right and the statement was **false when I made
+it**. Their E0 rehearsal ran the parity check and found **2 mismatches in 3,000**: the worker was
+applying a JavaScript `.trim()` on top of the `trim()` SQL had already done. JS `.trim()` strips all
+whitespace, SQL `trim()` strips spaces, and `left(…, 4000)` can leave a whitespace character sitting
+exactly on the truncation boundary that only the JS side then removes. Both offending rows: 4,000
+chars in SQL, 3,999 after. A truncation-boundary bug — so it bites only the long tail, which is
+exactly the population `embed_text` and their vectors most need to agree on. They fixed the worker
+to be a pass-through and dropped the rehearsal vectors.
+
+The lesson for my verifier: my seam check proved our file agrees with a **SQL expression**. It did
+not prove our file agrees with **what the box actually encoded**, and that gap had a live bug in it.
+So `--verify` now also compares, when `preprint_embeddings` has rows:
+
+```
+md5(corpus-text.jsonl embed_text)  ==  preprint_embeddings.text_hash
+```
+`text_hash` is md5 of the exact string sent to the encoder, so this is the only check that spans the
+whole seam — file → SQL → worker → TEI. It skips silently while the table is empty and turns itself
+on the moment the embed pass runs. Current state: `(preprint_embeddings is empty — end-to-end
+text_hash check skipped until the embed pass runs)`.
+
 ### 4f The embed-recipe seam — the half I got wrong, and how it is now impossible to get wrong
 
 I caught that the rig's cap was 4000 and mine was 2000, and fixed the number. The lead then diffed

@@ -723,6 +723,33 @@ async function verify() {
       }
       ok(missingField === 0, `every sampled row carries an embed_text field (${missingField} without)`);
       ok(checked > 0 && mismatch === 0, `${checked} sampled embed_text values are byte-identical to the shared recipe's output (${mismatch} mismatches)`);
+
+      // ── the end-to-end seam ────────────────────────────────────────────────
+      // The check above proves our file agrees with a SQL expression. It does
+      // NOT prove it agrees with what the GPU box actually encoded — and that
+      // gap is not hypothetical: rig-port's E0 rehearsal found the worker
+      // applying a JS .trim() on top of SQL's, which differ on a whitespace
+      // character sitting exactly on the 4000-char truncation boundary. Two
+      // rows in three thousand, all of them in the long tail our vectors most
+      // need to agree on. `text_hash` is md5 of the exact string sent to the
+      // encoder, so comparing against it is the only check that spans the whole
+      // seam. Skipped silently while the embeddings table is empty.
+      const [[embRows]] = await psqlRows(`SELECT count(*) FROM preprint_embeddings;`).catch(() => [["0"]]);
+      if (!Number(embRows)) {
+        log("  (preprint_embeddings is empty — end-to-end text_hash check skipped until the embed pass runs)");
+      } else {
+        const hrows = await psqlRows(`SELECT key_number, text_hash FROM preprint_embeddings WHERE key_number IN (${keys});`);
+        const stored = new Map(hrows.map(([k, h]) => [k, h]));
+        let e2e = 0, e2eBad = 0;
+        for (const r of sample) {
+          const want = stored.get(r.key);
+          if (!want || typeof r.embed_text !== "string") continue;
+          e2e++;
+          if (createHash("md5").update(r.embed_text).digest("hex") !== want) e2eBad++;
+        }
+        if (!e2e) log("  (no sampled paper is embedded yet — end-to-end check skipped)");
+        else ok(e2eBad === 0, `${e2e} sampled embed_text values match preprint_embeddings.text_hash — the string we ship IS the string the encoder saw (${e2eBad} mismatches)`);
+      }
     }
   }
 
