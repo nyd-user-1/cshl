@@ -1,3 +1,9 @@
+> **CSHL — cloned from `/Code/nsr` on 2026-08-18.** This repo is a 1-1 duplicate of
+> NSRgpt (nsr @ `8c1b05b`) with the BNL mark swapped for the CSH logo. Everything
+> below still describes the NSR app and its data, and stays true until the new Neon
+> database and the two CSHL APIs land and the content is swapped over 1-1. Production:
+> **https://cshl.nysgpt.com**.
+
 # NSRgpt — Nuclear Data Center
 
 A search, chat, and browsing layer over the Nuclear Science References corpus
