@@ -188,6 +188,43 @@ that only reports wins is worthless.`
 
 ---
 
+## Licensing — read this before any repo goes public
+
+The corpus is **not** uniformly Creative Commons, and the shape of the mix matters for what
+we can redistribute. Measured over 197,539 loaded papers:
+
+| license | share | permits redistribution of derivatives? |
+|---|---:|---|
+| `cc_by_nc_nd` | 35.5% | **no** — no derivatives |
+| `cc_no` | 29.9% | **no** — all rights reserved |
+| `cc_by` | 20.2% | yes |
+| `cc_by_nc` | 6.8% | yes, non-commercial |
+| `cc_by_nd` | 6.4% | **no** — no derivatives |
+| `cc0` / `cc0_ng` | 1.1% | yes |
+| unstated | 0.1% | unknown |
+
+So roughly **72% of the corpus carries a licence that restricts derivative redistribution,
+commercial use, or both**, and `cc_no` — nearly a third — reserves all rights.
+
+This is a live constraint on two artifacts, not a theoretical one:
+
+- **`cshl-triplets` contains abstract text**, drawn from papers across the whole licence
+  mix. Publishing it, even privately, is redistribution.
+- **`cshl-eval-v1` inlines `embed_text`** (title + abstract) so the benchmark is
+  self-contained and reproducible — which is the right call for rigour and the wrong one for
+  licensing, at the same time.
+
+All repos are private for now, which is the correct default and buys time to resolve this
+rather than resolving it. **Flipping any of them public needs a real answer**, and the
+options are known: ship keys and let consumers re-fetch text from the public API (the
+benchmark rows already carry `doi` + `server` for exactly this reason), restrict the
+published slice to the ~21% that is `cc_by`/`cc0`, or get CSHL's explicit position. The
+sibling NSR project has the same question open with NNDC and it has not been answered there
+either.
+
+I am flagging this rather than deciding it. It is a redistribution question about someone
+else's content, and nothing about tonight's deadline makes it urgent enough to guess at.
+
 ## Open follow-ups
 
 1. **The Hugging Face push used the NSR-scoped token** (`/nsr/hf/token`), on Brendan's

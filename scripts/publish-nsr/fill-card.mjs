@@ -93,21 +93,27 @@ try {
     SELECT server, count(*)::int n, min(posted_date) lo, max(posted_date) hi,
            count(*) FILTER (WHERE published_doi IS NOT NULL)::int pub
       FROM preprints GROUP BY server ORDER BY server`)
+  // NOT `license LIKE 'cc%'`. bioRxiv/medRxiv use `cc_no` to mean "no reuse
+  // permitted" — a prefix match counts the most restrictive value in the corpus
+  // as Creative Commons and reports the exact opposite of the truth. Enumerate.
   const lic = await sql.query(`
-    SELECT count(DISTINCT license)::int kinds,
-           round(100.0 * count(*) FILTER (WHERE license LIKE 'cc%') / nullif(count(*),0), 1) pct_cc
-      FROM preprints`)
+    SELECT coalesce(license,'unstated') lic, count(*)::int n
+      FROM preprints GROUP BY 1 ORDER BY 2 DESC`)
   let total = 0, totalPub = 0
   for (const r of rows) {
     const K = r.server === 'biorxiv' ? 'BIORXIV' : 'MEDRXIV'
     values[`${K}_N`] = r.n.toLocaleString()
-    values[`${K}_RANGE`] = `${r.lo} → ${r.hi}`
+    const d = (x) => (x instanceof Date ? x.toISOString().slice(0, 10) : String(x).slice(0, 10))
+    values[`${K}_RANGE`] = `${d(r.lo)} → ${d(r.hi)}`
     values[`${K}_PUBLISHED`] = `${r.pub.toLocaleString()} (${((r.pub / r.n) * 100).toFixed(1)}%)`
     total += r.n; totalPub += r.pub
   }
   values.TOTAL_N ??= total.toLocaleString()
   values.TOTAL_PUBLISHED ??= `${totalPub.toLocaleString()} (${((totalPub / total) * 100).toFixed(1)}%)`
-  values.LICENSE_MIX ??= `${lic[0].kinds} distinct licenses, ${lic[0].pct_cc}% Creative Commons`
+  const licTotal = lic.reduce((a, r) => a + r.n, 0)
+  values.LICENSE_MIX ??= lic
+    .map((r) => `\`${r.lic}\` ${((r.n / licTotal) * 100).toFixed(1)}%`)
+    .join(', ')
   values.HARVEST_DATE ??= new Date().toISOString().slice(0, 10)
 } catch (e) {
   console.log(`(corpus stats unavailable: ${e.message})`)
