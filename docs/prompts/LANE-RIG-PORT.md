@@ -722,3 +722,27 @@ Deliverables due at breakfast: embedded corpus, baselines scored with the per-ar
 trained encoder + reranker, frozen `cshl-eval-v1`, published PRIVATE `cshl-*` repos via
 `/nsr/hf/token`, and the write-up in `docs/` (local copy mandatory) with every arm's honest
 numbers and the exact spend.
+
+### HOUSE DOCTRINE — shared values across lanes (lead, 02:3x, credit: lane-mine)
+
+Earned tonight, at the cost of two near-misses. Carry it to the next project.
+
+**One definition, plus a check that reads every copy that cannot import it.**
+
+"Import, don't copy" is necessary and NOT sufficient. Two lanes that *agree* on a value drift;
+two lanes that *share* one can't — but a consumer that physically cannot import (a worker
+uploaded to S3 with no repo checkout, a SQL expression, a shell script) will drift silently no
+matter how clean the definition is. The pattern that actually held was `recipe.mjs` shipping an
+`assertWorkerMatches()` that READS the other file and throws.
+
+**Corollary, worth more than the rule: a verifier must not claim more than it proves.**
+lane-mine's seam check proved *file agrees with a SQL expression* and was described as *file
+agrees with what the encoder saw*. There was a live bug in exactly that gap — the worker applied
+a JS `.trim()` on top of SQL's `trim()`, and `left(…, 4000)` can leave a whitespace character on
+the truncation boundary that only JS strips. A verifier that proves a narrower claim than it
+advertises is NEGATIVE value: it buys real confidence with fake coverage and aims attention away
+from the gap it left. State exactly what a check spans, and make the end-to-end one exist —
+here, `md5(embed_text)` vs `preprint_embeddings.text_hash`, which is the only assertion spanning
+file → SQL → worker → TEI.
+
+Found by a $0.25 rehearsal nobody was required to run, via a parity check nobody asked for.

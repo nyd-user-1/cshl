@@ -174,8 +174,12 @@ async function runDense(arm, queries) {
   const probe = queries.find((qq) => emb.has(qq.qid))
   if (probe) {
     const plan = await q(`EXPLAIN SELECT key_number FROM ${spec.table} ORDER BY embedding ${OP} $1::vector LIMIT ${TOPK}`, [emb.get(probe.qid)])
-    const text = plan.map((r) => Object.values(r)[0]).join(' | ')
-    console.log(`  ${arm} plan: ${text.includes('Index Scan') ? 'Index Scan CONFIRMED' : 'WARNING no Index Scan — ' + text}`)
+    // Truncate hard: EXPLAIN echoes the bound parameter, which is a 768- or
+    // 1024-dimension vector. Printing it in full buries the one word that
+    // matters (whether the planner used the index) under 40 KB of floats.
+    const text = plan.map((r) => Object.values(r)[0]).join(' | ').replace(/'\[[^\]]*\]'::vector/g, "'<vec>'::vector")
+    const ok = text.includes('Index Scan')
+    console.log(`  ${arm} plan: ${ok ? 'Index Scan CONFIRMED' : 'WARNING no Index Scan — ' + text.slice(0, 200)}`)
   }
   const latencies = []
   const perQuery = new Map()
