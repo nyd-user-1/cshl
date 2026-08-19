@@ -22,7 +22,12 @@ program on nuclear-science literature.*
 | — | aborted MedCPT rehearsal, terminated 35 s in on a permissions contradiction | done | $0.03 |
 | E0 | 3,000-row bge-m3 rehearsal | **done** | $0.25 |
 | E1 | full corpus embed pass 1 (197,539 rows) | **done** | $0.40 |
-| E1b | pass 2, bioRxiv remainder | armed | `PENDING` |
+| E1b | pass 2, bioRxiv remainder (228,813 rows) | **done** | $0.58 |
+| E1c | `RECLAIM_STALE` pass, 3,207 stale rows | **done** | $0.00 (warm box) |
+| E2 | HNSW index, 433,449 vectors | **done** | ~$0.05 (Neon) |
+| B1 | MedCPT article encoder, 433,449 | **done** | $0.37 |
+| B2 | SPECTER2 | running | `PENDING` |
+| B3 | SciNCL | running | `PENDING` |
 | E2 | HNSW index | pending | `PENDING` |
 | B1–B3 | MedCPT / SPECTER2 / SciNCL baseline corpus embeds | pending | `PENDING` |
 | Q1 | doc2query synthetic-query generation | pending | `PENDING` |
@@ -31,7 +36,7 @@ program on nuclear-science literature.*
 | T3 | reranker fine-tune | pending | `PENDING` |
 | S1 | serve box (t3.large, ongoing $0.083/h) | pending | `PENDING` |
 | P1 | HF publish (4 private repos, t3.small ×4) | pending | `PENDING` |
-| | **TOTAL** | | **$0.68 so far** |
+| | **TOTAL** | | **$1.63 committed, 2 boxes in flight** |
 
 ---
 
@@ -173,6 +178,72 @@ drove three decisions:
    NSR's and 128 long texts in one call overruns TEI's batch-token budget.
 
 ---
+
+## Coverage — verified, with a timestamp
+
+A completeness claim without a timestamp is worth very little, because completeness is not a
+property a table has — it is a property a table had at a moment, and it decays the instant
+any other process touches the table.
+
+```
+verified 2026-08-19 07:08:23Z against 433,449 papers
+
+corpus                     433,449   embeddable 433,449   excluded (<20 non-ws chars) 0
+preprint_embeddings        433,449 vectors      papers without a vector: 0
+dimension faults 0 · zero vectors 0 · text_hash vs recipe: 0 mismatches corpus-wide
+preprint_embeddings_medcpt 433,449 vectors      papers without a vector: 0
+
+GATE PASSED
+```
+
+`scripts/eval/coverage-gate.mjs` re-derives every figure at assertion time and accepts
+nothing from a pass report. It runs again as the last action before publish, because the
+run above proves nothing about the state an hour later.
+
+### Why the gate exists: a true report that became false
+
+The pass-1 sweep reported *0 mismatches, 0 uncovered papers*. That was **true when written**.
+Ninety minutes later it was false — not because anything failed, but because a neighbouring
+lane upserted newer versions of papers already embedded, and the hub keeps latest-version-
+wins. The gate caught **3,207** rows whose stored `text_hash` no longer matched the
+recomputed recipe. Every one of them was a multi-version paper (v2 1,722 · v3 861 · v4 383 ·
+v5 145 · v6 52) against a corpus baseline of 24.5% multi-version — a 100% concentration that
+identifies the cause beyond argument.
+
+Nothing errored. The vectors were real, the rows present, every count reconciled. They simply
+described text that no longer existed. `RECLAIM_STALE=1` re-embedded exactly those 3,207 on
+an already-warm box, and the gate then passed clean.
+
+The generalisation, which now governs how this program reports anything: **any completeness
+claim decays the moment a concurrent lane touches the same table.** Not a bug in either lane —
+a property of concurrent work on shared state.
+
+*Related finding, credited to the ingest lane:* an unauthenticated `PATCH` handler inherited
+from the NSR codebase allowed `UPDATE preprints SET abstract = $2` from the open internet, and
+was about to be exposed at cutover. Any request could have silently invalidated a paper's
+vector, detectable only by a `text_hash` comparison. Disabled before exposure. A benchmark
+whose corpus text is publicly mutable is not a benchmark.
+
+## Retrieval performance — measured, and the number is a range
+
+`idx_pp_emb_hnsw`, HNSW over 433,449 × 1024-d, cosine opclass. Index Scan confirmed.
+
+| condition | server-side |
+|---|---|
+| warm (probe repeated in-session) | **2.1 ms** |
+| warm, `ef_search` 20 / 40 / 100 | 1.4 / 2.4 / 4.5 ms |
+| cold (five distinct probes) | **858 – 1,200 ms** |
+
+The spread is cache, not the index: the HNSW graph is **3,411 MB** against **456 MB** of
+`shared_buffers` — about **13%** resident. A traversal that lands on cached pages costs
+milliseconds; one that doesn't pays storage reads for the whole walk. Reporting a single
+latency figure here would be reporting cache luck, so this document reports both ends.
+
+Two levers, neither pulled: keeping the Neon compute floor raised (more memory, more resident
+index — in tension with the house rule of restoring it to 0.25 CU at close), and `halfvec`,
+which would halve the index and roughly double what fits in cache at some recall cost. The
+latter is a re-embed-adjacent change against a frozen, verified corpus, so it is a follow-up
+and not a tonight decision.
 
 ## Methodology
 

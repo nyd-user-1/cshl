@@ -761,3 +761,22 @@ here, `md5(embed_text)` vs `preprint_embeddings.text_hash`, which is the only as
 file → SQL → worker → TEI.
 
 Found by a $0.25 rehearsal nobody was required to run, via a parity check nobody asked for.
+
+### DOCTRINE — self-validation proves consistency, never coverage (credit: ingest-lane, 03:0x)
+
+> **A loader validating itself can only prove internal consistency, never coverage.
+> Coverage needs a second, independent count from the source.**
+
+Worked example, tonight: `sql/04` reported papers = distinct_keys = distinct `(server, doi)` =
+426,352, zero collisions, zero dupes. Every number true. Every number self-referential. The
+corpus was short **7,097 medRxiv papers** — an early upsert snapshotted `stage_preprints` while
+its own staging was still in flight, and the stage was truncated underneath before the rest
+landed. The only thing that could see it was `scripts/assert-keys.mjs`, which re-derives
+distinct `(server, doi)` straight from the walked ndjson **without trusting the loader**.
+
+**The night's pattern, three for three:** `vercel env pull` writing the literal string
+`[SENSITIVE]` into a rollback file; a `text_hash` that could never match because the worker
+JS-trimmed what SQL had already trimmed; a load that under-counted while reporting success.
+**None raised an error. All three produced something that looked right.** Errors are the easy
+case. Design the checks for the silent case: an independent count, a hash that spans every
+component, an assertion run after the fact rather than a sum of what each stage believed it did.
