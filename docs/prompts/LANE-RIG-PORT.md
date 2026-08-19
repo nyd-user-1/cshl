@@ -94,6 +94,12 @@ approve line items. End with ≤5 Decisions needed and a Blocked-on list.
 
 ### Log (timestamped, newest last)
 
+> **SPEND TALLY vs the $10.50 ceiling — $0.28 committed.**
+> A1 scaffolding $0 · eval sidecars $0 · aborted MedCPT rehearsal (terminated 35 s in on a
+> permissions contradiction) $0.03 · **E0 rehearsal $0.25** · Neon floor 2 CU (running, restore
+> to 0.25 at close) ~$0.13/h. Next spend: E1, on the ingest lane's commit signal.
+
+
 - **2026-08-19 ~01:5xZ — interim 1.** Read LANE-RXIV-MAP §3/§6 (identity ruling + DDL) and
   confirmed against the LIVE db: build lane has applied sql/01–07, `preprints` matches the
   proposed DDL exactly (incl. `UNIQUE (server, doi)`, `key_number` unique, generated `fts`).
@@ -110,6 +116,24 @@ approve line items. End with ≤5 Decisions needed and a Blocked-on list.
   through a published encoder + reranker **~$10.50**. Two things need eyes tonight: the
   `preprint_embeddings` DDL (blocks everything) and the malformed `.env.local` line that is
   breaking `scripts/psql-cshl.sh` for every lane.
+
+- **2026-08-19 06:2xZ — EXECUTION (menu approved, ceiling $10.50).** Brendan approved the full
+  menu; the `no ML tonight` line I was given by the ingest lane turned out to be their own
+  kickoff brief, retracted by them. **A1 done** (IAM role `cshl-embed` + instance profile,
+  S3 `cshl-embed-rxiv`, SSM SecureString `/cshl/embed/dburl`, SG with **0 ingress rules**).
+  Four eval sidecars created (medcpt/specter2/scincl 768-d, cshl 1024-d). **A2 done** — Neon
+  floor 0.25→2, deliberately before the ingest lane's final upsert, because the config change
+  restarts the compute and doing it at E1 time would have landed mid-transaction. **E0 done:**
+  ~500 rows/s measured against a 250–325 projection, vectors clean (dim 1024, norms 1.00000,
+  no zero vectors, kNN self-probe 0.0000) — and it caught two defects, both cheap now and
+  expensive later: `text_hash` was md5 of a JS-trimmed string while SQL authored the string
+  (2/3,000 rows could never match their own recomputed hash, which would have made the
+  mandatory `RECLAIM_STALE` pass churn forever), and the rig hung 3+ minutes in `apt` with TEI
+  healthy and the box billing. Both fixed. Slate renamed `rxiv-*` → `cshl-*` per Brendan.
+  `scripts/eval/recipe.mjs` is now the single definition of the embed string and lane-mine
+  imports it rather than copying it. **P-block: I declined to publish while it was reserved to
+  Brendan; he then ruled personally, so it proceeds — the write-up states the NSR-token reuse
+  as an open follow-up.** S-block starts at T2, when there is something to serve.
 
 ---
 
