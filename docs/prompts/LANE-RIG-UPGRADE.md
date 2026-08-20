@@ -200,3 +200,243 @@ with no shell metacharacters in it).
 
 Cost so far: $0.00 (no EC2 instance launched yet). SSM param write, S3 head/
 cp on the isolated bucket, and read-only EC2 describe calls only.
+
+## 2026-08-19T00:59Z — live train run confirmed in flight, proceeding with isolated rehearsal
+
+`aws ec2 describe-instances` (running/pending filter) now shows
+`i-09938e30bd1f42c3d` / `cshl-train-20260819-192100-train` (g6e.2xlarge,
+launched 2026-08-19T23:21:09Z) — the other lane's real 40k run, live. Confirms
+the isolation setup above was the right call, not paranoia. My rehearsal
+launches a separate box on the separate `cshl-rig-test` role /
+`cshl-embed-rxiv-rigtest` bucket; nothing here touches that instance, its SG,
+its role policy, or its bucket. Proceeding to the checkpointing acceptance
+test now.
+
+## 2026-08-20T00:10Z — checkpointing acceptance test: complete, with two real bugs found and fixed along the way
+
+**Box:** `i-06294d3cc2c50633d`, g5.xlarge, isolated stack (`cshl-rig-test` role,
+`cshl-embed-rxiv-rigtest` bucket), `MODE=manual`, `WATCHDOG_MIN=45`. Launched
+20260819T23:24:52Z, self-terminated via its own watchdog at 20260820T00:09:52Z
+(confirmed `shutting-down` immediately after, no stray running instance
+afterward). Controlled throughout via `aws ssm send-command` (RunShellScript),
+polling `get-command-invocation` — no interactive session held open.
+
+**Rehearsal slice:** 400 real pairs (first 400 lines of `train/parity/
+train.jsonl`, the actual corpus, not synthetic), `BATCH=4 GROUP_SIZE=4
+QUERY_MAX_LEN=128 PASSAGE_MAX_LEN=256`, `SAVE_STEPS=10` (small on purpose, to
+get multiple checkpoints fast on a tiny slice).
+
+### Run 1 — prove checkpointing itself (save + background S3 sync)
+
+Started fresh (`MODE=rehearse`, no `RESUME_FROM`). Reached
+`checkpoint-10` at step 10 (~14s in), confirmed synced to S3 within seconds
+(`aws s3 ls` showed `model.safetensors` 2.27GB + `optimizer.pt` 561MB +
+`trainer_state.json` etc., all present) — proves both the save mechanism and
+the background syncer, and proves the `s3:ListBucket` IAM fix (§ above) was
+necessary and sufficient (no `AccessDenied`).
+
+Let it reach `checkpoint-20` (local), then **killed the process tree**
+(`pkill -9 -P <train.sh pid>; kill -9 <pid>`) immediately after `checkpoint-30`
+started saving locally — a genuine mid-run kill, not a clean stop.
+
+**Result, unplanned but exactly on-point:** `checkpoint-30` never made it to
+S3 (killed mid-upload — the box's disk died with the box, per spec).
+`checkpoint-20` WAS in S3, but **only partially** — the sync itself had been
+killed mid-transfer: S3 held a 658-byte `config.json` and nothing else (no
+`model.safetensors`, no `trainer_state.json`). Only `checkpoint-10` was fully
+present. This is the real spot-reclaim failure mode this feature exists to
+survive, reproduced by accident on the first attempt.
+
+### Bug #1 (found by the test, not reasoned about): resume trusted the highest checkpoint number, not its completeness
+
+Original resume logic picked the numerically-highest `checkpoint-N` prefix
+and staged it blind. Given the state above, it picked the truncated
+`checkpoint-20`, staged 8KB instead of ~6GB, and the trainer crashed with
+`Can't find a valid checkpoint at /opt/train/out/checkpoint-20`.
+
+**Fix:** walk candidates newest-to-oldest, and before accepting one, confirm
+`model.safetensors` AND `trainer_state.json` both exist in S3 under that
+prefix (`trainer_state.json` is the last file the Trainer writes locally, and
+empirically the file `aws s3 sync` had NOT yet gotten to when the kill
+landed). Falls back to the next-older checkpoint, loudly, if the newest is
+incomplete; refuses if none are complete.
+
+### Bug #2 (found writing the fix for Bug #1): reproduced the report's OWN `set -e`/pipefail bug, live, in five minutes
+
+The completeness check (`HAS_WEIGHTS=$(aws s3 ls <missing-key> | wc -l)`)
+silently killed the whole script on its first real exercise: `aws s3 ls` on a
+nonexistent object exits 1; `set -o pipefail` (part of this script's own
+`set -euo pipefail`) propagates that 1 through `| wc -l` even though `wc -l`
+itself exits 0; a failing command substitution in a plain assignment kills
+the script under `set -e`. Identical mechanism to `CSHL-CPT-REPORT.md`'s
+AZ-failover post-mortem — reproduced by me, in new code, while fixing a
+different bug, and caught only because the acceptance test was run for real
+rather than reasoned about. Fixed with `|| true` on both `aws s3 ls` checks
+(see the comment now in `train.sh`), same fix shape as the TYPE_MENU walk.
+
+### Run with both fixes: resume now correctly falls back to checkpoint-10 —
+
+```
+[train.sh] checkpoint-20 is incomplete (missing model.safetensors and/or trainer_state.json) — skipping, trying older
+[train.sh] resuming from checkpoint-10 (verified complete)
+[train.sh] staged checkpoint-10 (6.4G) from s3://.../checkpoints
+[train.sh] installed CLI exposes --resume_from_checkpoint — passing it explicitly
+```
+
+— but the trainer itself then crashed on load:
+```
+AttributeError: 'EncoderOnlyEmbedderM3Model' object has no attribute '_keys_to_ignore_on_save'
+  at transformers/trainer.py:3158, Trainer._issue_warnings_after_load
+```
+
+### Bug #3 (a real, previously-unknown FlagEmbedding/transformers compatibility bug, unrelated to this lane's code)
+
+`train.sh`'s own install line (`pip install "transformers>=4.44.2,<5"`, no
+`-U`) picks the newest version satisfying the range on a fresh box — today
+that's 4.57.6, the SAME version the live production 40k run is training on
+right now. On this version, `Trainer._load_from_checkpoint` →
+`_issue_warnings_after_load` reads `self.model._keys_to_ignore_on_save`,
+which FlagEmbedding's `EncoderOnlyEmbedderM3Model` does not define. Confirmed
+it is not a `transformers.PreTrainedModel` subclass — patching that base
+class's attribute does nothing (tested, failed the same way). **Downgrading
+to the floor version (4.44.2) does NOT fix it either** — that version's
+`XLMRobertaModel.__init__()` doesn't accept the `dtype` kwarg FlagEmbedding
+passes, a different crash. Tested both directions on the real box before
+concluding neither pin is a fix.
+
+**This only bites the resume/load path.** Forward training and checkpoint
+*saving* (Run 1, and the live production run happening in parallel right
+now) are unaffected — `_issue_warnings_after_load` is only reached inside
+`_load_from_checkpoint`, which nothing calls unless `resume_from_checkpoint`
+is set. So this bug was invisible until this lane specifically exercised
+resume, which is exactly why the acceptance test mandate exists.
+
+**Fix:** neutralize the specific buggy method rather than chase version
+pins: `transformers.trainer.Trainer._issue_warnings_after_load = lambda
+self, load_result: None`, applied via a tiny wrapper
+(`/opt/train/run_trainer.py`, written by `train.sh` itself) invoked instead
+of `-m FlagEmbedding...` directly, so the patch is live before FlagEmbedding
+imports anything. Confirmed this patch point is correct and the model-class
+patch is not, by testing both on the real checkpoint on the real box.
+
+### Final run: real end-to-end resume through the ACTUAL shipped `train.sh`, not an ad-hoc test
+
+Fresh SSM invocation, `RESUME_FROM=s3://.../checkpoints`, `EPOCHS=1`
+(100 steps total), `SAVE_STEPS=30` (the resumed run's `TrainerState` kept the
+original 10 from the loaded checkpoint, HF's own behavior, not this lane's):
+
+```
+[train.sh] checkpoint-20 is incomplete ... — skipping, trying older
+[train.sh] resuming from checkpoint-10 (verified complete)
+...
+ 20%|██        | 20/100 [00:04<00:28, 2.85it/s]   <- step 20 reached in 4s: only
+                                                       10 steps' worth of compute
+                                                       since resume start — CONTINUED
+                                                       from step 10, did not restart
+...
+100%|██████████| 100/100 [07:45<00:00, 1.00it/s]
+{'train_runtime': 514.75, 'train_loss': 0.9787, 'epoch': 1.0}
+[train.sh] wall-clock: 609s EXIT=0 final_batch=4 gradient_checkpointing=off
+```
+
+`checkpoint-100` (the resumed run's final step) confirmed fully synced to S3
+immediately after: `config.json`, `model.safetensors` (2.27GB),
+`rng_state.pth`, `scheduler.pt`, `sentencepiece.bpe.model`,
+`special_tokens_map.json`, `tokenizer.json`, `tokenizer_config.json`,
+`trainer_state.json`, `training_args.bin` — every file a fresh
+`SentenceTransformer(checkpoint-100)` load would need, all present. This is
+the same completeness bar Bug #1's fix now enforces on every future resume.
+
+**What I did NOT observe complete:** the box's own 45-minute watchdog (which
+I set, per doctrine "watchdog every box") fired while train.sh was mid-way
+through its POST-training steps (SBERT pooling config write, then the
+`aws s3 cp --recursive $OUT .../final/` upload) — those are 30-60s of
+additional work after `EXIT=0`, and the watchdog cut them off before I could
+confirm `.../final/` itself was fully populated. **This code is unmodified
+by this lane** (steps 4 and 6 in `train.sh`, untouched by the checkpointing/
+resume/multi-GPU changes) and was already validated in the original E0
+rehearsal per `CSHL-CPT-REPORT.md` §"E0 — the rehearsal, and the two defects
+it paid for". `checkpoint-100`'s completeness (above) is the strongest
+available substitute evidence: it is produced by an equivalent, already-
+exercised S3-sync mechanism and contains everything `.../final/` would too.
+Flagging this rather than silently treating it as verified — the reporting
+rule this whole project runs on.
+
+### Cost
+
+g5.xlarge on-demand, ~45 minutes total (`23:24:52Z` → `00:09:52Z` watchdog
+self-termination) ≈ **$0.75** (g5.xlarge ≈ $1.006/hr in us-east-1). Plus
+negligible S3 storage for ~10GB of test checkpoints in the isolated
+`cshl-embed-rxiv-rigtest` bucket (pennies) and the 150GB gp3 root volume for
+45 minutes (`DeleteOnTermination=true`, cleaned up automatically). **Total
+≈ $0.75, against the $1.50 cap.** No waste beyond the debugging iterations
+themselves, which is what the cap is for.
+
+**Leftover isolated stack:** S3 bucket `cshl-embed-rxiv-rigtest` (holds the
+rehearsal slice and all checkpoint/log evidence above — useful to keep until
+this lane is reviewed) and IAM role/instance-profile `cshl-rig-test`. Both
+inert (nothing running against them) and cheap to leave (~10GB S3, pennies/
+month). Safe to delete once this lane's evidence has been reviewed; not
+deleted here since removing evidence right after generating it seemed like
+the wrong default.
+
+## 2026-08-20T00:15Z — multi-GPU upgrade: one more thing to flag
+
+Upgrade 2's acceptance criterion was explicitly DRYRUN + syntax-verified, no
+box (the mission brief reserves the actual multi-GPU rehearsal for the
+lead's sign-off) — satisfied earlier in this log. Worth noting given what
+Bug #3 above surfaced: the resume-path patch (`run_trainer.py` wrapper) is
+wired into BOTH the `NPROC==1` and `NPROC>1` invocation paths (see `train.sh`
+"NPROC>1: wrap the trainer in torchrun" section), so a future multi-GPU
+resume rehearsal should hit the same fix already, not rediscover Bug #3
+under torchrun. Not verified for real — NPROC>1 was never launched, per the
+brief — but the wiring is symmetric and worth calling out as a testable
+prediction for whoever runs that rehearsal next.
+
+## 2026-08-20T00:18Z — proposed RIG-DOCTRINE.md addendum
+
+Two additions this lane's acceptance testing surfaced that generalize past
+this rig:
+
+---
+
+### 11. A checkpoint's existence is not its completeness — verify the file, not the prefix
+
+A checkpoint directory can appear in a listing (the prefix exists, `aws s3
+ls` shows it) while being a partial, unusable upload — because the upload
+itself is a multi-GB transfer that takes real wall-clock time, and whatever
+kills the box (a spot reclaim, a watchdog, an OOM) does not wait for it to
+finish. This is not hypothetical: it happened on the FIRST real attempt to
+exercise a `RESUME_FROM`-style feature (CSHL rig-upgrade lane,
+2026-08-19/20) — `checkpoint-20` existed as an S3 prefix containing one
+658-byte `config.json` and nothing else.
+
+**Rule: resume logic must verify specific required files exist (the weight
+file AND a written-last state file, e.g. `trainer_state.json`) before
+trusting a checkpoint, and must walk backward to an older, verified-complete
+checkpoint rather than trust the highest number.** The same shape applies
+outside ML checkpoints: any "latest artifact" pattern sourced from a
+directory listing on a store with no atomic multi-file commit (S3, most
+object stores) needs a completeness check, not just an existence check.
+
+### 12. `set -e`/pipefail command-substitution deaths are not a one-time bug, they're a code SHAPE — grep for the shape, don't just fix the instance
+
+RIG-DOCTRINE already documents (§4, the AZ-failover walk) one instance of
+`OUT=$(cmd)` dying silently under `set -e` when `cmd` fails. This lane hit the
+*exact same mechanism* again, independently, five minutes after fixing an
+unrelated bug, in code written specifically to be careful: `HAS_WEIGHTS=
+$(aws s3 ls <maybe-missing-key> | wc -l)` — `aws s3 ls` on a miss exits 1,
+`pipefail` propagates that past a successful `wc -l`, and the assignment
+dies the whole script.
+
+**Any `VAR=$(...)` (or `VAR=$(... | ...)` under `pipefail`) where the inner
+command is EXPECTED to sometimes fail as a normal, non-exceptional outcome
+(a lookup that may miss, a probe, an existence check) needs `|| true` (or
+explicit `if cmd; then ... fi` control flow) on that assignment, every time,
+as a matter of course — not discovered per-instance by whichever one
+happens to get exercised first.** Before shipping any script with `set -e`/
+`pipefail` that does existence/lookup checks via command substitution, grep
+it for `=\$(` and audit each one for whether the inner command can
+legitimately return non-zero.
+
+---
