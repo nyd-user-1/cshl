@@ -37,3 +37,8 @@ supabase/.temp/
 /data/
 .env*
 .cutover-backup
+
+# Bedrock KB experiment — exported corpus slice and scratch state
+data/kb-slice/docs/
+scripts/kb/.state/
+scripts/kb/agents/*/node_modules/
