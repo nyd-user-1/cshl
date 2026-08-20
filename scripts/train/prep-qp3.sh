@@ -172,38 +172,55 @@ gold2k = set()
 for l in open('/opt/qp3/data/eval/cshl-eval-2k/qrels.tsv'):
     a = l.rstrip('\n').split('\t')
     if len(a) > 1 and a[0] != 'qid': gold2k.add(a[1])
-# text -> slug, so the emitted TEXT slice can be checked against the paper-level
-# holdout even though it carries no ids. This is the check the manifest cannot
-# make for itself.
-t2s = {}
+# The emitted slice is TEXT ONLY, so checking it against a paper-level holdout
+# means mapping text back to identity. The obvious way — a text->slug dict — is
+# WRONG, and run 2 proved it: 31 groups of papers in this corpus share a
+# byte-identical embed_text, so `setdefault` keeps whichever slug appears first
+# and a non-gold paper's text can resolve to a gold twin's slug. That reported 9
+# "leaks" that were not leaks, and it can silently miss real ones in the other
+# direction.
+#
+# The right question is not "which slug is this text?" but "is this text the
+# text of ANY held-out paper?" — a set of gold TEXTS, which is exact and has no
+# first-wins ambiguity. Kept separate from the slug gates in from-mine.mjs and
+# mine-ance.mjs, which remain authoritative for the paper-level holdout; this is
+# the text-level question those cannot answer.
+gold_text_v1, gold_text_2k, t2s = set(), set(), {}
 for l in open('/opt/qp3/data/mine/corpus-text.jsonl'):
     o = json.loads(l)
-    if o.get('embed_text'): t2s.setdefault(o['embed_text'], o['key'])
+    t = o.get('embed_text')
+    if not t: continue
+    t2s.setdefault(t, o['key'])
+    if o['key'] in gold:   gold_text_v1.add(t)
+    if o['key'] in gold2k: gold_text_2k.add(t)
 side = [json.loads(l) for l in open(f'{base}/slice-slugs.jsonl')]
 fam_side = {}
 for r in side: fam_side[r['family']] = fam_side.get(r['family'],0)+1
 n=0; leaks=0; leaks2k=0; posneg=0; unresolved=0; shortneg=0; negn={}
+negtext_v1=0; negtext_2k=0
 for l in open(f'{out}/train.jsonl'):
     o = json.loads(l); n += 1
-    ps = t2s.get(o['pos'][0])
-    if ps is None: unresolved += 1
-    elif ps in gold: leaks += 1
-    elif ps in gold2k: leaks2k += 1
+    if t2s.get(o['pos'][0]) is None: unresolved += 1
+    if o['pos'][0] in gold_text_v1: leaks += 1
+    if o['pos'][0] in gold_text_2k: leaks2k += 1
     negs = o['neg']; negn[len(negs)] = negn.get(len(negs),0)+1
     if len(negs) < 4: shortneg += 1
     for t in negs:
         if t == o['pos'][0]: posneg += 1
-        ns = t2s.get(t)
-        if ns is not None and ns in gold: leaks += 1
-        if ns is not None and ns in gold2k: leaks2k += 1
+        if t in gold_text_v1: negtext_v1 += 1
+        if t in gold_text_2k: negtext_2k += 1
 print(f"[verify] emitted rows        : {n}")
 print(f"[verify] sidecar families    : {fam_side}")
 print(f"[verify] negatives/row       : {negn}")
 print(f"[verify] rows with <4 negs   : {shortneg}                 (must be 0)")
 print(f"[verify] positive == its own negative : {posneg}          (must be 0)")
-print(f"[verify] slugs in cshl-eval-v1 gold   : {leaks}           (must be 0)")
-print(f"[verify] slugs in cshl-eval-2k gold   : {leaks2k}         (must be 0)")
-print(f"[verify] positives whose text did not resolve to a slug: {unresolved}")
+print(f"[verify] POSITIVE text == a held-out paper's text (v1/2k) : {leaks} / {leaks2k}   (must be 0 — a real leak)")
+print(f"[verify] NEGATIVE text == a held-out paper's text (v1/2k) : {negtext_v1} / {negtext_2k}   (disclosed, not fatal)")
+print(f"[verify] positives whose text did not resolve to a slug   : {unresolved}")
+# A held-out paper's text appearing as a NEGATIVE is disclosed, not fatal, and
+# the direction is why: training a gold paper's text as a negative can only make
+# it HARDER to retrieve at eval. It cannot inflate the result — it can only cost
+# us. A positive matching held-out text WOULD be a real leak and is fatal.
 bad = (shortneg or posneg or leaks or leaks2k)
 sys.exit(1 if bad else 0)
 PYEOF
