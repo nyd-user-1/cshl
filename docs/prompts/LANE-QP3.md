@@ -465,3 +465,104 @@ health), plus the instance state itself, which reports the box being gone.
 
 Completion signal is the artifact, not the instance:
 `s3://cshl-embed-rxiv/train/qpairs3/train.jsonl` plus a `.rc` of `0`.
+
+---
+
+## 2026-08-20T08:18Z — Q2's capacity fallback decided BEFORE the moment, not during it
+
+`g6.2xlarge` was refused in all five AZs at 08:12Z. Capacity is tight tonight, so
+the training launch needs a fallback ladder decided now — D8 names a single type
+(`TYPE_MENU="g6e.2xlarge"`), and a single-type menu is a run that stops.
+
+The constraint is memory, and it is measured, not guessed: LANE-WIN recorded
+`BATCH=8 PASSAGE_MAX_LEN=384` using **33,899 MiB**. That rules out every 24 GB
+card — A10G and L4 both — which is also why LANE-WIN's 4x A10G attempt OOMed,
+halved the batch, and was killed for $0.90. So the ladder cannot trade down to a
+smaller GPU; it can only trade *up* to another host carrying the same L40S:
+
+```
+g6e.2xlarge  $2.24208/h   8 vCPU   64 GiB   1x L40S 48 GB   <- D8's type
+g6e.4xlarge  $3.00424/h  16 vCPU  128 GiB   1x L40S 48 GB   <- same GPU, +34%
+```
+
+**`TYPE_MENU="g6e.2xlarge,g6e.4xlarge"`.** The fallback changes the host and
+nothing else — same single L40S, same batch 8, same 0.658 s/step — so the
+experiment's config is untouched by which one wins. If the fallback fires,
+training costs $10.35 instead of $7.72 and the run total lands ≈$12.5, inside
+the $15 cap. That is a better outcome than a clean stop.
+
+`g6e.2xlarge` is currently offered in us-east-1a/b/c/d (offering != capacity;
+this only proves the AZ walk has four subnets to try).
+
+---
+
+## 2026-08-20T08:14–08:17Z — prep box stages 1-2
+
+```
+08:12:43Z  node install
+08:14:44Z  node v22.23.2 · pulling inputs
+08:15:00Z  inputs: 2.2G mine · 433,449 corpus-text rows   <- independent count from source
+08:15:00Z  STAGE 1 — slice
+08:16:15Z  slice: 140000 pairs, sidecar 140000 rows (expect 140000 each)   BOTH GATES PASS
+08:16:15Z  STAGE 2 — pulling cshl-QP2 weights (20260819-232838-train)
+08:16:53Z  STAGE 2 — embedding 140,000 slice queries with cshl-QP2
+```
+
+**Stage 1 took 75 seconds.** The same build on the laptop reached 7.85 GB RSS,
+drove the machine into swap, and died on a 4 GiB `writev`. That is the whole
+argument for the doctrine in one measurement — and the line count is checked
+independently for `train.jsonl` and `slice-slugs.jsonl` rather than inferred
+from one of them, because the sidecar is what makes the ANCE join exact.
+
+`433,449` corpus-text rows counted on the box matches the corpus exactly, so the
+1.5 GB transfer is intact by content and not merely by byte count.
+
+### An IAM gap closed while stage 1 ran
+
+`write-eval-artifacts` and `write-model-artifacts` both carry
+`s3:AbortMultipartUpload`; the `train/*` and `prep/*` grants I added to
+`read-dburl` did not. The slice upload is 2.2 GB — multipart — and the CLI
+issues an abort on a failed part. That is an AccessDenied at the *last* stage of
+a 45-minute box, plus orphaned parts billing quietly afterwards: silent until
+exercised, which is this program's signature failure. Fixed on the live role at
+08:19Z (before the box reached the upload) and in `launch-prep.sh` for next time.
+
+Verified in the same pass that re-putting `read-dburl` did not clobber the other
+four inline policies — losing `write-eval-artifacts` is the incident LANE-WIN
+recorded, and it is the grant the *train* box needs for its query-embed upload.
+
+---
+
+## 2026-08-20T08:22Z — the morning-report table (lead's addition (b)), built and cross-checked
+
+`scripts/eval/final-table.mjs`. Both baselines in one table because two
+different questions get asked of this program and they have different answers:
+
+- **"did the fine-tune work?"** -> vs stock `bge-m3`, the model we started from,
+  reported RELATIVE (that is where the 2.6x-style numbers live).
+- **"are we competitive?"** -> vs `MedCPT`, the domain incumbent, reported as an
+  ABSOLUTE Δ — the same units the McNemar tests are in, so the table and the
+  significance tests cannot drift apart.
+
+Run against the arms already scored, it reproduces the published digits with no
+hand-entry:
+
+```
+medcpt+medcpt_ce   blended 0.6510   <- D8's stated system target, re-derived
+cshl_qp+cshl_rr    blended 0.6160   <- LANE-RERANK's reported figure
+cshl_qp2+cshl_rr   blended 0.6450   <- the -0.0060 tie, re-derived
+```
+
+That the blended arithmetic lands on 0.6510 independently is the check that the
+family-weighted blend is the same blend D8's target is stated in.
+
+**This deliverable is exactly what the metrics-shape bug would have broken.**
+The generator reads `metrics[family].blended[metric]` generically, the same way
+`fill-card.mjs` does. Against the pre-fix files every SYSTEM row — all five of
+them, including both MedCPT baselines — would have rendered as `—`, because
+`metrics.MESH` was `undefined` and the real numbers were buried under
+`metrics.reranked`. The fix was not cosmetic; it is why the morning table has
+system rows at all.
+
+Target rows print `NOT YET SCORED` until `cshl_qp3` exists, so the table cannot
+silently imply a result that has not been measured.
