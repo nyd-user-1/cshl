@@ -859,3 +859,90 @@ tokens / 33.9 GB measured, so **which rung wins changes the host and nothing
 about the experiment.** Not trading down to a 24 GB card and not cutting
 `PASSAGE_MAX_LEN` to 256 — either would break comparability with QP2, which is
 the entire point of the run.
+
+---
+
+## 2026-08-20T09:30–09:37Z — RIG DEFECT: my retry loop fired FOUR training boxes
+
+**Lead intervention.** My launch succeeded at 09:30:10Z. Then it succeeded three
+more times, because my loop could not tell.
+
+```
+LIVE    i-075b943473cccdbb8  g6e.xlarge   09:30:10Z  cshl-train-20260820-053000-train
+KILLED  i-042f4d9dc413318da  g6e.xlarge   09:31:51Z   (lead)
+KILLED  i-046884292abbf4d4e  g6e.2xlarge  09:33:56Z   (lead)
+KILLED  i-06ef4ad5a64437d7d  g6e.xlarge   09:35:37Z   (lead)
+```
+
+Four boxes on the same 17,500-step run, ~$5.96/h against a $15 cap. Verified by
+`describe-instances`, not taken on report.
+
+### The defect, stated generally because it is not a one-off
+
+My loop tested success with `grep -q "^instance: i-"` on the launcher's stdout.
+`launch-prep.sh` — **the launcher I wrote** — prints that line. `launch.sh` —
+the launcher I was actually calling — does not; it ends with a bare
+`echo "$ID"`. So every successful launch read as a failure and the ladder fired
+again 90 s later.
+
+The launcher was fine. The loop was fine. **The contract between them was
+assumed, and stdout is not a contract** — it is prose, and it changes whenever
+someone improves a log line. I wrote a success test against one program's output
+format and pointed it at a different program.
+
+> **A launcher's success signal is the OBSERVABLE EXISTENCE OF THE INSTANCE, not
+> a string in its stdout. Ask EC2, not the script.**
+
+Corollaries, each paid for tonight:
+- **Check for a pre-existing instance BEFORE the first attempt**, not only
+  between attempts. A retry that cannot see the box it already made will
+  double-fire forever.
+- **Tag at launch and filter on the tag.** `--tag-specifications` makes the
+  instance self-identifying the moment `RunInstances` returns.
+- **`pending` counts as success.** A box mid-boot is a box you are paying for.
+
+This is the same family as tonight's other structural finding — a report and the
+reality disagreeing — pointed at EC2 instead of at a JSON file. `metrics.raw`
+said the rerank did nothing; stdout said the launch failed. Both were reports
+believed over the thing they described.
+
+**Fixed:** `scripts/train/launch-until.sh` — retries any launcher across a
+capacity ladder, decides success by `describe-instances` filtered on the run
+tag, and refuses to launch at all if a matching instance is already alive.
+Proven against the live box rather than asserted:
+
+```
+$ RUN_TAG='cshl-train-*' ./scripts/train/launch-until.sh ./scripts/train/launch.sh
+REFUSING TO LAUNCH — an instance matching cshl-train-* is already alive:
+i-075b943473cccdbb8   g6e.xlarge   running   cshl-train-20260820-053000-train
+```
+
+**Also corrected: capacity was never the problem.** My 09:29:14Z manual attempt
+genuinely hit a region-wide L40S refusal; 56 seconds later the first retry got a
+box on the first rung. The ladder widening was still right, but the "L40S is at
+zero region-wide" framing in the previous entry was true for about one minute.
+
+### Training is healthy on the survivor
+
+```
+[train.sh] 140000 training pairs in qpairs3
+[train.sh] manifest disjointness: {"pass": true, ... "emitted_references_to_gold_papers": 0}
+[train.sh] nproc=1 per_device_batch=8 effective_batch=8 in_batch_negatives=7
+           warmup_steps=1750 gradient_checkpointing=off save_steps=400 cross_device_negatives=off
+0/17500 steps · ramping through 1.21 it/s toward LANE-WIN's measured 1.52
+```
+
+17,500 steps is exactly 140,000/8 as predicted. `RUN_ID 20260820-053000-train`,
+watchdog 280 min, `SAVE_STEPS=400` real — a dead box loses <= ~4.4 min of work
+and resumes with `RESUME_FROM`, so this is not restart-from-zero territory.
+Weights land at
+`s3://cshl-embed-rxiv/models/cshl-encoder-bge-m3/20260820-053000-train/final/`,
+query vectors at `eval/cshl-eval-2k/qemb-20260820-053000-train.jsonl`.
+
+### Waste ledger — mine, not folded into phase totals
+
+| item | $ | what happened |
+|---|---:|---|
+| run 1 prep box | **0.68** | 33.7 min. Mined 140,000 rows correctly, then aborted at an exact-equality gate that was off by one for a legitimate reason, and terminated with its volume. Verification ordered before the upload it was verifying. |
+| 3 duplicate train boxes | **~0.20** | ~4 box-minutes. Success test read a string in the wrong launcher's stdout. Terminated by the lead. |
+| | **0.88** | |
