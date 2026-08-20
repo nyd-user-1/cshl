@@ -946,3 +946,70 @@ query vectors at `eval/cshl-eval-2k/qemb-20260820-053000-train.jsonl`.
 | run 1 prep box | **0.68** | 33.7 min. Mined 140,000 rows correctly, then aborted at an exact-equality gate that was off by one for a legitimate reason, and terminated with its volume. Verification ordered before the upload it was verifying. |
 | 3 duplicate train boxes | **~0.20** | ~4 box-minutes. Success test read a string in the wrong launcher's stdout. Terminated by the lead. |
 | | **0.88** | |
+
+---
+
+## 2026-08-20T09:55–10:20Z — training healthy; the verification's own flaw fixed
+
+**Train box, reproducing LANE-WIN's control within noise:**
+
+```
+step 3,965/17,500 (23%) · 1.48 it/s · 34,169 MiB · ETA 2:32:20
+LANE-WIN control:          1.52 it/s · 33,899 MiB
+```
+The 75% GPU utilisation (QP2 saw 100%) is `g6e.xlarge`'s 4 vCPU mildly starving
+the dataloader — 2% of throughput, bought with a 17% lower hourly rate. The
+capacity refusal that forced this rung made the run **cheaper than planned**:
+~3h27m x $1.86100/h = **$6.42** against the $7.72 budgeted for `g6e.2xlarge`.
+
+**Resume path verified live rather than configured.** Checkpoints are reaching
+S3, not just local disk:
+```
+checkpoints/checkpoint-400/  checkpoint-800/  checkpoint-1200/   6.4 GiB each
+```
+A dead box costs at most 400 steps / 1.48 it/s = **4.5 min**, resumed with
+`RESUME_FROM`. Noted for close-out: ~20 GiB of checkpoint data will be left
+behind, which is LANE-WIN's orphaned-checkpoint rig bug ($4.60/month if nobody
+deletes it). Clearing the `checkpoints/` prefix once `final/` is verified intact.
+
+### The stage-4 verification was itself wrong, and run 2 proved it
+
+The check that flagged 9 phantom leaks did this:
+
+```python
+t2s.setdefault(o['embed_text'], o['key'])     # first slug wins
+...
+ns = t2s.get(negative_text)
+if ns in gold: leaks += 1
+```
+
+With 31 groups of byte-identical `embed_text` in the corpus, `setdefault` keeps
+whichever slug appears first — so a **non-gold** paper's text resolves to its
+**gold** twin's slug and reports a leak that does not exist. It fails the other
+way too: a genuinely leaked gold text can resolve to a non-gold slug and be
+missed. A check that is wrong in both directions is worse than no check, because
+it will be believed.
+
+The question was wrong, not the code. Not *"which slug is this text?"* — which
+has no unique answer — but *"is this text the text of ANY held-out paper?"*,
+which is a set membership test with no ambiguity. Rewritten to build
+`gold_text_v1` / `gold_text_2k` sets and test against those. Confirmed against
+local data:
+
+```
+gold texts: v1 6,203 · 2k 1,839
+non-gold papers whose text IS a gold paper's text: 2      <- exactly the 2 mixed groups
+```
+
+The output now separates the two cases by severity, because they are not the
+same finding:
+
+```
+POSITIVE text == a held-out paper's text  ->  a REAL leak. Fatal.
+NEGATIVE text == a held-out paper's text  ->  disclosed, not fatal.
+```
+
+The direction is the whole argument: training a held-out paper's text as a
+**negative** can only make it *harder* to retrieve at eval. It cannot inflate a
+result; it can only cost us one. A **positive** matching held-out text would
+genuinely leak the answer and stays fatal.
