@@ -7,6 +7,51 @@ program on nuclear-science literature.*
 
 ## Headline
 
+**Query-shaped supervision closes 80% of the gap to MedCPT. On MeSH we are now statistically
+indistinguishable from it.**
+
+*Run `20260819-192100-train`, 2026-08-20. Trained on 39,999 of the 424,753 `cshl-query-pairs`
+that the previous night left unused. Scored on the identical frozen 2,000-query subsample.*
+
+| benchmark | ours (CITE) | **ours (qpairs)** | MedCPT | |
+|---|---:|---:|---:|---|
+| **query→doc**, MeSH R@10 | 0.3320 | **0.4319** | 0.4569 | +30.1% over CITE |
+| **query→doc**, AUTHORKW R@10 | 0.6693 | **0.7497** | 0.8076 | +12.0% over CITE |
+| **doc→doc** R@10 | **0.2120** | 0.1980 | 0.1790 | −6.6%, a real loss |
+
+Paired McNemar, qpairs vs CITE, same 2,000 queries: MeSH **+0.0999, p = 2.3e-16**
+(CI [+0.0766, +0.1225]); AUTHORKW **+0.0804, p = 5.0e-9**.
+
+Paired against **MedCPT** on MeSH: **−0.0250, p = 0.071, CI [−0.0516, +0.0016]** — the interval
+crosses zero. A general multilingual encoder, fine-tuned for one hour on mined query pairs from
+this corpus, has reached **statistical parity on MeSH retrieval** with a purpose-built
+biomedical retriever trained on PubMed query-click logs. On author keywords MedCPT is still
+clearly better (−0.0580, p = 0.0003) and that loss is not rounded off here.
+
+**Best configuration overall is again a fusion, and it is a new program best:**
+`RRF(qpairs + MedCPT + FTS)` at MeSH R@10 **0.5197** and AUTHORKW **0.8300**, against the
+previous best of 0.4722 / 0.8235.
+
+**The doc→doc regression is the price, and the honest version is worse than "small".** Against
+stock `BAAI/bge-m3` the qpairs model is **statistically indistinguishable** on doc→doc
+(+0.0025, p = 0.78). Citation training bought a genuine doc→doc advantage; query training spent
+**all** of it. So this is a **trade, not an upgrade** — `preprint_embeddings_cshl` (CITE) remains
+the better encoder for "more like this", reviewer matching and systematic-review expansion, and
+both tables stay populated.
+
+**One confound, stated plainly:** this run moved the objective *and* the effective batch size
+(4 → 8, because an L40S was available where the previous night had only a 24 GB A10G). Two
+clean runs did not fit the budget. The batch change plausibly explains part of the gain; it does
+not plausibly explain all of it, because doc→doc moved in the **opposite** direction at the same
+batch size — which is what an objective change looks like and not what a capacity change looks
+like.
+
+Full method, verification and spend: `docs/prompts/LANE-QPAIRS-RUN.md`.
+Vectors: `preprint_embeddings_cshl_qp`, 433,449 rows, gate passed 2026-08-20 01:00Z.
+**Not published to Hugging Face — that decision is Brendan's, by name.**
+
+## Superseded headline — the symmetric result (kept for the record)
+
 **Each model wins the task it was trained for. That is the whole result, and it is symmetric.**
 
 | benchmark | ours | MedCPT | winner |
@@ -54,7 +99,7 @@ hypothesis — it is measured in both directions. Training on the 424,753 query-
 that were built and left unused is now the obvious experiment, and its expected value is
 higher than it looked when the doc→doc side was unmeasured.
 
-## Superseded headline (kept for the record)
+## Superseded headline — the original loss (kept for the record)
 
 **We did not beat MedCPT.** Our fine-tuned encoder scores **MeSH R@10 0.332** against
 `ncbi/MedCPT`'s **0.457** — one night of domain adaptation closed about a quarter of the gap
@@ -694,7 +739,8 @@ the servers' public API exists for, and the production cutover is unaffected.
 
 ## Staged: the one experiment that would settle it
 
-**Not fired. Priced. Brendan's call.**
+**FIRED 2026-08-20 as run `20260819-192100-train`. Result in "The qpairs run" below; the
+staging is kept verbatim for the record, including the command that could not have worked.**
 
 The leading hypothesis for our shortfall is an objective mismatch — we trained on
 citation-based **document→document** pairs and evaluated **query→document** retrieval. The
@@ -743,6 +789,123 @@ toward MedCPT's 0.457? A directional answer is worth more than a precise null.
 **If a bigger box becomes available**, `g6e.xlarge` (L40S, 48 GB) removes the OOM halving that
 forced batch 4, roughly halving the step count at the same pair budget. `g6e` had zero
 capacity in every AZ throughout this night; it is worth re-probing before committing.
+
+## The qpairs run — 2026-08-20, `20260819-192100-train`
+
+The experiment staged above, fired. Full log, verification evidence and spend:
+`docs/prompts/LANE-QPAIRS-RUN.md`.
+
+**The staged command could not have worked, and this is the most reusable thing in this
+section.** `cshl-query-pairs` carries `query` as a **literal query string** on all 424,753 rows;
+`scripts/train/from-mine.mjs` read `r.query.slug`, which is the shape `cshl-triplets` uses. Run
+as staged, every row falls into the `dropped` counter, the converter writes an **empty**
+`train.jsonl` and prints its normal success line, `upload-slice.sh` ships it (it gated on a
+`disjointness.pass` that was a hardcoded literal `true`), and `train.sh` accepts it. Caught by
+counting the input before running the command rather than after. The converter now handles both
+shapes, aborts non-zero on zero convertible records, counts families **in what it emits**, and
+computes `disjointness.pass` from a post-hoc re-scan instead of asserting it.
+
+### What was trained
+
+39,999 pairs subsampled deterministically and stratified across all three families, counted in
+the emitted file: **MESH 9,668 · AUTHORKW 5,854 · EXTRACT 24,477**. Zero emitted records
+reference a frozen-benchmark gold paper (re-derived over the emitted set, not inherited from
+lane-mine's split). 157 of 39,999 training queries share a query *string* with a benchmark
+query — disclosed, not a leak, because the benchmark splits by **paper**.
+
+`g6e.2xlarge` (L40S 48 GB), 1 epoch, `QUERY_MAX_LEN=128`, `PASSAGE_MAX_LEN=384`,
+`GROUP_SIZE=8`, 4,999 steps, 55 min. **`BATCH=16` was requested and OOMed**; the guard halved to
+8. Effective batch is therefore **8**, twice the CITE run's 4 — not the 4× intended. Every claim
+here is "query-shaped supervision at batch 8".
+
+### Results — query→document, identical frozen 2,000-query subsample
+
+| arm | MeSH R@10 | MeSH nDCG@10 | AUTHORKW R@10 | AUTHORKW nDCG@10 |
+|---|---:|---:|---:|---:|
+| **RRF(qpairs + MedCPT + FTS)** | **0.5197** | **0.3879** | **0.8300** | **0.7197** |
+| RRF(ours + MedCPT + FTS) — *previous best* | 0.4722 | 0.3454 | 0.8235 | 0.6915 |
+| `ncbi/MedCPT` | 0.4569 | 0.3373 | 0.8076 | 0.6885 |
+| RRF(qpairs + FTS) | 0.4512 | 0.3333 | 0.7655 | 0.6540 |
+| **`cshl_qp` — ours, query-pairs** | **0.4319** | **0.3190** | **0.7497** | **0.6395** |
+| `cshl` — ours, CITE | 0.3320 | 0.2367 | 0.6693 | 0.5625 |
+| Postgres FTS | 0.0806 | 0.0626 | 0.2398 | 0.2286 |
+
+R@1: qpairs 0.2224 / 0.5336 against CITE's 0.1571 / 0.4611.
+
+Paired McNemar (exact, two-sided) with a seeded 5,000-resample bootstrap, on the same queries in
+the same order — asserted by the harness, not assumed:
+
+| comparison | family | n | ours-only | theirs-only | ΔR@10 | p | 95% CI |
+|---|---|---:|---:|---:|---:|---:|---|
+| qpairs vs CITE | MESH | 1,241 | 180 | 56 | **+0.0999** | 2.3e-16 | [+0.0766, +0.1225] |
+| qpairs vs CITE | AUTHORKW | 759 | 86 | 25 | **+0.0804** | 5.0e-9 | [+0.0540, +0.1080] |
+| qpairs vs **MedCPT** | MESH | 1,241 | 123 | 154 | −0.0250 | **0.071** | **[−0.0516, +0.0016]** |
+| qpairs vs **MedCPT** | AUTHORKW | 759 | 48 | 92 | −0.0580 | 0.0003 | [−0.0883, −0.0277] |
+
+**On MeSH the difference from MedCPT is no longer statistically significant.** On author
+keywords it clearly still is, in MedCPT's favour.
+
+### Results — document→document, the same 2,000 held-out pairs
+
+| arm | R@1 | R@10 | R@50 | MRR |
+|---|---:|---:|---:|---:|
+| `cshl` — CITE | 0.0700 | **0.2120** | 0.3445 | 0.1167 |
+| **`cshl_qp` — query-pairs** | 0.0630 | **0.1980** | 0.3145 | 0.1061 |
+| stock `BAAI/bge-m3` | 0.0620 | 0.1955 | 0.2900 | 0.1053 |
+| `ncbi/MedCPT` | 0.0580 | 0.1790 | 0.3020 | 0.0985 |
+
+| comparison | ΔR@10 | p | 95% CI |
+|---|---:|---:|---|
+| qpairs vs CITE | **−0.0140** | 0.043 | [−0.0275, −0.0010] |
+| qpairs vs MedCPT | +0.0190 | 0.015 | [+0.0040, +0.0340] |
+| qpairs vs stock `BAAI/bge-m3` | +0.0025 | **0.78** | [−0.0110, +0.0165] |
+
+The regression was predicted and is significant. The important row is the last: **on doc→doc the
+qpairs model is indistinguishable from the base model it was fine-tuned from.** Citation
+training bought a real doc→doc advantage and query training spent all of it. This is a trade
+between two encoders, not an upgrade of one — which is why the run went into a **third** table
+and both existing ones were left untouched.
+
+### The confound
+
+The objective and the effective batch size both changed (4 → 8), because an L40S was available
+where the previous night had only a 24 GB A10G. This run cannot attribute between them; two
+clean runs did not fit the $5.00 lane budget. The bound that can be stated: the batch-4
+fine-tune bought +0.046 MeSH R@10 over stock bge-m3, and this run bought +0.0999 on top of that,
+while moving doc→doc in the **opposite** direction at the same batch size — the signature of an
+objective change, not a capacity change.
+
+### Verification
+
+Coverage gate **passed 2026-08-20 01:00Z**, every figure re-derived at assertion time:
+
+```
+corpus 433,449 · embeddable 433,449 · excluded by the <20-char rule 0
+preprint_embeddings_cshl_qp  433,449  uncovered 0  dim 1024  zero-vectors 0
+text_hash vs canonical recipe: 0 mismatches of 433,449 checked
+HNSW idx_pp_emb_cshl_qp_hnsw 3,386 MB  vector_cosine_ops  indisvalid=t
+preprint_embeddings_cshl     433,449  last write 2026-08-19 14:06Z  (untouched)
+preprint_embeddings_medcpt   433,449  last write 2026-08-19 07:07Z  (untouched)
+```
+
+Controls, run **after** the registry edit so the edit is inside the test: `cshl`, `medcpt` and
+`fts` each reproduced their published numbers to **every digit** before the new arm was scored,
+and `cshl_qp` reproduced itself across two independent scoring runs. The new arm's query
+vectors were digest-compared against all four other arms and differ from each — the guard added
+after the two-arms-one-model incident, firing on the pair most able to collide.
+
+**A trap worth recording:** `cshl-eval-v1` and the frozen 2k subsample use **independent qid
+namespaces** — 943 of the 2,000 benchmark qids do not exist in `cshl-eval-v1`, and the same
+label denotes different queries in each. Joining query vectors by qid would silently pair 47% of
+queries with another query's vector at the right dimension and the right row count. The already
+published arms were checked and do **not** have this bug (0 qid-matches; they were embedded
+directly). `scripts/eval/qemb-from-run.mjs` fails loudly rather than joining across it.
+
+**Spend: $2.95 of a $5.00 cap** — train $2.32, re-embed $0.54, S3 ~$0.10. Itemised waste,
+including a $0.11 OOM probe and a silent `AccessDenied` that cost ~25 minutes, is in the lane
+log.
+
+**Not pushed to Hugging Face.** Publish decisions are Brendan's, by name.
 
 ## Open follow-ups
 

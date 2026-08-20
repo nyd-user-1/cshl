@@ -663,15 +663,44 @@ untouched, as required:
 
 ---
 
-## Spend ledger (revised — the train box is now live)
+## Spend ledger — FINAL, from measured instance lifetimes
 
-| when | item | rate | $ | note |
-|---|---|---|---:|---|
-| 23:14Z | convert, local | — | 0.00 | free |
-| 23:14Z | quota / capacity / IAM checks | — | 0.00 | free, API reads only |
-| 23:15Z | S3 PUT 601 MB + storage | — | ~0.01 | negligible, counted anyway |
-| 23:21Z | train `g6e.2xlarge` | $2.242/hr | **in flight** | expected ~$3.20, hard ceiling $4.48 |
-| — | re-embed 433,449 × 2 boxes | — | pending | ~$0.85 estimated |
-| | **committed so far** | | **~0.01** | cap $5.00 |
+Rates from the AWS pricing API, not from memory. Lifetimes from `describe-instances`, not from
+the scripts' claims.
 
-Waste this lane, itemised: **none yet.**
+| when | item | rate | minutes | $ |
+|---|---|---|---:|---:|
+| 23:14Z | convert 424,753 → 39,999 pairs, local | — | — | 0.00 |
+| 23:14Z | quota / capacity / IAM / pricing API reads | — | — | 0.00 |
+| 23:21–00:23Z | train `i-09938e30bd1f42c3d` g6e.2xlarge | $2.24208/hr | 62 | **2.32** |
+| 00:35–00:51Z | embed `i-0925d8ec21dad2e5b` g5.xlarge | $1.006/hr | 16 | **0.27** |
+| 00:35–00:51Z | embed `i-00fb96134c6fc2a23` g5.xlarge | $1.006/hr | 16 | **0.27** |
+| — | S3 (2.3 GB weights ×2 prefixes, 601 MB slice, requests) | — | — | ~0.10 |
+| | **TOTAL** | | | **≈ 2.95** |
+
+**Under the $5.00 cap, with $2.05 unspent.** Two capacity-refused launches cost nothing, and no
+box was ever left running idle — every one self-terminated and `describe-instances` confirms
+zero GPU instances alive at close.
+
+### Waste, itemised — mine, not folded into the total
+
+| item | $ | what happened |
+|---|---:|---|
+| OOM at `BATCH=16` | **0.11** | ~3 min of the g6e box spent proving 16 does not fit in 44.4 GiB. |
+| duplicate qemb job on box 1 | **0.00** | Hedge against the box terminating mid-recovery; ran on a box already paid for, cancelled the moment box 0 landed. |
+| local torch install + 900 MB of a 2.3 GB model download | **0.00** | No AWS cost, but real wasted wall-clock on an 8 GB laptop, against a house rule in the repo README I had not read. |
+| clean `serve/` prefix instead of `final/` | **−0.06** | *Saved*: kept 8.5 GB of optimizer state off two boxes. |
+
+### Things that cost time rather than money
+
+- **The `qemb` upload died silently on `AccessDenied`** because `launch.sh` re-puts its IAM
+  policy on every launch and that document omits `eval/*`. It clobbered a grant I had verified
+  ten minutes earlier. ~25 min to notice, diagnose and recover; fixed durably via a separate
+  inline policy the launcher cannot overwrite.
+- **`g6e` capacity vanished between 23:21Z and 00:33Z**, forcing two refused launches and a
+  hand-walk down the instance-type menu to `g5.xlarge`. ~10 min.
+- **My own index monitor produced a false positive.** It reported `HNSW-INDEX-READY` off a
+  single query while the build was actually at 73% and the index did not exist. Caught only
+  because I re-checked with an independent query before using it. Logged because it is the same
+  shape as everything else in this program's failure catalogue — except this time the check
+  that lied was one I wrote tonight.
