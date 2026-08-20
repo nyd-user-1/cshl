@@ -345,8 +345,11 @@ ARMS=cshl_qp3 EXPECT_CORPUS=433449 node scripts/eval/coverage-gate.mjs
 ```sh
 ARMS=bge-m3,medcpt,cshl_qp,cshl_qp2 EVAL_VERSION=cshl-eval-2k node scripts/eval/score.mjs
 ARMS=cshl_qp3 EVAL_VERSION=cshl-eval-2k node scripts/eval/score.mjs
-A=cshl_qp3 B=medcpt   node scripts/eval/paired-test.mjs
-A=cshl_qp3 B=cshl_qp2 node scripts/eval/paired-test.mjs
+A=cshl_qp3 B=medcpt   EVAL_VERSION=cshl-eval-2k node scripts/eval/paired-test.mjs
+A=cshl_qp3 B=cshl_qp2 EVAL_VERSION=cshl-eval-2k node scripts/eval/paired-test.mjs
+# and per family, which is where the verdict lives:
+A=cshl_qp3 B=medcpt EVAL_VERSION=cshl-eval-2k FAMILY=MESH     node scripts/eval/paired-test.mjs
+A=cshl_qp3 B=medcpt EVAL_VERSION=cshl-eval-2k FAMILY=AUTHORKW node scripts/eval/paired-test.mjs
 ```
 
 **Q7 — rerank QP3's top-50 with cshl-RR (the three proven commands):**
@@ -355,7 +358,7 @@ ARM=cshl_qp3 EVAL_VERSION=cshl-eval-2k node scripts/rerank-nsr/dump-candidates.m
 MODEL_RUN=20260819-223601-train ARM=cshl_qp3 ./scripts/rerank-nsr/score-launch.sh
 IN=<pulled reranked.json> BASE=cshl_qp3 ARM=cshl_qp3+cshl_rr \
   node scripts/rerank-nsr/score-rerank-cshl.mjs
-A=cshl_qp3+cshl_rr B=medcpt+medcpt_ce node scripts/eval/paired-test.mjs
+A=cshl_qp3+cshl_rr B=medcpt+medcpt_ce EVAL_VERSION=cshl-eval-2k node scripts/eval/paired-test.mjs
 ```
 
 ### Budget, priced before firing (cap $12)
@@ -566,3 +569,43 @@ system rows at all.
 
 Target rows print `NOT YET SCORED` until `cshl_qp3` exists, so the table cannot
 silently imply a result that has not been measured.
+
+---
+
+## 2026-08-20T08:32Z — a trap in MY OWN pre-staged commands, found before it fired
+
+`paired-test.mjs` defaulted `DIR` to **`data/eval/cshl-eval-docdoc/results`** —
+the doc->doc benchmark. My Q6/Q7 command lines above omitted `DIR`, copied from
+LANE-WIN's snippets where it sat inside a `...` elision.
+
+**Omitting it does not fail. It produces a confident, fully-guarded, wrong
+answer.** Both benchmarks hold `<arm>.perquery.json` for the same arms with the
+same 2,000 keys in the same order, so every assertion in the script passes.
+Measured, not reasoned:
+
+```
+$ A=cshl_qp2 B=medcpt node scripts/eval/paired-test.mjs      # no DIR
+  paired on 2,000 queries (same keys, same order — asserted)
+  cshl_qp2  R@10 0.1960 · medcpt R@10 0.1790
+  ΔR@10 +0.0170   exact McNemar p = 0.0397                   <- doc->doc. Wrong question.
+```
+
+versus the answer the report actually needs:
+
+```
+$ A=cshl_qp2 B=medcpt EVAL_VERSION=cshl-eval-2k node scripts/eval/paired-test.mjs
+  benchmark: data/eval/cshl-eval-2k/results
+  cshl_qp2  R@10 0.6150 · medcpt R@10 0.5900
+  ΔR@10 +0.0250   exact McNemar p = 0.0159                   <- reproduces LANE-WIN
+```
+
+Same script, same arms, same "verified" framing, `p` significant both times,
+nothing in the output naming which benchmark produced it. A pasted p-value
+carried no provenance at all.
+
+**Fix, at the class rather than the instance:** the default is gone —
+`paired-test.mjs` now refuses to run without `DIR` or `EVAL_VERSION`, and echoes
+the resolved directory as the first line of output, so every result carries its
+own provenance. Per-family works the same way and reproduces the published MESH
+row (`0.5238` vs `0.4569` on 1,241 queries). All Q6/Q7 command lines in this
+document are corrected to pass `EVAL_VERSION=cshl-eval-2k`.
