@@ -472,3 +472,82 @@ the emitted set independently re-checked rather than the per-row decisions being
 That gold-rank histogram is also a free measurement of the current model: **117/200 queries put
 the labelled gold at rank 1**, and 21/200 have it below rank 10 — which is what the 0.4319 MeSH
 R@10 looks like from the inside.
+
+### 2026-08-20T03:34Z — training is genuinely healthy, at the batch we asked for, on the
+throughput we predicted
+
+```
+[train.sh] 100000 training pairs in qpairs2
+[train.sh] manifest disjointness: {"pass": true, ... "emitted_references_to_gold_papers": 0}
+[train.sh] attempt: nproc=1 per_device_batch=8 effective_batch=8 in_batch_negatives=7
+           warmup_steps=1250 gradient_checkpointing=off save_steps=400 cross_device_negatives=off
+  12%|█▏ | 1490/12500 [16:54<2:02:34, 1.50it/s]
+NVIDIA L40S · 34,099 MiB / 46,068 MiB · GPU utilization 100%
+```
+
+**1.50–1.53 it/s against last night's measured 1.52, and 34,099 MiB against last night's
+33,883 MiB.** The estimate this run was priced on reproduced on the hardware, which is the only
+reason the cost projection below can be trusted. No OOM: batch 8 held on the first attempt, so
+nothing was burnt rediscovering it.
+
+Checkpointing verified *working*, not merely configured — `SAVE_STEPS=400` with the background
+syncer, three checkpoints already in S3 and `save_total_limit=3` correctly pruning the local
+disk (38% used of 146 GB):
+```
+s3://…/models/cshl-encoder-bge-m3/20260819-232838-train/checkpoints/
+  PRE checkpoint-400/  PRE checkpoint-800/  PRE checkpoint-1200/
+```
+
+Training ends ~**05:52Z**; the box should self-terminate ~05:58Z after the pooling config, the
+2,000-query embed and the 2.3 GB weight upload. Watchdog fires **06:24:31Z** — ~26 min of real
+headroom, sized to this run rather than inherited.
+
+Two independent watches are armed, because a log that stops printing and a job that stopped
+working look identical from one of them: a 7-minute SSM poll of the box's own progress line
+*plus its failure markers* (`Traceback|OutOfMemory|OOM — halving|CUDA error`, so silence cannot
+be mistaken for health), and a separate watcher on the **S3 weight prefix**, which fires the
+moment `final/model.safetensors` appears rather than when I notice the box is gone.
+
+### Spend ledger — running, from measured instance lifetimes
+
+| when | item | rate | minutes | $ |
+|---|---|---|---:|---:|
+| 02:26Z | PHASE 0: 7 arms scored on the frozen 2k | — | — | **0.00** |
+| 02:50Z | pricing/quota/IAM API reads, 11 capacity-refused launches | — | — | **0.00** |
+| 03:33Z | ANCE miner smoke test, 200 queries, read-only | — | — | **0.00** |
+| 03:18–03:28Z | train `i-0b7c04759e791d6dd` g5.12xlarge — **killed, see 03:25Z** | $5.672/hr | 9.5 | **0.90** |
+| 03:28–~05:58Z | train `i-0efe2e00b91aedceb` g6e.2xlarge (projected) | $2.24208/hr | ~150 | **~5.60** |
+| — | re-embed N=4 (projected) | — | — | ~0.70 |
+| — | S3 (1.5 GB slice, 2.3 GB weights x2 prefixes, checkpoint syncs) | — | — | ~0.20 |
+| | **PROJECTED TOTAL** | | | **~7.40** |
+
+Against the raised **$12.50** cap. The 11 refused launches cost nothing and left no orphans
+(checked with `describe-instances`, not the launcher's word for it).
+
+**Waste, itemised — mine, not folded into the total**
+
+| item | $ | what happened |
+|---|---:|---|
+| the 4-GPU attempt | **0.90** | 9.5 min of a g5.12xlarge to learn that halving the per-device batch to fit a 24 GB card destroys the compute:communication ratio AND the in-batch negative count that was the only reason to want four GPUs. Bought a real generalisation (see 03:25Z), but it was still $0.90 I did not have to spend if I had priced the A10G's memory before adding it to the menu. |
+
+### 2026-08-20T04:09Z — free confound ruled out: `hnsw.ef_search=100` is NOT what separates us
+from MedCPT
+
+Every number in this program is measured at `hnsw.ef_search=100`, which is an *approximate*
+search. Before attributing any part of the gap to the encoders, it is worth knowing how much of
+it is the index. Rather than re-score everything at a higher `ef` (slow, and it would break
+comparability with every published digit), measured the approximation directly:
+`scripts/eval/ann-recall.mjs` takes 150 benchmark queries and compares the top-10 the scorer
+actually sees at `ef=100` against the top-10 at `ef=1000`, **for our arm and MedCPT both** —
+a check applied to one arm cannot say anything about a gap between two.
+
+```
+cshl_qp  n=150  top-10 identical 127/150  mean overlap 96.9%  rank-1 identical 145/150
+medcpt   n=150  top-10 identical 112/150  mean overlap 96.9%  rank-1 identical 148/150
+```
+
+**96.9% and 96.9%.** The ANN approximation costs about 3% of top-10 slots and it costs both
+arms the same to three significant figures. It is not a hidden handicap on our side, raising
+`ef` is not a free win worth invalidating the published numbers for, and the 0.4319-vs-0.4569
+gap is an encoder difference rather than an index artifact. $0.00, and one fewer thing the
+result can be argued away with.
