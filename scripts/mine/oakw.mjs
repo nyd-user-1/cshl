@@ -304,7 +304,7 @@ async function pairs() {
   const ws = Object.fromEntries(["train", "val", "test"].map((s) => [s, jsonlWriter(`${OUT_BASE}.${s}.jsonl`, { append: false })]));
   const held = jsonlWriter(`${OUT_BASE}.heldout.jsonl`, { append: false });
   const counts = { train: 0, val: 0, test: 0, held: 0 };
-  const byFamily = {}, negSrc = {};
+  const byFamily = {}, negSrc = {}, bySplitFamily = {};
   const drops = { unembeddable: 0, no_category: 0, too_few_kw: 0, no_topic: 0, thin_negatives: 0 };
 
   const emit = async (key, query, family, extra = {}) => {
@@ -344,6 +344,8 @@ async function pairs() {
 
     const rec = { query, positive: { slug: key }, negatives, meta: { family, category: cat.get(key), ...extra } };
     byFamily[family] = (byFamily[family] || 0) + 1;
+    const bucket = isHeldOut(key) ? "heldout" : splitOf(key);
+    (bySplitFamily[bucket] ??= {})[family] = ((bySplitFamily[bucket] ??= {})[family] || 0) + 1;
     if (isHeldOut(key)) { await held.write(rec); counts.held++; }
     else { const s = splitOf(key); await ws[s].write(rec); counts[s]++; }
   };
@@ -361,9 +363,10 @@ async function pairs() {
   await Promise.all([...Object.values(ws), held].map(async (w) => { await w.drain(); await w.close(); }));
   log(`── cshl-oakw-pairs ── train ${counts.train} val ${counts.val} test ${counts.test} · heldout ${counts.held}`);
   log(`   families ${JSON.stringify(byFamily)}`);
+  log(`   by split  ${JSON.stringify(bySplitFamily)}`);
   log(`   negatives ${JSON.stringify(negSrc)}`);
   log(`   drops ${JSON.stringify(drops)}  (of ${rows} papers read)`);
-  await manifest({ counts, byFamily, negSrc, drops, rows, dfPapers, distinctKw: dfRaw.distinct });
+  await manifest({ counts, byFamily, bySplitFamily, negSrc, drops, rows, dfPapers, distinctKw: dfRaw.distinct });
 }
 
 async function manifest(m) {
@@ -388,7 +391,8 @@ async function manifest(m) {
     },
     families: {
       OAKW: "OpenAlex keyword set, score- and DF-filtered, top-N by score, joined '; ' — the AUTHORKW analog at ~99% corpus coverage instead of PubMed's ~29%.",
-      OATOPIC: "OpenAlex topic names + subfield, joined '; ' — the MeSH-descriptor analog: a curated 4.5k-topic taxonomy rather than a free vocabulary.",
+      OATOPIC: "OpenAlex topic names + subfield, joined '; ' — from a curated 3,417-topic taxonomy rather than a free vocabulary.",
+      OATOPIC_caveat: "OAKW is the headline family and OATOPIC is the weaker one; they are not equals. OpenAlex topic labels are sentence-shaped classification names ('Genetic Mapping and Diversity in Plants and Animals'), not strings a person would type into a search box, and a paper's three topics can read incoherently when concatenated. It is closer to a coarse multi-label classification target than to a query. It is emitted because it is free, clean, and covers 95.5% of the corpus — but any claim about closing the AUTHORKW gap should rest on OAKW.",
     },
     query_filters: {
       kw_score_min: KW_SCORE_MIN,
@@ -419,7 +423,22 @@ async function manifest(m) {
       inlined: false,
       note: "Records carry slugs only. Title/abstract join from data/mine/corpus-text.jsonl on `key`, the same sidecar the other training families use.",
     },
-    counts: { by_split: m.counts, by_family: m.byFamily, drops: m.drops, papers_read: m.rows },
+    limitations: {
+      residual_tagger_noise: {
+        statement: "OpenAlex's keyword surface is machine-assigned and it mis-fires. After filtering, queries still contain terms the paper is not about — 'Curiosity' on a genetic-privacy paper, 'Variation' on a yeast-genetics paper.",
+        measured: "11.34% of emitted terms carried a disambiguation parenthetical. Gated against each paper's own topic/subfield/field vocabulary, only 17.3% of those named a discipline the paper actually belongs to.",
+        what_was_tried_and_rejected: [
+          "Dropping parenthetical-decorated terms outright. Rejected: the decorated terms include the corpus's single best query strings — 'Coronavirus disease 2019 (COVID-19)' (24,065 papers) and 'Severe acute respiratory syndrome coronavirus 2' (11,340) are 100% decorated — and the frequent failures are mis-disambiguations of terms whose bare form is exactly right ('Transmission (telecommunications)' on virology, 5,714; 'Transcription (linguistics)' on genomics, 4,713).",
+          "Using the corpus-wide decoration RATIO to separate contentless terms ('Set', 'Task', 'Function') from useful ones ('Transmission', 'Transcription'). Measured and REFUTED: of 2,649 terms with >=200 occurrences, 289 are always decorated, 2,357 never are, and only 3 are mixed. OpenAlex assigns one canonical surface form per concept id, so decoration is a property of the concept, not of usage, and carries no signal about a term's usefulness. Both 'Transmission' and 'Set' are 100% decorated.",
+          "A hand-written stoplist of contentless English nouns. Not adopted: it is unmeasured author judgment injected into a data pipeline, and it would not survive an audit.",
+        ],
+        mitigation: "A query is a SET of 3-6 terms, so a single bad term dilutes rather than corrupts it. No frequency-based rule separates the residual noise, and that is stated here rather than papered over.",
+      },
+      machine_origin: "Every query in this family is machine-assigned, so by the standing ruling that the retrieval BENCHMARK is human-origin only (MESH + AUTHORKW), OAKW and OATOPIC are TRAINING-ONLY. cshl-oakw-pairs.heldout.jsonl exists so held-out papers are never trained on; it is not a benchmark and must not be scored as one.",
+      coverage_gap: "6,480 of 433,449 papers (1.49%) are absent from OpenAlex entirely — confirmed as genuine 404s by a free by-DOI singleton sweep, not as a harvest failure. A further 34,503 enriched papers yield fewer than the 3 keywords a query needs after filtering.",
+      not_in_this_family: "Text is not inlined and no eval file is produced. This lane emits training pairs only; it trains nothing and it does not touch cshl-query-pairs.*, cshl-triplets.*, cshl-*-classify.*, or data/mine/eval/.",
+    },
+    counts: { by_split: m.counts, by_family: m.byFamily, by_split_and_family: m.bySplitFamily, drops: m.drops, papers_read: m.rows },
     vocabulary: { distinct_keywords_before_filtering: m.distinctKw, papers_scored: m.dfPapers },
     files,
   };
@@ -433,21 +452,39 @@ async function verify() {
   const fail = [];
   const ok = (cond, msg) => { log(`  ${cond ? "PASS" : "FAIL"}  ${msg}`); if (!cond) fail.push(msg); };
 
-  // The frozen benchmark's papers, by role, straight out of data/mine/eval.
-  const benchAll = new Set(), benchPrimary = new Set();
+  // The frozen benchmark's papers, ROLE BY ROLE, straight out of data/mine/eval.
+  //
+  // The roles have to be separated rather than lumped. cshl-eval-v1.docdoc is a
+  // paper→paper task, so BOTH its `query` and its `positive` are papers, and a
+  // scan that reads only one of them silently under-reports the benchmark's
+  // footprint. Its positives are cited works, which assemble.mjs never required
+  // to be held out — so unlike the queries, they can and do sit in the training
+  // pool. Getting that distinction right is the difference between a real
+  // disjointness number and a reassuring one.
+  const benchQuery = new Set(), benchPositive = new Set(), benchNegative = new Set();
   for (const f of ["cshl-eval-v1.retrieval.jsonl", "cshl-eval-v1.docdoc.jsonl", "cshl-eval-v1.mesh-classify.jsonl", "cshl-eval-v1.category-classify.jsonl"]) {
     const p = `${EVAL}/${f}`;
     if (!existsSync(p)) { log(`  (missing ${f} — benchmark disjointness cannot be computed)`); continue; }
     for await (const r of readJsonl(p)) {
-      const prim = (typeof r.query === "object" ? r.query?.slug : null) ?? r.positive?.slug ?? r.slug;
-      if (prim) { benchAll.add(prim); benchPrimary.add(prim); }
-      for (const n of r.negatives || []) if (n.slug) benchAll.add(n.slug);
+      // retrieval: query is a string, the paper is `positive`.
+      // docdoc:    query is a paper object AND positive is a paper object.
+      // classify:  the paper is the row itself, at `slug`.
+      if (typeof r.query === "object" && r.query?.slug) benchQuery.add(r.query.slug);
+      else if (typeof r.query === "string" && r.positive?.slug) benchQuery.add(r.positive.slug);
+      else if (r.slug) benchQuery.add(r.slug);
+      if (r.positive?.slug) benchPositive.add(r.positive.slug);
+      for (const n of r.negatives || []) if (n.slug) benchNegative.add(n.slug);
     }
   }
+  const benchAll = new Set([...benchQuery, ...benchPositive, ...benchNegative]);
   const benchHeld = new Set([...benchAll].filter(isHeldOut));
+  const notHeldIn = (s) => [...s].filter((k) => !isHeldOut(k)).length;
   log(`── frozen benchmark cshl-eval-v1 ──`);
-  log(`  ${benchAll.size} distinct papers across all roles · ${benchPrimary.size} as query/positive · ${benchHeld.size} of them inside the holdout reservation`);
-  ok([...benchPrimary].every(isHeldOut), `every benchmark query paper is inside the holdout reservation (${[...benchPrimary].filter((k) => !isHeldOut(k)).length} outside)`);
+  log(`  ${benchAll.size} distinct papers across all roles · ${benchHeld.size} inside the holdout reservation`);
+  log(`    as query    ${String(benchQuery.size).padStart(7)}  (${notHeldIn(benchQuery)} not held out)`);
+  log(`    as positive ${String(benchPositive.size).padStart(7)}  (${notHeldIn(benchPositive)} not held out — docdoc positives are cited works, never reserved)`);
+  log(`    as negative ${String(benchNegative.size).padStart(7)}  (${notHeldIn(benchNegative)} not held out — distractors are drawn from the training pool by design)`);
+  ok(notHeldIn(benchQuery) === 0, `every benchmark QUERY paper is inside the holdout reservation (${notHeldIn(benchQuery)} outside)`);
 
   log(`── cshl-oakw-pairs split integrity ──`);
   const sets = {};
@@ -490,14 +527,13 @@ async function verify() {
 
   // ── the disjointness the lane was told to COMPUTE ──────────────────────────
   log(`── disjointness vs the frozen benchmark (computed from files, all roles) ──`);
-  const hitHeld = [...allRoles].filter((k) => benchHeld.has(k));
-  const hitPrim = [...allRoles].filter((k) => benchPrimary.has(k));
-  const hitAny = [...allRoles].filter((k) => benchAll.has(k));
+  const inter = (s) => [...allRoles].filter((k) => s.has(k)).length;
+  const hitHeld = inter(benchHeld), hitQ = inter(benchQuery), hitP = inter(benchPositive), hitN = inter(benchNegative), hitAny = inter(benchAll);
   log(`  papers appearing in any OAKW training role: ${allRoles.size}`);
-  ok(hitHeld.length === 0, `∩ benchmark HELD-OUT papers = ${hitHeld.length} (target 0)`);
-  ok(hitPrim.length === 0, `∩ benchmark QUERY/POSITIVE papers = ${hitPrim.length} (target 0)`);
-  log(`  ∩ benchmark papers in ANY role = ${hitAny.length}`);
-  log(`    ${hitAny.length ? "These are benchmark DISTRACTORS that were never held out — cshl-eval-v1 draws its negatives from the training pool by design (measured: 120,461 of 160,000 negative slots). A corpus document being indexed and also being trainable is not a leak; the benchmark holds out QUERIES, not documents. Reported, not suppressed." : "empty"}`);
+  ok(hitHeld === 0, `∩ benchmark HELD-OUT papers (any role, either side) = ${hitHeld} (target 0)`);
+  ok(hitQ === 0, `∩ benchmark QUERY papers = ${hitQ} (target 0)`);
+  log(`  ∩ benchmark POSITIVE papers = ${hitP}   ∩ benchmark NEGATIVE papers = ${hitN}   ∩ any role = ${hitAny}`);
+  log(`    Non-zero here is expected and is not a leak. cshl-eval-v1 draws its distractors, and docdoc's cited positives, from the un-reserved 75% of the corpus — 120,461 of its 160,000 negative slots hold a paper that was never held out. Those are corpus documents, and every retrieval benchmark indexes the whole corpus; what a benchmark reserves is QUERIES. Every benchmark query paper, and every benchmark paper of any role that falls inside the holdout reservation, is absent from this family. Reported, not suppressed.`);
 
   log(`── heldout file ──`);
   const hp = `${OUT_BASE}.heldout.jsonl`;
