@@ -14,7 +14,6 @@ import { useNsrSearch, type SearchMode } from "@/hooks/useNsrSearch";
 import { SearchBox } from "@/components/SearchInput";
 import { RecordDrawer } from "@/components/RecordDrawer";
 import { RecordDialog } from "@/components/RecordDialog";
-import { ScoreInfoDialog } from "@/components/ScoreInfoDialog";
 import { PanelChat } from "@/components/PanelChat";
 import { useAppPanel } from "@/hooks/useAppPanel";
 import { usePrefetchRecord } from "@/hooks/useS2Enrichment";
@@ -550,21 +549,17 @@ function CitationScatter({ records, onOpen, onClose }: { records: NsrRecord[]; o
 
 function ResultRow({
   record,
-  mode,
   first,
   onClick,
   onDetail,
   onChat,
-  onScoreInfo,
   onHover,
 }: {
   record: NsrRecord;
-  mode: SearchMode;
   first: boolean;
   onClick: () => void;
   onDetail: () => void;
   onChat: () => void;
-  onScoreInfo: () => void;
   onHover?: () => void;
 }) {
   const meta: string[] = [];
@@ -590,24 +585,12 @@ function ResultRow({
         <span className="text-sm font-medium text-foreground leading-snug hover:underline flex-1 min-w-0">
           {record.key_number}
         </span>
-        {mode !== "keyword" && record.similarity != null && (
-          <span className="relative group/score shrink-0">
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onScoreInfo(); }}
-              className="inline-flex items-center rounded-full bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground tabular-nums hover:bg-foreground/20 transition-colors"
-              aria-label={mode === "semantic" ? "What is semantic score?" : "What is hybrid score?"}
-            >
-              {(record.similarity * 100).toFixed(0)}%
-            </button>
-            <span
-              role="tooltip"
-              className="pointer-events-none absolute right-0 top-full z-20 mt-1.5 hidden whitespace-nowrap rounded-md bg-black px-2 py-1 text-[10px] font-medium text-white shadow group-hover/score:block"
-            >
-              {mode === "semantic" ? "Semantic Score" : "Hybrid Score"}
-            </span>
-          </span>
-        )}
+        {/* Match-percentage badge removed 2026-08-20. In hybrid the list interleaves two
+            arms whose scores are not on one scale — a dense row carries a cosine (0.6-0.7)
+            and a lexical row a ts_rank (0.05-0.3) — so rendering both as "Match X%" put a
+            number next to a result that meant something different one row up. The ranking
+            is the signal; a single incomparable number beside it is worse than none. Rows
+            now carry `arm` ("dense" | "fts" | "both") if this is ever labelled instead. */}
       </div>
       <p className="text-sm text-foreground mt-0.5 leading-snug line-clamp-2">
         {record.title}
@@ -667,7 +650,6 @@ export default function Search() {
   const [mode, setMode] = useState<SearchMode>("hybrid");
   const [drawerIndex, setDrawerIndex] = useState(-1);
   const [detailRecord, setDetailRecord] = useState<NsrRecord | null>(null);
-  const [scoreInfoOpen, setScoreInfoOpen] = useState(false);
   const { openPanel } = useAppPanel();
   const prefetchRecord = usePrefetchRecord();
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
@@ -860,11 +842,9 @@ export default function Search() {
                   <ResultRow
                     key={record.id}
                     record={record}
-                    mode={mode}
                     first={i === 0}
                     onClick={() => setDrawerIndex(i)}
                     onDetail={() => setDetailRecord(record)}
-                    onScoreInfo={() => setScoreInfoOpen(true)}
                     onHover={() => prefetchRecord(record.id)}
                     onChat={() => openPanel({
                       title: (
@@ -910,7 +890,6 @@ export default function Search() {
       </div>
 
       {/* What the % badge means */}
-      <ScoreInfoDialog open={scoreInfoOpen} onOpenChange={setScoreInfoOpen} mode={mode} />
 
       {/* Record detail dialog (stand-in for a /record page) */}
       <RecordDialog record={detailRecord} open={detailRecord !== null} onOpenChange={(o) => !o && setDetailRecord(null)} />

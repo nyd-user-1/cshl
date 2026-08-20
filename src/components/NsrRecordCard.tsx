@@ -96,11 +96,8 @@ export const NsrRecordCard = memo(function NsrRecordCard({ record, searchQuery, 
         <Hash className="h-5 w-5 text-muted-foreground" />
         <span className="text-base font-bold">{record.key_number}</span>
         <span className="ml-auto flex items-center gap-2">
-          {record.similarity != null && (
-            <span className="inline-flex items-center rounded-full bg-blue-500/20 px-2 py-0.5 text-[11px] font-medium text-blue-400">
-              Match {Math.round(record.similarity * 100)}%
-            </span>
-          )}
+          {/* Match-percentage badge removed 2026-08-20 — see the note in Search.tsx: the
+              hybrid list mixes cosine and lexical scores on one visual scale. */}
           <span className="text-sm font-medium text-muted-foreground">
             {record.pub_year}
           </span>
