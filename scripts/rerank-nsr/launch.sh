@@ -9,8 +9,8 @@
 # pulls train.py (44b's, unchanged) + train.sh + a converted train-groups.jsonl
 # slice from S3, runs the trainer, (MODE=train only) scores it against
 # LANE-EVAL's frozen benchmark before shutdown. Same IAM role (nsr-embed),
-# same bucket (nsr-embed-v2) — already covers reranker/* and models/* writes,
-# no policy delta needed this lane (verified read-only before launch).
+# bucket cshl-embed-rxiv. TYPE_MENU + checkpoint-to-S3 added by the cshl-RR lane
+# (see LANE-RERANK G2/G3); train.py still runs UNCHANGED, path flags only.
 #
 # Usage (run from repo root):
 #   MODE=rehearse TRAIN_NAME=rehearsal ./scripts/rerank-nsr/launch.sh   # Phase 0
@@ -19,7 +19,11 @@
 #     SSM in by hand: aws ssm start-session --target <instance-id> --region us-east-1
 set -euo pipefail
 REGION=us-east-1
-TYPE=${TYPE:-g6e.xlarge}
+# TYPE_MENU: comma-separated instance types, walked in order, each across every
+# AZ that offers it. Ported from scripts/train/launch.sh:32,139-231 (LANE-RERANK
+# G2: the rig merge gave the ENCODER launcher type failover and never reached
+# this file, which was still a single `run-instances` or bust).
+TYPE_MENU=${TYPE_MENU:-${TYPE:-g6e.xlarge}}
 PARAM=${PARAM:-/cshl/embed/dburl}
 ROLE=${ROLE:-cshl-embed}
 SG_NAME=${SG_NAME:-cshl-embed-sg}
@@ -94,25 +98,71 @@ export AWS_DEFAULT_REGION=$REGION
 # xtrace prints the RESOLVED value of an assignment, not just the command —
 # the credential leak fixed in commit dfcbb25. Trace stays off across the
 # SSM fetch and the train.sh invocation, which also carries the credential.
-set +x
-DBURL=\$(aws ssm get-parameter --name $PARAM --with-decryption --query Parameter.Value --output text)
+# No DB credential is fetched here. train.sh's scoring step was removed when
+# the rig was ported (its §5), so nothing on this box reads DATABASE_URL —
+# grep confirms zero references. The NSR rig shipped the credential because it
+# scored on-box; carrying it forward would contradict train.sh's own header and
+# put a live Neon URL on a GPU box for no reason. (LANE-RERANK G7.)
 aws s3 cp s3://$BUCKET/reranker/train.sh train.sh
 chmod +x train.sh
-export MODE=$MODE TRAIN_NAME=$TRAIN_NAME RUN_ID=$RUN_ID BUCKET=$BUCKET EPOCHS=${EPOCHS:-1} MAXHOURS=${MAXHOURS:-0.5}
-DATABASE_URL="\$DBURL" ./train.sh
+export MODE=$MODE TRAIN_NAME=$TRAIN_NAME RUN_ID=$RUN_ID BUCKET=$BUCKET EPOCHS=${EPOCHS:-1} MAXHOURS=${MAXHOURS:-0.5} CKPT_STEPS=${CKPT_STEPS:-1000} CKPT_SYNC_INTERVAL=${CKPT_SYNC_INTERVAL:-240} RESUME=${RESUME:-0}
+./train.sh
 set -x
 aws s3 cp /var/log/train.log s3://$BUCKET/logs/cshl-reranker-$RUN_ID.log
 shutdown -h now
 EOF
 )
 fi
-aws ec2 run-instances --region $REGION \
-  --image-id "$AMI" --instance-type $TYPE --count 1 \
-  ${SUBNET:+--subnet-id $SUBNET} \
-  --iam-instance-profile Name=$ROLE \
-  --security-group-ids "$SG" \
-  --instance-initiated-shutdown-behavior terminate \
-  --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":100,"VolumeType":"gp3","DeleteOnTermination":true}}]' \
-  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=cshl-reranker-$RUN_ID}]" \
-  --user-data "$UD" \
-  --query 'Instances[0].InstanceId' --output text
+launch_in() {
+  local type="$1" subnet="$2"
+  aws ec2 run-instances --region $REGION \
+    --image-id "$AMI" --instance-type "$type" --count 1 \
+    ${subnet:+--subnet-id "$subnet"} \
+    --iam-instance-profile Name=$ROLE \
+    --security-group-ids "$SG" \
+    --instance-initiated-shutdown-behavior terminate \
+    --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":150,"VolumeType":"gp3","DeleteOnTermination":true}}]' \
+    --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=cshl-reranker-$RUN_ID},{Key=InstanceType,Value=$type}]" \
+    --user-data "$UD" \
+    --query 'Instances[0].InstanceId' --output text 2>&1
+}
+
+IFS=',' read -r -a TYPES <<< "$TYPE_MENU"
+if [ -n "${DRYRUN:-}" ]; then
+  echo "───── dry-run: user-data ─────"; echo "$UD"; echo "───── end ─────"
+  for t in "${TYPES[@]}"; do echo "  [dry-run] would try $t across every offered AZ"; done
+  exit 0
+fi
+
+# `|| true` on the OUT= assignment is load-bearing, not decorative: under
+# `set -e` a capacity error returned by a command substitution IN AN ASSIGNMENT
+# exits the whole script, so a loop whose only job is "try the next AZ" can
+# never reach iteration two. Same bug, same fix, as the embed/train rigs.
+ID=""; PICKED_TYPE=""
+for TYPE in "${TYPES[@]}"; do
+  if [ -n "${SUBNET:-}" ]; then
+    CANDIDATES="$SUBNET"
+  else
+    OFFERED=$(aws ec2 describe-instance-type-offerings --region $REGION --location-type availability-zone \
+      --filters Name=instance-type,Values=$TYPE --query 'InstanceTypeOfferings[].Location' --output text)
+    CANDIDATES=""
+    for az in $OFFERED; do
+      sn=$(aws ec2 describe-subnets --region $REGION --filters Name=vpc-id,Values=$VPC Name=availability-zone,Values=$az \
+             --query 'Subnets[0].SubnetId' --output text)
+      [ "$sn" != "None" ] && CANDIDATES="$CANDIDATES $sn"
+    done
+  fi
+  [ -n "$CANDIDATES" ] || { echo "type $TYPE: not offered in any AZ with a subnet — next type"; continue; }
+  for sn in $CANDIDATES; do
+    OUT=$(launch_in "$TYPE" "$sn") || true
+    case "$OUT" in
+      i-*) ID="$OUT"; PICKED_TYPE="$TYPE"; echo "launched: $ID ($TYPE, $sn)"; break 2 ;;
+      *InsufficientInstanceCapacity*|*Unsupported*) echo "type $TYPE: no capacity in $sn — next AZ" ;;
+      *) echo "type $TYPE: launch failed in $sn (non-capacity error) — next type: $OUT"; break ;;
+    esac
+  done
+done
+[ -n "$ID" ] || { echo "NO CAPACITY IN ANY AZ FOR ANY TYPE IN MENU: $TYPE_MENU. Nothing launched." >&2; exit 1; }
+echo "instance: $ID  type: $PICKED_TYPE  run_id: $RUN_ID"
+echo "watchdog: $WATCHDOG_MIN min · ckpt every ${CKPT_STEPS:-1000} steps, synced to S3 every ${CKPT_SYNC_INTERVAL:-240}s"
+echo "$ID"

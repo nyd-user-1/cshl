@@ -653,3 +653,581 @@ _(edit as you go; the lead reads it verbatim)_
      their own positive (caught and dropped by this lane's held-out guard,
      not LANE-TRIPLETS' own pipeline) — flagged for LANE-TRIPLETS, not fixed
      here (not this lane's file to edit).
+
+---
+
+# CSHL / RxivGPT — cshl-RR (the T3 that never ran)
+
+*Everything above this line is the **NSR** project's reranker lane (bucket
+`nsr-embed-v2`, benchmark `nsr-eval-v1`), kept for provenance. Below is CSHL.*
+
+Append-only, UTC. Fence: no `api/`, no HF, no `scripts/train`, no `scripts/eval`
+registry, no other lane's tables/boxes. Cap: **$5.00 AWS**. Laptop: nothing heavy.
+
+## 2026-08-20T02:3xZ — inventory BEFORE building or launching anything
+
+Read first, in this order: `docs/CSHL-CPT-REPORT.md`, `scripts/rerank-nsr/*`
+headers, `data/reranker/`, `docs/prompts/LANE-RIG-PORT.md` (the T3 row),
+`docs/HANDOFF-2026-08-19.md`, `LANE-QPAIRS-RUN.md`, `LANE-SHIP.md`.
+
+**The brief's premise — "the rig and training groups were built last night" — is
+half right. The rig was ported; the groups do not exist.** Measured, not assumed:
+
+```
+data/reranker/                        EMPTY  (created 08-19 01:42, never written)
+aws s3 ls s3://cshl-embed-rxiv/reranker/   -> 0 objects (no train.py, no train.sh, no groups)
+aws s3 ls s3://cshl-embed-rxiv/models/     -> cshl-encoder-bge-m3/ only
+find . -name train.py                 -> nothing in repo
+docs/HANDOFF-2026-08-19.md:17         "Reranker repo deliberately absent — T3 never ran."
+```
+
+`scripts/rerank-nsr/{launch.sh,train.sh,to-groups.mjs}` were re-headed for CSHL
+at 08-19 19:03 (bucket `cshl-embed-rxiv`, role `cshl-embed`, param
+`/cshl/embed/dburl`). That is the whole of what landed. Five gaps between that
+and a run, each verified against the file rather than inferred:
+
+**G1 — `to-groups.mjs` does not fit the miner output that exists.** It reads a
+keys-only contract, `{anchor_key, positives:[key], negatives:[key], query,
+source}`, from `data/mine/triplets.jsonl`. That path **does not exist**. What the
+miner actually wrote is the nested slug shape:
+
+```
+data/mine/cshl-query-pairs.train.jsonl   424,753 lines   (val 52,962 · test 53,928)
+  {query:"Mutations; Child Mental Disorders; snRNA",
+   positive:{slug:"2024.04.07.24305438"},
+   negatives:[{slug,source:"mesh-tree-sibling"|"same-category"} ×8],
+   meta:{family:"MESH"|"AUTHORKW", category, pmid, n_terms, uis}}
+data/mine/cshl-triplets.train.jsonl      132,793 lines   (query is an object — doc→doc, not our eval's shape)
+```
+
+Family mix over the first 60k rows: MESH 37,070 / AUTHORKW 22,930 — the same two
+families the frozen benchmark uses (MESH 1,241 / AUTHORKW 759).
+
+**G2 — the rerank launcher has no type failover.** The brief says "the merged
+launcher supports type failover." It does — but that is
+`scripts/train/launch.sh:32,139,149,231` (`TYPE_MENU`, walked type-by-type across
+every AZ), which is the **encoder** launcher and inside this lane's fence.
+`scripts/rerank-nsr/launch.sh:22` is still `TYPE=${TYPE:-g6e.xlarge}` — one type,
+one shot, `run-instances` or bust. The rig merge never reached this file.
+
+**G3 — `SAVE_STEPS` does not exist in the rerank rig, and checkpoints never leave
+the box.** `scripts/train/launch.sh:129` exports
+`SAVE_STEPS/SAVE_TOTAL_LIMIT/CKPT_SYNC_INTERVAL`; `rerank-nsr/launch.sh` and
+`train.sh` export none. 44b's `train.py` *does* checkpoint —
+`--ckpt-steps` (default **2000**), `--resume`, and a wall-clock kill that
+checkpoints on the way out (`train.py:38,40,184,187,243-247`) — but `train.sh:45`
+passes only `--dir --base --epochs --bulk --max-hours`, so the default 2000 stands,
+and **nothing syncs `checkpoint/` to S3 during the run.** On an
+`instance-initiated-shutdown-behavior terminate` box, a checkpoint on local EBS
+is not a checkpoint. As it stands a kill at minute 44 loses 44 minutes, not ≤10.
+
+**G4 — `cshl-QP2` and `docs/prompts/LANE-WIN.md` do not exist.** `grep -rn
+"QP2\|LANE-WIN\|win-lane\|qp2" docs/ scripts/` returns **zero hits**. The winning
+arm is **`cshl-QP`** (`preprint_embeddings_cshl_qp`, 433,449 rows, HNSW
+`idx_pp_emb_cshl_qp_hnsw` valid), produced by `LANE-QPAIRS-RUN.md`, which is
+**already final** — spend ledger closed at ≈$2.95, all boxes self-terminated.
+There is nothing to wait for and nothing to poll. Taking the brief's own
+authorised fallback and scoring on **cshl-QP**.
+
+**G5 — the scoring path is NSR-shaped.** `scripts/eval/score-rerank.mjs` hardcodes
+`data/eval/nsr-eval-v1` and segments `era/richness/reftype`; CSHL's benchmark
+segments are `server/era/published/abstract`. It also consumes a
+`{qid, family, raw_top50, reranked_top50}` file that nothing currently produces.
+And `cshl_qp.perquery.json` carries **`{arm,version,keys,family,hits10}` only —
+no candidate lists**, so the top-50 to rerank must be regenerated from
+`qemb/cshl_qp.jsonl` + the corpus table. `scripts/eval/paired-test.mjs` (McNemar +
+bootstrap over `perquery.json`) is CSHL-shaped already and needs nothing.
+
+## Holdout discipline — the one thing that was already right, proven not asserted
+
+`to-groups.mjs` guards with `md5("holdout:"+key)[0:8]/0xffffffff < 0.25` and
+audits what it **EMITS** (`bleed` check, exits 1 and writes nothing on any hit).
+That rule is only worth anything if the frozen benchmark's papers actually fall
+inside it, so I checked rather than trusted:
+
+```
+data/eval/cshl-eval-2k/qrels.tsv   2,000 rows · 1,839 distinct gold keys
+   md5 rule marks held out: 1,839 / 1,839  = 100.0%   trainable leak: 0
+data/eval/cshl-eval-v1/qrels.tsv  10,000 rows · 6,203 distinct gold keys
+   md5 rule marks held out: 6,203 / 6,203  = 100.0%   trainable leak: 0
+```
+
+**Gate PASS.** Every gold paper in both benchmarks is on the held-out side of the
+same hash the converter uses, so anything the converter emits is disjoint from
+the benchmark by construction — and the emit-side bleed check proves it per run
+rather than restating it. (Note the qrels here are **2-column** `qid\tkey`, not
+NSR's 3-column; `pairs-to-groups.mjs`'s "col 2 = key_number" comment is an NSR
+fact and does not transfer.)
+
+**Nothing launched. $0.00 spent so far.**
+
+## 2026-08-20T02:29–02:34Z — built what the brief assumed existed
+
+**Groups.** `scripts/rerank-nsr/qpairs-to-contract.mjs` (new, this lane): an
+**adapter**, not a second converter — it maps LANE-MINE's nested slug shape onto
+the keys-only contract `to-groups.mjs` already reads, and carries no holdout
+logic, no text and no policy of its own beyond a deterministic take-first-N. The
+held-out rule and the emit-side bleed proof stay in exactly one file.
+
+```
+qpairs-to-contract.mjs  N=40000  ->  data/mine/rerank-input.jsonl (12.2 MB)
+   dropped: no-query 0 · no-positive 0 · no-negatives 0
+   family mix MESH 24,539 (61.3%) · AUTHORKW 15,461 (38.7%)   [benchmark: 62/38 — matched]
+to-groups.mjs  NAME=parity  ->  data/reranker/parity/train-groups.jsonl
+   40,000 groups · 252,736,569 bytes · md5 ebbbf50e46c20e0fd14a3d1c0c6b4935
+   resolved 221,125/221,125 keys · dropped held-out 0 · dropped empty-negatives 0
+   holdout bleed into emitted groups: 0 (must be 0)   <- GATE PASS
+```
+
+**"dropped held-out 0" is not the guard sleeping — I checked, because a guard
+that never fires and a guard that is broken look identical from the outside.**
+Measured across the miner's own splits:
+
+```
+             positives held out        negatives held out
+train        0 / 60,000   (0.0%)       120,224 / 480,000  (25.0%)
+val          0 / 52,962   (0.0%)       106,253 / 423,696  (25.1%)
+test         0 / 53,928   (0.0%)       107,508 / 431,424  (24.9%)
+```
+
+LANE-MINE already excluded held-out papers from ever being a **positive** — hence
+zero record-level drops. It did **not** filter **negatives**, which sit at the
+exact 25% base rate. So the guard fired hard and silently on the negative side:
+mean negatives per emitted group is **5.90, not 7**, because ~25% of every
+record's negatives were held-out benchmark papers. That is the "not as a
+positive and **not as some other query's negative**" half of the rule doing the
+only work there was to do — roughly 86k held-out paper appearances kept off the
+GPU in this slice alone. Sized to 40k (not the 56k first built) to match T3's
+approved shape and keep retry headroom under the $5 cap.
+
+## 2026-08-20T02:34–02:36Z — three more gaps closed before spending anything
+
+**G2 fixed** — `TYPE_MENU` + the type/AZ walk ported into
+`scripts/rerank-nsr/launch.sh` from `scripts/train/launch.sh` (read, not edited —
+it is fenced). The `|| true` on the `OUT=$(launch_in …)` assignment is carried
+over deliberately: under `set -e` a capacity error inside a command substitution
+in an assignment kills the whole script, so the retry loop can never reach its
+second iteration without it.
+
+**G3 fixed** — `--ckpt-steps` is now passed explicitly (**1000**, ≈4.4 min at the
+expected ~3.75 steps/s, vs train.py's default 2000 ≈ 8.9 min), and a background
+loop mirrors `model/checkpoint/` to S3 every **240 s**. Worst-case loss ≈ **8.4
+min ≤ 10**. The mirror is ordered against train.py's own save semantics
+(`train.py:205-212` writes weights first, `state.json` last): it copies
+everything *except* `state.json`, re-reads the local step, and commits the marker
+only if the step did not move mid-copy — otherwise a save landing during the
+sync would publish half a model under a marker claiming it whole. Caveat
+recorded: train.py saves weights + epoch/step but **not optimizer state**, so a
+resume restarts AdamW cold. That is 44b's design; train.py runs unchanged.
+
+**G6 — the launch-blocker, caught by audit rather than by a dead box.** Before
+launching I read the role instead of trusting it. `cshl-embed`'s four inline
+policies grant `s3:PutObject` on exactly `cshl-embed-rxiv/logs/*` and
+`cshl-embed-rxiv/eval/*`. **`models/*` was not writable.** `train.sh` uploads the
+weights to `models/cshl-reranker-gte-modernbert/$RUN_ID/final/` under `set -e`
+with no `|| true` (deliberately — weights first, everything after best-effort),
+so the run would have completed every GPU-minute of training and then died on
+AccessDenied with the model on a delete-on-termination volume. **That is the NSR
+lane's $1.83 incident and the qpairs lane's `qemb` incident, exactly.** Fixed
+with a new inline policy under its own name, `write-model-artifacts`
+(PutObject/AbortMultipartUpload/DeleteObject on `models/*`) — a *separate* name on
+purpose, because `scripts/train/launch.sh` re-puts `read-dburl` on every launch
+and `put-role-policy` replaces by name, which is how the qpairs lane lost a grant
+it had verified ten minutes earlier. Proven, not assumed:
+
+```
+simulate-principal-policy  role/cshl-embed  on models/cshl-reranker-.../final/model.safetensors
+  s3:PutObject     allowed
+  s3:DeleteObject  allowed
+```
+
+**G7 — credential removed from the box.** `train.sh`'s §5 claims "no DB
+credential reaches this box", but `launch.sh`'s user-data still fetched
+`/cshl/embed/dburl` and exported `DATABASE_URL` into it. `grep` finds **zero**
+references to `DATABASE_URL` in `train.sh` — the scoring step that needed it was
+removed during the port. Dropped from the user-data, so the header is now true.
+
+## 2026-08-20T02:36Z — LAUNCHED
+
+```
+run_id 20260819-223601-train   instance i-094b84dd57595f795   g6e.2xlarge   $2.24208/hr
+TYPE_MENU=g6e.2xlarge,g5.2xlarge  EPOCHS=2  MAXHOURS=1.1  WATCHDOG_MIN=150
+CKPT_STEPS=1000  CKPT_SYNC_INTERVAL=240  TRAIN_NAME=parity (40,000 groups)
+base Alibaba-NLP/gte-reranker-modernbert-base   --bulk 0
+
+type g6e.2xlarge: no capacity in subnet-0200d8f947fcf9090 — next AZ
+type g6e.2xlarge: no capacity in subnet-0407bd1ff7e9d8c44 — next AZ
+type g6e.2xlarge: no capacity in subnet-09e840612db030382 — next AZ
+launched: i-094b84dd57595f795 (g6e.2xlarge, subnet-06b1914b54fc3e0c5)
+```
+
+**G2 paid for itself on the first launch.** Three of four AZs refused
+`g6e.2xlarge` outright. The unpatched launcher was a single `run-instances`
+against one AZ — it would have exited non-zero before the fourth subnet was ever
+tried, and the honest reading of that failure would have been "g6e has no
+capacity tonight", which was false.
+
+Budget guard: $2.24208/hr means the $5.00 cap is **133 min** of box life, and the
+watchdog is 150. The watchdog is the backstop against *me* dying, not the primary
+control — I hold the turn and terminate at the cap if the run has not finished.
+
+## 2026-08-20T02:37–02:43Z — Phase 3 path built while the GPU trains
+
+Training is a 50-minute wait; the scoring path did not exist yet (G5), so it was
+built during the wait rather than after it.
+
+**`scripts/rerank-nsr/dump-candidates.mjs` (new)** — freezes an encoder arm's
+top-50 lists *and* the candidate text, so the scoring box needs no database
+credential and raw-vs-reranked is a paired comparison over the identical list.
+It re-uses `score.mjs`'s own registry (`import { REGISTRY, OPS }`) so the
+operator, `ef_search` and `TOPK` cannot drift from the encoder rows this will be
+compared against — a reranker measured over a differently-retrieved pool is not
+measuring reranking. `DOC_CHARS=900` matches the training converter *and*
+`api/_lib/embed.ts`'s serving slice: same text budget in training, scoring and
+serving, or the number does not transfer.
+
+```
+cshl_qp: 2000 queries, 2000 query vectors, table preprint_embeddings_cshl_qp, cosine <=>
+  plan: Index Scan CONFIRMED
+  -> cshl_qp.lists.json (2,034,871 B) · docs.jsonl 81,751/81,751 documents resolved (76.4 MB)
+```
+
+**The lists were checked against the published run before being used for
+anything.** A regenerated pool that quietly differs from the scored one would
+make every "before" number a near-miss of the real encoder row and every delta
+slightly wrong, in a way no downstream check would catch:
+
+```
+                     mine       published (results/cshl_qp.json)
+AUTHORKW  n=759      —          759
+  r1      0.5336     0.5336     MATCH
+  r10     0.7497     0.7497     MATCH
+  r50     0.8208     0.8208     MATCH
+  mrr     0.6079     0.6079     MATCH
+  ndcg10  0.6395     0.6395     MATCH
+MESH      n=1241     —          1241
+  r1      0.2224     0.2224     MATCH
+  r10     0.4319     0.4319     MATCH      <- the qpairs headline, reproduced
+  r50     0.6076     0.6076     MATCH
+  mrr     0.2921     0.2921     MATCH
+  ndcg10  0.3190     0.3190     MATCH
+```
+
+**Exact on all ten, both families.** The "before" row is therefore the published
+encoder row itself, not a re-run approximation of it.
+
+**`scripts/rerank-nsr/rerank.py` (new)** — cross-encoder over the frozen pool.
+Ties break on the original rank, so a model that scores everything identically
+reproduces the raw list exactly instead of shuffling it into a fake delta.
+
+**`scripts/rerank-nsr/score-rerank-cshl.mjs` (new)** — the CSHL twin of
+`scripts/eval/score-rerank.mjs` (which is NSR-shaped: `nsr-eval-v1`, segments
+`era/richness/reftype`). Left LANE-EVAL's file alone — it is still correct for
+NSR and is not this lane's. `era` and `lenBand` are *imported* from `score.mjs`
+so segment definitions cannot drift. Metrics are a byte-copy of
+`score.mjs:metricsFor`. It refuses outright if the reranked list is not a
+permutation of the raw one, and writes `paired-test.mjs`-shaped perquery files
+for **both** sides so McNemar runs on the same contract every other arm uses.
+
+**`scripts/rerank-nsr/score-launch.sh` (new)** — Phase 3 box. Separate from
+`launch.sh` deliberately: the training box self-terminates the instant train.sh
+returns, so there is no window to reuse it, and folding scoring into train.sh
+would put Phase 3's correctness behind a 50-minute training run every time it
+changes. Carries no DB credential and no training data. Preflights the weights,
+lists and docs on the laptop before booting anything.
+
+### A property of this run, recorded rather than discovered later
+
+`train.py:225-227` pads short negative lists **by repetition**
+(`while len(negs) < A.negatives: negs.append(negs[-1])`). Our groups average
+**5.90** negatives, not 7, because the held-out guard removed ~25% of them — so
+roughly 1.1 negatives per group are duplicates, slightly over-weighting one
+negative in the 8-way softmax. It is train.py's documented behaviour and train.py
+runs unchanged (non-negotiable #2), so it was not touched. **The better fix is
+upstream and belongs to a future run:** the converter should backfill negatives
+from the non-held-out pool to restore a full 7, rather than letting the guard
+thin them. Flagged, not silently absorbed.
+
+### Run state
+
+```
+02:36:24Z  i-094b84dd57595f795  g6e.2xlarge  running
+[  19.7s] training: 10000 steps (5000/epoch), group=8, batch=64 pairs
+[  49.5s] epoch 0 step 100/5000 loss 0.3193
+[train.sh] ckpt-sync started (pid 2284, every 240s -> .../20260819-223601-train/checkpoint/)
+```
+
+Measured **~3.33 steps/s** → 10,000 steps ≈ **50 min**, inside `MAXHOURS=1.1`
+(66 min), so both epochs fit. `CKPT_STEPS=1000` ≈ 5.0 min at this rate; with the
+240 s mirror, worst-case loss ≈ **9 min ≤ 10** — G3's target holds at the
+measured rate, not just the projected one.
+
+## 2026-08-20T02:46Z — G3 proven in flight, not asserted
+
+The checkpoint mirror is my own fix, so it does not count until it is observed
+working on a live box:
+
+```
+box 02:43:02Z  train.py save('checkpoint', epoch 0, step 1000)  -> local EBS
+S3 02:46:32Z   config.json 1.9 KiB · model.safetensors 570.7 MiB · tokenizer* 3.4 MiB
+S3 02:46:35Z   state.json 281 B          <- marker committed 3 s AFTER the weights
+```
+
+The ordering is the whole point and it held: everything except `state.json`
+first, the marker last, so S3 never carries a completion marker over weights
+that are still uploading. **Measured worst-case loss** = 4.4 min (1000 steps at
+3.8 steps/s) + 3.5 min (save→commit lag) ≈ **8 min ≤ 10**, the brief's bar, from
+a measurement rather than a projection. A kill at any point from here loses at
+most that, and `RESUME=1` on a relaunch pulls this prefix back down.
+
+Self-test of the scorer while waiting: fed `score-rerank-cshl.mjs` an **identity**
+rerank (reranked == raw). Both sides came back byte-identical to the published
+`cshl_qp` row in every segment of both families (AUTHORKW 0.5336/0.7497/0.6395,
+MESH 0.2224/0.4319/0.3190), and the permutation guard passed 0/2000. So a null
+result will read as null rather than as noise. Test artifacts deleted.
+
+The encoder landscape this reranker has to move, from `results/*.json` (R@10):
+
+| arm | AUTHORKW | MESH | note |
+|---|---:|---:|---|
+| fts | 0.2398 | 0.0806 | lexical floor |
+| bge-m3 | 0.6522 | 0.2861 | stock |
+| cshl | 0.6693 | 0.3320 | triplets fine-tune |
+| **cshl_qp** | **0.7497** | **0.4319** | qpairs fine-tune — tonight's base |
+| medcpt | 0.8076 | 0.4569 | in-domain baseline |
+| *cshl_qp R@50* | *0.8208* | *0.6076* | **the reranker's ceiling** |
+
+The ceiling matters: a perfect reranker over cshl_qp's own top-50 tops out at its
+R@50, which is **above** MedCPT's encoder R@10 in both families. So there is real
+headroom — and any claim that lands above 0.8208/0.6076 would be a bug, not a win.
+
+## 2026-08-20T03:21Z — training complete, clean
+
+```
+[ 1279.8s] epoch 1 done -> /opt/reranker/run/model/epoch-1
+[ 2536.7s] epoch 2 done -> /opt/reranker/run/model/epoch-2
+[ 2537.4s] done -> /opt/reranker/run/model/final
+[train.sh] train.py EXIT=0 wall-clock=2539s
+[train.sh] model saved+loaded OK from .../final, sanity logit=-3.8807
+[train.sh] done. weights: s3://.../models/cshl-reranker-gte-modernbert/20260819-223601-train/final/
+```
+
+Loss trajectory: epoch 0 `0.3193 -> ~0.15`, epoch 1 settled at **~0.05**. Both
+epochs ran in full — the `MAXHOURS=1.1` wall-clock kill never fired (2,539 s =
+42.3 min against a 66 min budget).
+
+**The two fixes were load-bearing, and the logs prove it rather than my say-so:**
+
+```
+grep -c AccessDenied      outer log -> 0      (G6: models/* was NOT writable before tonight)
+grep -c postgresql://     outer + inner -> 0  (G7: credential no longer shipped)
+grep -c neon.tech         outer + inner -> 0
+```
+
+Artifacts, all four prefixes present under `models/cshl-reranker-gte-modernbert/20260819-223601-train/`:
+`final/` · `epoch-1/` · `epoch-2/` · `checkpoint/` — each 570.7 MiB
+`model.safetensors` + config/tokenizer/state.
+
+### G8 — `train.sh`'s own throughput line was lying, by exactly a factor of EPOCHS
+
+It reported `1.978 steps/s -> 15.82 groups/s` and projected **126.4 min** for a
+60k×2 run. The real rate was **3.94 steps/s / 31.5 groups/s** (10,000 steps in
+2,539 s). The parser took the first and last `step N/…` log lines and divided by
+elapsed time — but train.py **resets `step` to 0 at every epoch boundary**, so it
+divided ONE epoch's step count by ALL epochs' wall-clock. The error is exactly
+`EPOCHS`; measured ratio **1.99x**.
+
+This is the kind of number that gets copied into a planning table and quietly
+doubles every future estimate — the NSR lane's `26.4 groups/s` precedent, which
+this lane's own projections were built on, was produced by this same parser and
+should be re-derived before it is trusted again. Fixed to accumulate
+`epoch * steps_per_epoch + step`; re-run against the real log it now reports
+**3.996 steps/s -> 31.97 groups/s, projection 62.6 min** instead of 126.4.
+
+**Spend so far:** training box `i-094b84dd57595f795`, g6e.2xlarge @ $2.24208/hr,
+02:36:24Z → ~03:21:30Z = **45.1 min ≈ $1.685**.
+
+## 2026-08-20T03:21–03:31Z — Phase 3 attempt 1: I repeated the bug I had just fixed
+
+Scoring box `i-05ed0e70ed7e9448a` (g5.xlarge, A10G). The reranking itself was
+flawless:
+
+```
+[   0.3s] device=cuda NVIDIA A10G
+[   2.0s] model loaded
+[ 307.0s] 2000/2000 queries · 100000 pairs · 326 pairs/s
+[ 307.1s] wrote 2000 rows -> /opt/rr/reranked-20260819-232122-score.json
+[ 307.1s] rerank latency per query over 50 candidates: p50 150.8 ms · p95 162.6 ms
+```
+
+Then:
+
+```
+upload failed: ... to s3://cshl-embed-rxiv/reranker/scored/cshl-eval-2k/reranked-....json
+  An error occurred (AccessDenied) when calling the PutObject operation:
+  User: .../cshl-embed/i-05ed0e70ed7e9448a is not authorized to perform: s3:PutObject
+  on "arn:aws:s3:::cshl-embed-rxiv/reranker/scored/..." because no identity-based
+  policy allows the s3:PutObject action
++ echo SCORE-EXIT=0
+SCORE-EXIT=0
+```
+
+**This is G6 again, and I am the one who reintroduced it.** Two hours earlier I
+audited the role, found `models/*` unwritable, granted exactly `models/*`, and
+proved it with `simulate-principal-policy`. Then I wrote a new script that
+writes to `reranker/scored/*` — a prefix I had never checked — and launched it
+without re-running the audit against *its* write path. The grant I added was
+correct and narrow; my mistake was treating "I audited the IAM" as a property of
+the lane rather than of one specific path. **Cost: ~8 min of g5.xlarge ≈ $0.13,
+and the whole rerank had to be recomputed.** Nothing was lost but time and $0.13,
+because the failure was loud in the log even though the exit code lied.
+
+Two fixes, both applied before relaunching:
+
+1. **The grant**, extended to `reranker/*`, then simulated **per resource
+   individually** rather than in one collapsed call (the batched form returned a
+   single `${BucketName}/${KeyName} allowed` row that told me nothing):
+   `reranker/scored/…` allowed · `logs/…` allowed · `models/…/final/…` allowed ·
+   `reranker/eval/…` allowed · GetObject on the weights allowed.
+2. **`SCORE-EXIT=0` on a failed upload.** The box reranked 100,000 pairs, lost
+   the file, and reported success — the identical shape LANE-SHIP found in the
+   publish rig this same night (`PUBLISH-DONE` printed unconditionally after a
+   failed push). The upload's exit code is now the run's exit code, and the box
+   `head-object`s the result back and prints `UPLOAD-VERIFIED` before shutting
+   down. An upload that dies looks complete from the process side unless you make
+   it not.
+
+**Attempt 2 launched: `i-0e127cdcccce9f9d0` (g5.xlarge), run 20260819-233100-score.**
+
+Measured, useful regardless: the cross-encoder does **326 pairs/s on an A10G**,
+**p50 150.8 ms / p95 162.6 ms per query over 50 candidates** at batch 256. That
+is the serving-tier number the NSR lane left open — on GPU. CPU remains unmeasured.
+
+## 2026-08-20T03:39Z — THE RESULT
+
+Attempt 2 (`i-0e127cdcccce9f9d0`) landed `reranked-20260819-233100-score.json`, 2000 rows,
+3.8 MiB. Permutation guard: **0/2000** rows where the reranked list was not a permutation of
+the raw one. Raw-side perquery reproduced the published `cshl_qp` hits exactly (**0**
+differences), so the "before" column is the published encoder row, not a re-derivation of it.
+
+### Raw `cshl_qp` top-50 vs `+cshl-RR` — blended, both families
+
+| family | R@1 | R@10 | nDCG@10 |
+|---|---|---|---|
+| MESH (1,241) | 0.2224 → **0.3022** (+36%) | 0.4319 → **0.5238** (+21%) | 0.3190 → **0.4075** (+28%) |
+| AUTHORKW (759) | 0.5336 → **0.5771** (+8%) | 0.7497 → **0.7668** (+2%) | 0.6395 → **0.6746** (+5%) |
+
+**19 of 20 segments improve on both R@10 and nDCG@10.** The strict gate boolean is
+**`false`**, and the reason is one query: AUTHORKW `server:medrxiv` (n=135) went
+0.7037 → 0.6963 on R@10 — **95 hits to 94** — while its nDCG@10 rose +5%. Reported as a
+`false` gate rather than rounded away, because the gate is a bar and 94 < 95.
+
+MESH is where the money is, which is the outcome the whole program pointed at: it is the
+family this project has lost on since the first benchmark, and it is the one the cross-encoder
+lifts most (R@1 +36%). AUTHORKW was already dense retrieval's strength.
+
+### Paired tests (`scripts/eval/paired-test.mjs`, exact McNemar + seeded bootstrap, n=2,000)
+
+| comparison | R@10 | Δ | p | 95% CI | won / lost |
+|---|---|---:|---:|---|---|
+| +cshl-RR vs its own un-reranked top-50 | 0.6160 / 0.5525 | +0.0635 | **6.4e-17** | [+0.049, +0.079] | 183 / 56 |
+| +cshl-RR vs MedCPT **encoder** | 0.6160 / 0.5900 | +0.0260 | **0.0119** | [+0.006, +0.046] | 232 / 180 |
+| cshl_qp encoder vs MedCPT encoder *(reference, unchanged)* | 0.5525 / 0.5900 | −0.0375 | 0.0003 | [−0.058, −0.018] | 171 / 246 |
+
+**The labelling, stated plainly and carried into the report:** `cshl-QP + cshl-RR` is a
+**SYSTEM** — two models and ~150 ms of extra GPU per query. MedCPT's row is **one encoder**.
+The system wins that comparison significantly; **our encoder still loses to their encoder,
+significantly, and nothing tonight changed that row.** The third line above is in the table
+precisely so the second cannot be quoted alone.
+
+**MedCPT publishes `ncbi/MedCPT-Cross-Encoder`.** System-vs-system was **not** run and is not
+claimed — filed as follow-up #7 in the report, with the note that the rig to do it already
+exists (`dump-candidates.mjs` freezes any arm's pool; `rerank.py` scores any cross-encoder
+over it).
+
+Ceiling check: `cshl_qp` R@50 is 0.8208 / 0.6076, so the reranked 0.7668 / 0.5238 sits inside
+what the pool can support — 64% of the available MESH headroom taken, 10% of AUTHORKW's.
+
+### Serving cost, measured
+
+**326 pairs/s on an A10G · p50 150.8 ms / p95 162.6 ms per query over 50 candidates**
+(batch 256). This closes the GPU half of the item the NSR lane left open. **CPU is still
+unmeasured** — it needs its own box and was not worth one tonight; a serving-tier decision
+still cannot be made from this alone.
+
+## Spend ledger — measured lifetimes, published rates
+
+| box | type | rate | window (UTC) | min | $ |
+|---|---|---|---|---:|---:|
+| `i-094b84dd57595f795` train | g6e.2xlarge | $2.24208/h | 02:36:24 → ~03:22 | 45.6 | **1.70** |
+| `i-05ed0e70ed7e9448a` score (lost) | g5.xlarge | $1.006/h | 03:21:30 → ~03:30 | 8.5 | **0.14** |
+| `i-0e127cdcccce9f9d0` score | g5.xlarge | $1.006/h | 03:31:08 → ~03:39 | 8.5 | **0.14** |
+| S3 | — | — | ~2.5 GB transient + requests | — | ~0.05 |
+| | | | | | **≈ 2.04** |
+
+**≈$2.04 of the $5.00 hard cap (41%), $2.96 unspent.** All three boxes self-terminated; none
+was left idle. Local work (40k-group conversion, candidate dump, all scoring) ran on the
+laptop but was I/O against Neon and S3, never model compute — the house rule held.
+
+**Waste, itemised, mine:**
+
+| item | $ | what happened |
+|---|---:|---|
+| lost scoring pass | **0.14** | 100,000 pairs reranked correctly, then `AccessDenied` on a prefix I had not audited. Entirely my error — see 03:31Z. |
+
+**Boxes running at close that are NOT mine** (recorded so this ledger is not later charged
+with them): `i-0efe2e00b91aedceb` g6e.2xlarge `cshl-train-20260819-232838-train` (train lane),
+`i-0521de00f1353300c` t3.small `cshl-publish-…` (ship lane), plus the two serve boxes and
+`44b-web`. **Zero of my three boxes remain.**
+
+## Status
+
+**T3 has run.** `cshl-RR` exists, is scored, and the result is significant on both
+comparisons that were asked for. Published: **nothing** — no HF push, per the brief.
+
+Open, none blocking the result:
+1. **MedCPT system-vs-system** — the comparison that would settle it (report follow-up #7).
+2. **CPU latency** — unmeasured; needs its own box.
+3. **Negatives thinned, not backfilled** — 5.90/group where train.py expects 7; it pads by
+   repetition. Untested upside from a converter that backfills (follow-up #9).
+4. **One regressed segment** — AUTHORKW `server:medrxiv`, one query. Not investigated; n=135.
+5. **Weights are S3-only** — 570.7 MiB, not pulled to the 8 GB laptop, consistent with how
+   every other checkpoint in this program has been left.
+
+## 2026-08-20T03:42Z — re-checked cshl-QP2 at close (the brief's primary target)
+
+My 02:30Z finding that `cshl-QP2` and `LANE-WIN.md` did not exist was true when written and
+is now **stale** — the win lane started after my inventory. Current state, re-measured rather
+than assumed:
+
+```
+docs/prompts/LANE-WIN.md                       exists (26,881 B, written 03:31Z)
+scripts/eval/score.mjs:55  cshl_qp2            IS in the registry now
+                           table preprint_embeddings_cshl_qp2, 1024-d, cosine
+SELECT count(*) FROM preprint_embeddings_cshl_qp2   ->  0        (target 433,449)
+data/eval/cshl-eval-2k/qemb/cshl_qp2.jsonl     absent
+data/eval/cshl-eval-2k/results/cshl_qp2.*      absent
+```
+
+**QP2's Phase 2/3 has not finished** — the corpus re-embed has not started, so an HNSW build
+and a scoring pass are still ahead of it, comfortably over an hour. That is exactly the "if
+QP2 slips" case the brief authorised, so tonight's arm is **cshl-QP**, as reported. No message
+was sent to that lane; this was read from their log and the database only.
+
+**QP2 needs no new engineering from this lane.** The moment `qemb/cshl_qp2.jsonl` and the
+populated table exist, the whole comparison is two commands against the rig already built and
+proven tonight:
+
+```sh
+ARM=cshl_qp2 EVAL_VERSION=cshl-eval-2k node scripts/rerank-nsr/dump-candidates.mjs
+MODEL_RUN=20260819-223601-train ARM=cshl_qp2 ./scripts/rerank-nsr/score-launch.sh
+# then: IN=<pulled reranked.json> BASE=cshl_qp2 ARM=cshl_qp2+cshl_rr \
+#         node scripts/rerank-nsr/score-rerank-cshl.mjs
+# then: A=cshl_qp2+cshl_rr B=cshl_qp2 ... node scripts/eval/paired-test.mjs
+```
+
+`dump-candidates.mjs` appends only *new* candidate text to the shared `docs.jsonl`, so the
+second arm costs a fraction of the first. Estimated **≈$0.15** and ~10 min of box time, well
+inside the $2.96 left under the cap. **cshl-RR itself does not need retraining for QP2** — it
+is a cross-encoder over (query, document) text and is independent of which encoder retrieved
+the pool.

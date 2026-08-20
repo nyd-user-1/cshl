@@ -966,6 +966,95 @@ log.
 
 **Not pushed to Hugging Face.** Publish decisions are Brendan's, by name.
 
+## The reranker run — 2026-08-20, `cshl-RR` (`20260819-223601-train`)
+
+T3, the reranker fine-tune, is the one line of the original launch menu that had never been
+bought. It has now run. **What it produces is a SYSTEM, and the distinction is the whole
+point of this section.**
+
+### What was trained
+
+`Alibaba-NLP/gte-reranker-modernbert-base`, a cross-encoder, on **40,000 groups** converted
+from the same mined query-pair harvest the qpairs encoder used — one query, one positive,
+and the surviving hard negatives (`mesh-tree-sibling` / `same-category`), 2 epochs, on one
+`g6e.2xlarge` (L40S) in **42.3 min**. Family mix MESH 24,539 / AUTHORKW 15,461 (61/39),
+matching the benchmark's 62/38. Query and document text are sliced to 600/900 characters —
+the same budget the serving path sends, so the trained and served conditions agree.
+
+Every held-out paper was kept off the GPU. The converter's md5 rule was checked against the
+frozen benchmark rather than trusted: **1,839/1,839** gold papers in `cshl-eval-2k` and
+**6,203/6,203** in `cshl-eval-v1` fall on the held-out side, and the emitted groups contained
+**zero** held-out papers. The miner had already excluded held-out papers as *positives*
+(0.0% across train/val/test) but not as *negatives* (25.0%, the base rate), so the guard did
+real work: mean negatives per group is **5.90, not 7**, because ~25% of every record's
+negatives were benchmark papers.
+
+### Results — reranking `cshl_qp`'s top-50, identical frozen 2,000-query subsample
+
+The candidate pool was regenerated with the same operator, `ef_search` and `TOPK` the encoder
+row used, then checked against the published run before use: all ten metrics across both
+families reproduced **exactly**. So "before" below is the published `cshl_qp` row itself, and
+the delta is purely reranking.
+
+| family | metric | `cshl_qp` alone | **`cshl_qp` + `cshl-RR`** | Δ |
+|---|---|---:|---:|---:|
+| MESH (n=1,241) | R@10 | 0.4319 | **0.5238** | **+21%** |
+| MESH | nDCG@10 | 0.3190 | **0.4075** | **+28%** |
+| MESH | R@1 | 0.2224 | **0.3022** | +36% |
+| AUTHORKW (n=759) | R@10 | 0.7497 | **0.7668** | +2% |
+| AUTHORKW | nDCG@10 | 0.6395 | **0.6746** | +5% |
+| AUTHORKW | R@1 | 0.5336 | **0.5771** | +8% |
+
+Gains hold in **19 of 20** segments on both R@10 and nDCG@10. The exception is honest and
+recorded: **AUTHORKW `server:medrxiv` (n=135) lost one query** on R@10, 0.7037 → 0.6963
+(95 hits → 94), while its nDCG@10 rose +5%. That single query is why the strict
+all-segments gate boolean reads `false`. Nothing else regressed anywhere.
+
+MESH — keyword-ish MeSH-term queries, the family this program has been losing on all along —
+is where the reranker pays. AUTHORKW was already dense retrieval's strength and moves little
+on R@10 while still sharpening the top of the list (R@1 +8%).
+
+### Paired significance — and what it does and does not claim
+
+Exact McNemar plus a seeded bootstrap CI over 2,000 queries (`scripts/eval/paired-test.mjs`),
+pooled across families:
+
+| comparison | R@10 | Δ | McNemar *p* | 95% CI |
+|---|---|---:|---:|---|
+| `cshl_qp`+`cshl-RR` **vs its own un-reranked top-50** | 0.6160 vs 0.5525 | **+0.0635** | **6.4e-17** | [+0.049, +0.079] |
+| `cshl_qp`+`cshl-RR` **vs MedCPT's encoder** | 0.6160 vs 0.5900 | **+0.0260** | **0.0119** | [+0.006, +0.046] |
+| `cshl_qp` encoder **vs MedCPT's encoder** *(unchanged)* | 0.5525 vs 0.5900 | **−0.0375** | 0.0003 | [−0.058, −0.018] |
+
+Read those three rows together, because the third is the one that keeps the second honest:
+
+- **The reranker works, decisively.** 183 queries won against 56 lost, *p* ≈ 6e-17.
+- **The system beats MedCPT's encoder**, significantly (*p* = 0.012, CI excludes zero).
+- **Our encoder still loses to MedCPT's encoder**, significantly, exactly as before. The
+  reranker did not change that row and this report does not claim it did.
+
+**This is a system-vs-encoder comparison, which is not apples-to-apples.** A cross-encoder
+over 50 candidates is a second model and roughly 150 ms of extra GPU work per query; MedCPT's
+encoder row is one vector lookup. The encoder-only rows elsewhere in this report remain the
+encoder-vs-encoder claim and are unaffected by anything here.
+
+**MedCPT also publishes a cross-encoder** (`ncbi/MedCPT-Cross-Encoder`). Scoring MedCPT's
+*full* system — its encoder plus its reranker — against ours is the comparison that would
+settle the matter, and it **has not been run**. It is a named follow-up below, not a result.
+Until it exists, the honest summary is: *our system beats their encoder; our encoder does not.*
+
+### Serving cost, measured
+
+**326 pairs/s on an A10G**, **p50 150.8 ms / p95 162.6 ms per query** over 50 candidates at
+batch 256 — the GPU serving number the NSR lane left open. **CPU latency remains unmeasured**,
+so this does not yet pick a serving tier.
+
+### Spend
+
+**≈$2.04 of a $5.00 cap** — training $1.70 (45.6 min, g6e.2xlarge), scoring $0.14, plus
+$0.14 for a rerun after an `AccessDenied` on the results prefix destroyed a completed scoring
+pass. All three boxes self-terminated. **Not pushed to Hugging Face** — that is a separate
+ruling by name.
+
 ## Open follow-ups
 
 1. **The Hugging Face push used the NSR-scoped token** (`/nsr/hf/token`), on Brendan's
@@ -987,6 +1076,23 @@ log.
 6. **Benchmark builder filename** is still `scripts/eval/build-rxiv-eval.mjs` while the
    artifact it builds is `cshl-eval-v1`. Cosmetic; left alone mid-flight to avoid breaking
    another lane's reference.
+7. **Score MedCPT's full system, not just its encoder.** `ncbi/MedCPT-Cross-Encoder` is
+   published alongside the article encoder. Our reranked system beats MedCPT's *encoder*
+   (*p* = 0.012); whether it beats MedCPT's *encoder + cross-encoder* is untested, and that
+   is the comparison a reviewer will ask for first. The rig to do it already exists —
+   `scripts/rerank-nsr/dump-candidates.mjs` freezes any arm's top-50 and
+   `scripts/rerank-nsr/rerank.py` scores any cross-encoder over it.
+8. **CPU latency for the cross-encoder is unmeasured.** GPU is 150.8 ms p50 per query over 50
+   candidates; the serving decision needs the CPU number too, and the current serve box is a
+   `t3.large`.
+9. **The reranker's negatives were thinned, not backfilled.** The held-out guard removed ~25%
+   of mined negatives, leaving 5.90 per group where `train.py` expects 7 — it pads by
+   repeating the last negative. A converter that draws replacements from the non-held-out
+   pool would restore full 7-way contrast. Untested upside.
+10. **`train.sh`'s throughput reporter under-counted by a factor of EPOCHS** and has been
+   fixed. Any planning number derived from it before 2026-08-20 — including the NSR lane's
+   `26.4 groups/s` precedent that this lane's own projections were built on — should be
+   re-derived rather than trusted.
 
 ---
 
