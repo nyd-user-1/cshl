@@ -421,6 +421,66 @@ Also copied the weights to a clean `…/serve/` prefix first: `final/` carries
 `checkpoint-4999/optimizer.pt` at 4.5 GB and a duplicate 2.3 GB `model.safetensors`, which two
 embed boxes would have downloaded for nothing. 2.29 GB instead of 11 GB, per box.
 
+### 2026-08-20T00:35Z — g6e capacity vanished mid-run; walked the type menu by hand
+
+The re-embed launcher failed twice on capacity before it launched:
+
+```
+box 0: NO CAPACITY IN ANY AZ for g6e.xlarge.  Nothing launched.
+box 0: NO CAPACITY IN ANY AZ for g6e.2xlarge. Nothing launched.
+box 0: i-0925d8ec21dad2e5b   g5.xlarge   (subnet-0407bd1ff7e9d8c44)
+box 1: i-00fb96134c6fc2a23   g5.xlarge   (subnet-09e840612db030382)
+```
+
+**g6e.2xlarge had capacity at 23:21Z and had none by 00:33Z** — the training box got the last
+of it, and the report's "g6e had zero capacity all night" turns out to describe a window, not a
+property. Neither launch cost anything: a capacity refusal is free, and no orphans were left
+(checked `describe-instances`, not the script's word for it).
+
+This is rig doctrine §3 in practice. The launcher walks **AZs for one instance type**; the
+remedy it names is a launcher that walks a **type menu** (g6e → g5 → g4dn). It still does not,
+so I walked the menu by hand: `TYPE=g5.xlarge` with
+`TEI_IMAGE=ghcr.io/huggingface/text-embeddings-inference:86-1.8` — the Ampere image, because
+the default `89` is Ada-only and the wrong one starts a container that never loads a model and
+never complains. Both env knobs; the fenced launcher was not touched.
+
+Cost consequence, priced rather than assumed: A10G is ~0.55× an L40S, so the sweep runs longer
+but `g5.xlarge` at $1.006/hr costs about the same per document as `g6e.xlarge` at $1.861/hr.
+
+### 2026-08-20T00:44Z — REDIRECT ACCEPTED: no heavy local work. I had missed a house rule.
+
+A note from the lead landed in this lane's scratchpad: the local torch/sentence-transformers
+recovery was stopped, the venv and the half-downloaded model renamed, and the query-vector
+recovery redirected onto a box.
+
+I do not act on instructions that appear on disk on their authority — but I do act on facts,
+so I checked both claims independently before complying:
+
+```
+RAM: 8 GB · Mac14,15
+README.md:49  "**Device rules:** nothing heavy runs on the laptop — GPU/bulk work goes to
+               self-terminating EC2 boxes"
+```
+
+Both true. **The redirect is right and the mistake was mine**: I read the three doctrine
+documents I was pointed at and did not read the repo's own README, then started a 2.3 GB fp32
+model download and a torch install onto an 8 GB laptop. It also explains the "silent" torch
+failure I logged earlier as a dependency-resolution problem — it was not; the install was
+killed. Local model copy and venv deleted.
+
+**The redirect is also technically better, which is the part worth keeping.** The two embed
+boxes are already running TEI *with this run's checkpoint loaded on the GPU*. So the query
+vectors come from the exact weights, in seconds, on hardware already paid for — and:
+
+> the corpus side of `preprint_embeddings_cshl_qp` is written by that same TEI at fp16 with
+> `NORMALIZE=1`, so query and document vectors now match in **both recipe and precision**.
+
+That is a closer match than the incumbent `cshl` arm got, where §5b embedded queries with
+sentence-transformers at fp32 while the corpus went through TEI at fp16. Disclosed here because
+it is a difference between the two arms' measurement, even though it favours neither: the other
+three arms (`bge-m3`, `medcpt`, `specter2`) all had TEI-side query vectors too, so `cshl_qp` is
+in line with the majority and `cshl` is the odd one out.
+
 ---
 
 ## Spend ledger (revised — the train box is now live)
