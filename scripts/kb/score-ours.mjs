@@ -98,10 +98,20 @@ for (const arm of requested) {
     perQuery = await pool(QUERIES, CONC, async (qq) => {
       const v = qemb.get(qq.qid)
       if (!v) return [qq.qid, []]
-      const rows = await q(
-        `SELECT key_number FROM ${spec.table}
-         WHERE key_number = ANY($1) ORDER BY embedding ${spec.op} $2::vector LIMIT $3`,
-        [SLICE, `[${v.join(',')}]`, TOPK])
+      let rows
+      if (process.env.NO_SLICE) {
+        const [, r2] = await sql.transaction([
+          sql.query(`SET LOCAL hnsw.ef_search = 100`),
+          sql.query(`SELECT key_number FROM ${spec.table} ORDER BY embedding ${spec.op} $1::vector LIMIT $2`,
+            [`[${v.join(',')}]`, TOPK]),
+        ])
+        rows = r2
+      } else {
+        rows = await q(
+          `SELECT key_number FROM ${spec.table}
+           WHERE key_number = ANY($1) ORDER BY embedding ${spec.op} $2::vector LIMIT $3`,
+          [SLICE, `[${v.join(',')}]`, TOPK])
+      }
       return [qq.qid, rows.map((r) => r.key_number)]
     })
   }
@@ -118,7 +128,7 @@ for (const arm of requested) {
   for (const seg of Object.keys(acc)) for (const k of ['r1', 'r5', 'r10', 'r50', 'mrr', 'ndcg10'])
     acc[seg][k] = Number((acc[seg][k] / acc[seg].n).toFixed(4))
   summary[arm] = acc
-  writeFileSync(`data/kb-slice/results/${arm}.json`, JSON.stringify({ arm, segments: acc, perQuery: Object.fromEntries(ranked) }, null, 1))
+  writeFileSync(`data/kb-slice/results/${arm}${process.env.NO_SLICE ? '-fullcorpus' : ''}.json`, JSON.stringify({ arm, segments: acc, perQuery: Object.fromEntries(ranked) }, null, 1))
   console.log(`${arm.padEnd(9)} MESH R@10 ${String(acc.MESH?.r10 ?? '-').padEnd(6)} AUTHORKW R@10 ${String(acc.AUTHORKW?.r10 ?? '-').padEnd(6)} blended ${acc.blended.r10}  (${((Date.now() - t0) / 1000).toFixed(0)}s)`)
 }
 writeFileSync('data/kb-slice/results/ours-summary.json', JSON.stringify(summary, null, 2))

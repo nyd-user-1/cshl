@@ -32,13 +32,34 @@ queries from the frozen `cshl-eval-2k` benchmark (150 MeSH + 150 AUTHORKW), plus
 deterministic md5-ordered fill to 10,000. `score-ours.mjs` re-runs our arms with
 `WHERE key_number = ANY($slice)`. Neither side can retrieve what the other cannot see.
 
-The size of the effect, same encoder, same queries:
+### How big the effect actually is — decomposed
 
-| `cshl_qp` MeSH R@10 | on 433,449 docs | on the 10k slice |
-|---|---|---|
-| | 0.4319 | **0.8267** |
+The first version of this section said "0.4319 -> 0.8267" and credited the whole
+0.3948 to the slice. That was sloppy: 0.4319 is the report's number over **1,241**
+MeSH queries, and 0.8267 is this run's over **150**. Two variables moved, not one.
 
-That gap is the entire reason for the restriction.
+Re-running the identical 300 queries against the full 433,449-document corpus
+(`NO_SLICE=1 node scripts/kb/score-ours.mjs`) separates them:
+
+| MeSH R@10 | published (1,241 q, full corpus) | these 150 q, full corpus | these 150 q, 10k slice |
+|---|---:|---:|---:|
+| `cshl_qp` | 0.4319 | 0.4800 | **0.8267** |
+| `cshl_qp2` | 0.5238 | 0.5600 | **0.9000** |
+| stock `bge-m3` | 0.2861 | 0.3133 | **0.6733** |
+
+So for the serving arm: **+0.0481 is a slightly easier query subsample, +0.3467 is
+the slice.** The slice is 88% of the gap, not 100%. The bias is small, consistent
+across all three arms (+0.027 to +0.048), and therefore a property of the 150
+queries rather than of any encoder.
+
+**None of it touches the AWS comparison.** Every arm in the results table answered
+the same 300 queries over the same 10,000 documents, so the subsample bias is
+common-mode and cancels in the paired tests. It matters only if someone quotes an
+absolute number from this page as a full-corpus figure. Do not.
+
+Relative margins also survive the change of scale, which is the real licence for
+using a slice at all: `cshl_qp2` - `bge-m3` is +0.2467 on the full corpus and
++0.2267 on the slice; `cshl_qp` - `bge-m3` is +0.1667 and +0.1533.
 
 ## Result 1 — retrieval (300 queries, closed slice, R@10 after chunk→document dedupe)
 
