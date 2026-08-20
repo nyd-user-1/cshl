@@ -24,7 +24,7 @@
 #   ./scripts/train/launch-prep.sh
 set -euo pipefail
 REGION=${REGION:-us-east-1}
-TYPE_MENU=${TYPE_MENU:-${TYPE:-g6e.xlarge,g6.xlarge,g5.xlarge}}
+TYPE_MENU=${TYPE_MENU:-${TYPE:-g6.2xlarge,g5.2xlarge,g6e.xlarge}}
 PARAM=${PARAM:-/cshl/embed/dburl}
 ROLE=${ROLE:-cshl-embed}
 SG_NAME=${SG_NAME:-cshl-embed-sg}
@@ -34,7 +34,7 @@ SLICE_NAME=${SLICE_NAME:-qpairs3}
 QP2_RUN=${QP2_RUN:-20260819-232838-train}
 FAMILY_TAKE=${FAMILY_TAKE:-MESH:45000,AUTHORKW:40000,OAKW:50000,EXTRACT:5000}
 EXPECT_PAIRS=${EXPECT_PAIRS:-140000}
-TOPK=${TOPK:-100}; SKIP_TOP=${SKIP_TOP:-5}; NEGS=${NEGS:-8}; CONC=${CONC:-12}
+TOPK=${TOPK:-100}; SKIP_TOP=${SKIP_TOP:-5}; NEGS=${NEGS:-8}; CONC=${CONC:-16}
 WATCHDOG_MIN=${WATCHDOG_MIN:-90}
 DRYRUN=${DRYRUN:-}
 EXPECT_HOST=${EXPECT_HOST:-ep-orange-water-aut2eymf}

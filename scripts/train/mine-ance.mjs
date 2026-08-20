@@ -165,6 +165,16 @@ async function pool(items, conc, fn) {
 // ── retrieve, strike, keep ──────────────────────────────────────────────────
 const stats = { gold_struck: 0, eval_struck: 0, skipped_top: 0, kept: 0, short: 0, gold_rank_hist: {},
                 ance_by_family: {}, fallback_by_family: {} }
+// Progress, because a 140k mine is otherwise ~20 minutes of total silence on an
+// unattended box, and silence is indistinguishable from a hang. Rate is also the
+// Neon-load number D8 asks to be logged, measured rather than estimated.
+let done = 0
+const t0 = Date.now()
+const tick = () => {
+  if (++done % 5000 && done !== ids.length) return
+  const s = (Date.now() - t0) / 1000
+  console.log(`  [mine] ${done.toLocaleString()}/${ids.length.toLocaleString()} · ${(done / s).toFixed(0)} q/s · ${s.toFixed(0)}s elapsed · eta ${((ids.length - done) / (done / s) / 60).toFixed(1)} min`)
+}
 const mined = await pool(ids, CONC, async (qid) => {
   const m = meta.get(qid)
   const v = `[${qvec.get(qid).join(',')}]`
@@ -190,6 +200,7 @@ const mined = await pool(ids, CONC, async (qid) => {
   // mine cannot serve is NOT dropped — dropping it would silently shrink the
   // slice and break the FAMILY_TAKE mix that was verified when it was built.
   // It keeps the negatives from-mine.mjs already gated, and is counted as such.
+  tick()
   if (neg.length < MIN_NEGS) {
     stats.short++
     if (base.origNeg.length) { stats.fallback_by_family[fam] = (stats.fallback_by_family[fam] ?? 0) + 1; return { ...base, neg: [], ance: false } }

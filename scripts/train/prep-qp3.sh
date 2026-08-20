@@ -28,7 +28,7 @@ EXPECT_PAIRS=${EXPECT_PAIRS:-140000}
 TOPK=${TOPK:-100}
 SKIP_TOP=${SKIP_TOP:-5}
 NEGS=${NEGS:-8}
-CONC=${CONC:-12}
+CONC=${CONC:-16}
 PY=/opt/pytorch/bin/python3
 W=/opt/qp3
 say() { echo "[prep-qp3 $(date -u +%H:%M:%SZ)] $*"; }
@@ -65,7 +65,7 @@ IN=data/mine/cshl-query-pairs.train.jsonl,data/mine/cshl-oakw-pairs.train.jsonl 
 TEXTS=data/mine/corpus-text.jsonl \
 NAME=$SLICE_NAME-base OUT=data/train/$SLICE_NAME-base/train.jsonl \
 FAMILY_TAKE="$FAMILY_TAKE" EVAL_DIR=data/eval/cshl-eval-v1 \
-node --max-old-space-size=24576 scripts/train/from-mine.mjs
+node --max-old-space-size=24000 scripts/train/from-mine.mjs
 
 # verified by line count, not by exit code — the 4 GiB writev failure printed
 # every gate as PASS on its way to a corrupt 270,192-line file.
@@ -119,7 +119,7 @@ TEXTS=data/mine/corpus-text.jsonl \
 EVAL_DIR=data/eval/cshl-eval-v1 \
 TOPK=$TOPK SKIP_TOP=$SKIP_TOP NEGS=$NEGS CONC=$CONC \
 ALLOW_TRAIN_WRITE=1 \
-node --max-old-space-size=24576 scripts/train/mine-ance.mjs
+node --max-old-space-size=24000 scripts/train/mine-ance.mjs
 
 FINAL_N=$(wc -l < data/train/$SLICE_NAME/train.jsonl)
 say "final slice: $FINAL_N pairs"

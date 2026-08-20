@@ -277,3 +277,191 @@ below rank 1 and ~10% below rank 10**, which is the population it would have hit
 
 D8's rule "ANCE negatives wherever mined; existing negatives elsewhere" is now
 what the code does, counted per family in the manifest as `negatives_source`.
+
+---
+
+## 2026-08-20T08:05Z — pre-staged command lines for every phase
+
+Written out now, against `preprint_embeddings_cshl_qp3` (the **fifth** table;
+`qp` and `qp2` untouched, asserted at close), so no phase waits on composing a
+command. Registry entry `cshl_qp3` added to `scripts/eval/score.mjs`; table
+created empty and verified alongside the other seven.
+
+**Q1 — prep box (slice + query embed + ANCE mine + verify + upload):**
+```sh
+DRYRUN=1 ./scripts/train/launch-prep.sh     # verified clean
+./scripts/train/launch-prep.sh
+# completion signal — poll the artifact, not the instance:
+aws s3 ls s3://cshl-embed-rxiv/train/qpairs3/
+aws s3 cp s3://cshl-embed-rxiv/logs/cshl-prep-<run>.rc -   # "0" == every stage gate passed
+```
+
+**Q2 — train, QP2's exact config, only the data changed:**
+```sh
+MODE=train TRAIN_NAME=qpairs3 EVAL_VERSION=cshl-eval-2k \
+TYPE_MENU="g6e.2xlarge" NPROC=1 BATCH=8 GROUP_SIZE=8 \
+QUERY_MAX_LEN=128 PASSAGE_MAX_LEN=384 EPOCHS=1 SAVE_STEPS=400 \
+WATCHDOG_MIN=280 ./scripts/train/launch.sh
+```
+Confirmed against LANE-WIN 03:28Z: `NPROC=1 BATCH=8 GROUP_SIZE=8
+QUERY_MAX_LEN=128 PASSAGE_MAX_LEN=384 EPOCHS=1 SAVE_STEPS=400` is character-for-
+character the config that produced cshl-QP2. 140,000 pairs / batch 8 =
+**17,500 steps**; at LANE-WIN's measured 0.658 s/step that is **192 min** of
+training plus ~7 min setup and ~6 min upload/query-embed = ~205 min, inside the
+280-min watchdog with 75 min of headroom.
+
+**Q3 — slim the weights before four boxes download them:**
+```sh
+aws s3 cp --recursive --exclude 'checkpoint-*' \
+  s3://cshl-embed-rxiv/models/cshl-encoder-bge-m3/<run>/final/ \
+  s3://cshl-embed-rxiv/models/cshl-encoder-bge-m3/<run>/serve/
+```
+
+**Q4 — re-embed into the FIFTH table, N=4:**
+```sh
+MODEL_S3=s3://cshl-embed-rxiv/models/cshl-encoder-bge-m3/<run>/serve \
+EMB_TABLE=preprint_embeddings_cshl_qp3 EMB_MODEL=cshl-encoder-bge-m3-qpairs3 \
+DIM=1024 NORMALIZE=1 CAP=4000 N=4 TYPE=g6e.xlarge ./scripts/embed-nsr/launch.sh
+# g6e unavailable -> TYPE=g5.xlarge AND TEI_IMAGE=...:86-1.8 (the 89 image is
+#   Ada-only and on Ampere starts a container that never loads a model and never
+#   complains — LANE-WIN's trap, inherited not re-derived)
+```
+
+**Q5 — query vectors (the cross-arm digest guard is the point), then index, then gate:**
+```sh
+aws s3 cp s3://cshl-embed-rxiv/eval/cshl-eval-2k/qemb-<run>.jsonl /tmp/qp3.jsonl
+SRC=/tmp/qp3.jsonl ARM=cshl_qp3 VERSION=cshl-eval-2k EXPECT_DIM=1024 \
+  node scripts/eval/qemb-from-run.mjs
+```
+```sql
+CREATE INDEX IF NOT EXISTS idx_pp_emb_cshl_qp3_hnsw
+  ON preprint_embeddings_cshl_qp3 USING hnsw (embedding vector_cosine_ops);
+```
+```sh
+ARMS=cshl_qp3 EXPECT_CORPUS=433449 node scripts/eval/coverage-gate.mjs
+```
+
+**Q6 — score: controls first (published digits must reproduce), then QP3:**
+```sh
+ARMS=bge-m3,medcpt,cshl_qp,cshl_qp2 EVAL_VERSION=cshl-eval-2k node scripts/eval/score.mjs
+ARMS=cshl_qp3 EVAL_VERSION=cshl-eval-2k node scripts/eval/score.mjs
+A=cshl_qp3 B=medcpt   node scripts/eval/paired-test.mjs
+A=cshl_qp3 B=cshl_qp2 node scripts/eval/paired-test.mjs
+```
+
+**Q7 — rerank QP3's top-50 with cshl-RR (the three proven commands):**
+```sh
+ARM=cshl_qp3 EVAL_VERSION=cshl-eval-2k node scripts/rerank-nsr/dump-candidates.mjs
+MODEL_RUN=20260819-223601-train ARM=cshl_qp3 ./scripts/rerank-nsr/score-launch.sh
+IN=<pulled reranked.json> BASE=cshl_qp3 ARM=cshl_qp3+cshl_rr \
+  node scripts/rerank-nsr/score-rerank-cshl.mjs
+A=cshl_qp3+cshl_rr B=medcpt+medcpt_ce node scripts/eval/paired-test.mjs
+```
+
+### Budget, priced before firing (cap $12)
+
+| phase | box | rate | est. min | $ |
+|---|---|---|---:|---:|
+| Q1 prep | 1x g6e.xlarge | 1.861/h | ~45 | 1.40 |
+| Q2 train | 1x g6e.2xlarge | 2.24208/h | ~205 | 7.66 |
+| Q4 re-embed | 4x g6e.xlarge | 1.861/h | ~7 each | 0.90 |
+| Q7 rerank | 1x g6e.2xlarge | 2.24208/h | ~10 | 0.15 |
+| S3 + Neon | — | — | — | ~0.15 |
+| | | | **est. total** | **≈10.26** |
+
+That leaves **≈$1.74** against the $1.70 the conditional cshl-RR retrain (step 6)
+is priced at. **Stated up front: the conditional almost certainly does not fit
+under the cap.** If step 6 is triggered I will price the *actual* spend to that
+point first and write BLOCKED rather than exceed $12.
+
+---
+
+## 2026-08-20T08:12Z — budget challenged by the lead ("why so high?"). Re-derived.
+
+The gap between my $10.26 and D8's implied budget is three separate things, and
+**one of them was my error.** Prices below are from the AWS pricing API, read
+now, not remembered.
+
+```
+g6e.xlarge   $1.86100/h   4 vCPU   32 GiB   L40S 48 GB
+g6e.2xlarge  $2.24208/h   8 vCPU   64 GiB   L40S 48 GB
+g6.2xlarge   $0.97760/h   8 vCPU   32 GiB   L4   24 GB
+g5.2xlarge   $1.21200/h   8 vCPU   32 GiB   A10G 24 GB
+```
+
+**1. D8 does not budget the prep box at all — and one is unavoidable. (~$0.80)**
+Step 1 says "run the pre-staged miner at full scale ... for the training
+queries." The miner takes a query VECTOR per training query, encoded by
+cshl-QP2. There are 140,000 of them, and `mine-ance.mjs`'s own header says so:
+*"needs 100k training-query vectors from a TEI box serving the current
+checkpoint, which is a GPU box and therefore spend."* The requirement is
+documented in the script and absent from the plan's arithmetic. Not a
+disagreement — a cost that fell between the two.
+
+**2. MY ERROR: I put that box on the wrong instance. (−$0.62)**
+I defaulted to `g6e.xlarge` — the type LANE-WIN used for embedding the 433k-row
+corpus, where L40S throughput is the whole job. This box's work is a slice build
+(CPU), a Neon kNN sweep (network), and ~5 min of encoding short keyword strings.
+`g6.2xlarge` has **identical 32 GiB RAM at 52% of the rate** and an L4 that is
+far more than adequate for bge-m3 on ~30-token queries. TYPE_MENU is now
+`g6.2xlarge,g5.2xlarge,g6e.xlarge` — cheapest adequate first, the L40S kept only
+as a capacity fallback. **$1.40 -> $0.80.**
+
+**3. Train: $7.72 vs D8's $7.30, and I'll stand on mine. (+$0.42)**
+D8's figure prices training time only. LANE-WIN's measured QP2 run is the
+control: a 137-min training job against a **151.8-min billed instance lifetime**
+— 14.8 min of boot, install, weight upload and query embed that are billed and
+real. 17,500 steps x 0.658 s/step = 191.9 min + that same measured 14.8 =
+206.7 min = **$7.72**. I would rather carry the overhead than discover it.
+
+Re-embed ($0.90) and rerank ($0.15) are LANE-WIN's and LANE-RERANK's **measured
+actuals**, not estimates.
+
+### Revised budget
+
+| phase | box | rate | est. min | $ |
+|---|---|---|---:|---:|
+| Q1 prep | 1x g6.2xlarge | 0.97760/h | ~48 | 0.78 |
+| Q2 train | 1x g6e.2xlarge | 2.24208/h | ~207 | 7.72 |
+| Q4 re-embed | 4x g6e.xlarge | 1.86100/h | ~7 each | 0.90 |
+| Q7 rerank | 1x g6e.2xlarge | 2.24208/h | ~10 | 0.15 |
+| S3 + Neon | — | — | — | ~0.15 |
+| | | | **total** | **≈ 9.70** |
+
+**≈$2.30 left against the $1.70 conditional — it fits**, with ~$0.60 of margin.
+I withdraw the earlier flag. The margin is thin enough that I will re-price
+actual spend from measured instance lifetimes before firing step 6, rather than
+assume the estimate held.
+
+---
+
+## 2026-08-20T08:12:02Z — Q1 FIRED: prep box `i-04addd198e067c44f`
+
+Cap raised to **$15** by the lead at 08:11Z, which settles the conditional: step
+6 now has room. The revised plan stands regardless.
+
+```
+run_id     20260820-041120-prep
+instance   i-04addd198e067c44f   g5.2xlarge   subnet-0aeeab33ec7ee352e   08:12:02Z
+watchdog   90 min  (fires 09:42Z)
+```
+
+**The TYPE_MENU walk earned its keep on the first launch of the night.**
+`g6.2xlarge` was capacity-refused in **all five** AZs, and the walk fell through
+to `g5.2xlarge` — same 8 vCPU / 32 GiB, A10G instead of L4, $1.21200/h instead
+of $0.97760/h. Cost of the fallback: **+$0.19** on a ~48-min box. Cost of not
+having the walk: the run stops here. (The `|| true` on the `launch_in`
+assignment is what makes those five refusals survivable under `set -e`; without
+it the first one exits the whole script.)
+
+Revised prep line: ~48 min x $1.21200/h = **$0.97** (planned $0.78).
+Running total estimate **≈$9.89** against the $15 cap.
+
+Two watches armed, because a log that stops printing and a job that stopped
+working look identical from one of them: an SSM poll of the box's own progress
+line **filtered on failure signatures as well as stage markers**
+(`ABORT|Traceback|Error|FATAL|Killed|OOM|exited`, so silence cannot be read as
+health), plus the instance state itself, which reports the box being gone.
+
+Completion signal is the artifact, not the instance:
+`s3://cshl-embed-rxiv/train/qpairs3/train.jsonl` plus a `.rc` of `0`.
