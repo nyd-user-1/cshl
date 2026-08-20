@@ -481,6 +481,60 @@ it is a difference between the two arms' measurement, even though it favours nei
 three arms (`bge-m3`, `medcpt`, `specter2`) all had TEI-side query vectors too, so `cshl_qp` is
 in line with the majority and `cshl` is the odd one out.
 
+### 2026-08-20T00:47Z — query vectors recovered on-box, every guard green
+
+Ran the recovery against the TEI already serving this run's checkpoint on embed box 0, through
+SSM. It had to queue behind the corpus sweep hammering the same endpoint, so I fired an
+identical job on box 1 as a hedge — two chances at zero extra cost, since both boxes were
+already paid for — and cancelled the loser as soon as box 0 landed.
+
+```
+2000 queries · TEI model_id=/data max_input_length=384 · embedded 2000 · dims 1024
+RESULT-OK-UPLOADED -> s3://…/eval/cshl-eval-2k/qemb-cshl_qp-20260819-192100-train.jsonl
+```
+
+`max_input_length=384` is worth pausing on: it is **independent confirmation that TEI served
+our fine-tune and not the base model**. It comes from the `sentence_bert_config.json` that
+`train.sh` §4 wrote with `max_seq_length=$PASSAGE_MAX_LEN`; stock `BAAI/bge-m3` reports 8192.
+The report's own incident guard is "assert the served model id equals the requested one" —
+`model_id` is just `/data` for an S3-loaded model, so that assertion is vacuous here, and this
+number is the thing that actually distinguishes them.
+
+Installed through `qemb-from-run.mjs`, which re-derives every property from the vectors:
+
+```
+2,000 rows -> 2,000 matched this benchmark   (zero missing: the qid trap did not fire)
+dim 1024 · norms [1.0000, 1.0000] · non-finite 0 · all-zero 0
+  distinct from qemb/bge-m3.jsonl   (b86fe21a81f6… vs 30c8a3e6490c…) OK
+  distinct from qemb/cshl.jsonl     (9be967585172… vs 30c8a3e6490c…) OK
+  distinct from qemb/medcpt.jsonl   (18ed37ddaffc… vs 30c8a3e6490c…) OK
+  distinct from qemb/specter2.jsonl (2e8911a7ccbb… vs 30c8a3e6490c…) OK
+md5 30c8a3e6490c6083795e91ad58ccff5c
+```
+
+**Distinct from `cshl.jsonl` is the load-bearing line.** Two arms scored from one model is this
+program's clearest published failure, and the two arms most able to collide are the two
+fine-tunes of the same base model on the same queries.
+
+### 2026-08-20T00:51Z — re-embed COMPLETE, both boxes self-terminated
+
+```
+preprint_embeddings_cshl_qp   433,449 rows
+box 0 i-0925d8ec21dad2e5b  launched 00:35:39Z  terminated ~00:51Z
+box 1 i-00fb96134c6fc2a23  launched 00:35:51Z  terminated ~00:51Z
+GPU instances still running: none
+```
+
+~16 minutes per box on A10G against the 15.0 min the L40S sweep took — the A10G penalty was
+much smaller than the 1.8× I had priced, because the job is not purely GPU-bound.
+
+### 2026-08-20T00:54Z — HNSW index building
+
+`CREATE INDEX … USING hnsw (embedding vector_cosine_ops)` — cosine, matching the arm's metric,
+built **after** the sweep per `indexes.sql`'s own rule. Watched through
+`pg_stat_progress_create_index` rather than by waiting on the psql session, so "still building"
+and "the session died" cannot look the same.
+
 ---
 
 ## Spend ledger (revised — the train box is now live)
