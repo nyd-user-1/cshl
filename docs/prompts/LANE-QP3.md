@@ -1045,3 +1045,53 @@ box, actively wrong for a rig whose whole design is N=4 boxes in parallel. The
 "observable existence" rule still applies there; the "refuse if one exists" rule
 does not. Noted in the script's header as a scope limit rather than left to be
 discovered by someone launching one embed box instead of four.
+
+---
+
+## 2026-08-20T12:53–13:14Z — TRAINING COMPLETE; Q3/Q5a done; Q4 launched 3-of-4
+
+**cshl-QP3 exists.** `RUN_ID 20260820-053000-train`, 17,500 steps, 3h21m.
+
+```
+final/model.safetensors   2,271,064,456 bytes   (byte-for-byte the expected size)
+final/1_Pooling/config.json · modules.json · sentence_bert_config.json   all present
+eval/cshl-eval-2k/qemb-20260820-053000-train.jsonl   20.4 MiB
+box i-075b943473cccdbb8 self-terminated
+```
+
+Throughput held LANE-WIN's control the whole way: **1.47-1.52 it/s** against a
+measured 1.52, **34,169-34,457 MiB** against 33,899. Batch 8 at
+`PASSAGE_MAX_LEN=384` fit an L40S exactly as predicted, on the cheaper
+`g6e.xlarge` rung. Actual box cost **220 min x $1.86100/h = $6.82**.
+
+**Q3 — weights slimmed** to `serve/`: 10 objects, 2.1 GiB, `checkpoint-*`
+excluded. Four boxes about to download 2.1 GiB instead of ~20 GiB.
+
+**Q5a — query vectors installed, and the digest guard is the point:**
+```
+rows 2,000 · dim 1024 · norms [1.0000, 1.0000] · non-finite 0 · all-zero 0
+distinct from bge-m3 · cshl · cshl_qp · cshl_qp2 · medcpt · specter2   ALL OK
+wrote qemb/cshl_qp3.jsonl  md5 446888e4d6df77d0490f16fe97ad6aaa
+```
+Distinct from **all six** existing arms, `cshl_qp2` included. cshl-QP3 is
+provably a different model, not a re-labelled copy of its parent.
+
+**Q4 — 3 of 4 embed boxes launched.**
+```
+i-0ca9493529b34ca75  part 0  running
+i-0e67a2ba7ade57d1b  part 1  running
+i-0c4a59008f7e9b9a6  part 2  running
+part 3:  NO CAPACITY IN ANY AZ for g6e.xlarge. Nothing launched.
+```
+Not a problem, and deliberately not "fixed" by launching a box now. Each box
+owns fixed lanes, so part 3's quarter of the corpus is simply unwritten — and
+the rig computes lane bounds from **rows that are still unembedded at launch**,
+so a sweep after these three finish will cover exactly the gap with no overlap.
+Launching a replacement *now* would recompute bounds over the whole
+still-unembedded corpus and duplicate the work of the three boxes already
+running. Cost of waiting: one extra box for ~7 min, **~$0.22**.
+
+Completion signal is the **row count reaching 433,449**, not the boxes
+disappearing — a box that dies having written nothing looks identical to one
+that finished. The poll reports rows and live-box count together, so a stall is
+distinguishable from a crash.
