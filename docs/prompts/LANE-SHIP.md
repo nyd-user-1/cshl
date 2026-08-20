@@ -468,3 +468,60 @@ JSON-parsed and checked for a metrics block before upload (a truncated result fi
 nothing, but a half-written one can parse as an object with no metrics). 35 files, sha256
 prefixes recorded in this lane's staging output; `CSHL-CPT-REPORT.md` is the committed
 version at `53fc480`. If that lane lands more arms tonight, this repo needs another push.
+
+### 2026-08-20T02:53Z — my own progress waiter reported "done" while nothing was done
+
+Worth recording in full, because it is the third instance tonight of the failure this whole
+program is a catalogue of, and this one is entirely mine.
+
+I wrote a background waiter to tell me when the two publish boxes reached a terminal marker.
+It fired almost immediately with `both publish boxes terminal`. Both boxes were still running
+`apt-get install`.
+
+Cause: the script used `declare -A done_box` for a per-box "already reported" map. **macOS
+ships bash 3.2, which has no associative arrays.** `declare -A` failed, then
+`done_box[$id]=1` was parsed as *arithmetic* array indexing on an instance id — hence
+`value too great for base (error token is "0ad7d19c924aacf21")` — and both failures went to
+stderr, which the monitor does not surface as events. The `while` condition then evaluated as
+if both boxes were finished, and the script printed its success line and exited 0.
+
+An exit code of 0 and a confident completion message, over two boxes that had done nothing.
+The only reason it was caught is that the terminal marker is **not** what this lane treats as
+proof: the brief requires listing the repo contents back through the HF API, so the marker was
+going to be checked against reality regardless. A rewritten waiter (no associative arrays,
+reason in a comment so it does not come back) is now running.
+
+The lesson is the one already in the report and it keeps needing relearning: **the check that
+lies is the one you wrote yourself and did not test.** Same shape as the qpairs lane's false
+`HNSW-INDEX-READY`, same night.
+
+### 2026-08-20T02:56Z — verification-by-listing-back, as a script
+
+The brief requires every push be verified by listing the repo contents back through the API,
+because an upload that dies at 96% looks complete from the process side. Reading a file list
+by eye satisfies the letter of that and not much else — it catches an absent file and misses a
+truncated one. `scripts/publish-nsr/verify-push.py` compares the Hub against **what was
+actually handed to the box** (the S3 prefix the box synced from), per file, by byte size, and
+also asserts the card is present and `private == True`.
+
+Exercised in all three directions before it was trusted:
+
+```
+NYSgpt/cshl-encoder-bge-m3 vs a NON-EXISTENT prefix
+  -> "FAIL: nothing found ... this check would pass vacuously"     (exit 2)
+```
+
+That branch exists because the first version printed **"VERIFIED: all 0 sent objects
+present"** — a check that passes because it checked nothing, which is the same bug as the
+`PUBLISH-DONE` it was written to guard against. Caught by pointing it at a prefix that does
+not exist, which is the sort of test that only gets run if you go looking for it.
+
+```
+NYSgpt/cshl-eval-v1 vs the staged prefix, BEFORE the push lands
+  -> 11x "missing on the Hub" (every qpairs result file + the new fusions)
+  -> "size mismatch CSHL-CPT-REPORT.md: sent 56518, hub 41054"     (the pre-qpairs report)
+  -> "size mismatch results/cshl.json: sent 4185, hub 4184"        (the re-derived control run)
+```
+
+It fails correctly on a repo that has not received the push yet, and the specific failures are
+the right ones — which is the only evidence that a passing run later will mean anything.
