@@ -167,8 +167,17 @@ export default async function handler(req: any, res: any) {
     let mode: string;
     if (denseRows.length && wantsFts) {
       const scores = rrf([denseRows.map(key), ftsRows.map(key)]);
+      // Ties are the common case at the head of the list: rank 1 of each arm scores
+      // identically under RRF, so without a tie-break the order is whatever the Map
+      // yields and a weak lexical hit can lead a page of strong dense ones. Break
+      // toward the arm the benchmark says is better — rows both arms found, then dense,
+      // then by score — instead of leaving it to insertion order.
+      const armRank = (r: Row) => (r.arm === "both" ? 2 : r.arm === "dense" ? 1 : 0);
       records = [...byKey.values()]
-        .sort((a, b) => (scores.get(key(b)) ?? 0) - (scores.get(key(a)) ?? 0))
+        .sort((a, b) =>
+          ((scores.get(key(b)) ?? 0) - (scores.get(key(a)) ?? 0)) ||
+          (armRank(b) - armRank(a)) ||
+          ((Number(b.similarity) || 0) - (Number(a.similarity) || 0)))
         .slice(0, limit);
       mode = "hybrid";
     } else if (denseRows.length) {
