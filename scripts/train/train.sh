@@ -43,6 +43,32 @@ PASSAGE_MAX_LEN=${PASSAGE_MAX_LEN:-512}
 OUT=/opt/train/out
 NPROC=${NPROC:-1}
 TORCHRUN=/opt/pytorch/bin/torchrun
+# --- cross-device in-batch negatives -------------------------------------
+# FlagEmbedding's contrastive loss uses every OTHER example in the batch as an
+# in-batch negative. Under torchrun each rank sees only its own per-device
+# batch, so 4 GPUs x batch 8 gives 4 independent 8-example batches — 7 in-batch
+# negatives each, exactly what ONE GPU at batch 8 gets. The extra GPUs buy
+# throughput and nothing else. `--negatives_cross_device` all-gathers the
+# embeddings across ranks first, making the effective batch 32 and the in-batch
+# negative count 31. It is the difference between "4x faster" and "4x the
+# contrastive signal", and it costs an all-gather of 32x1024 floats per step.
+#
+# VERIFIED, not assumed. `--help` for the installed FlagEmbedding 1.4.0 (pulled
+# from the previous run's uploaded box log, s3://…/logs/cshl-train-20260819-
+# 192100-train.log) carries:
+#     --negatives_cross_device [NEGATIVES_CROSS_DEVICE]
+#                           share negatives across devices (default: False)
+# and the run's echoed TrainingArguments show `negatives_cross_device=False`,
+# so it is a real argument on this version and it is off unless asked for.
+# The runtime gate below re-checks THIS box's own /opt/flagembed-help.txt
+# anyway — a flag verified against yesterday's log is a claim with a
+# timestamp, and `pip install -U` can move under us between launches.
+#
+# Default ON when NPROC>1 (it is a no-op, and FlagEmbedding asserts on it,
+# when there is only one rank). CROSS_DEVICE_NEGATIVES=0 forces it off.
+CROSS_DEVICE_NEGATIVES=${CROSS_DEVICE_NEGATIVES:-$([ "$NPROC" -gt 1 ] && echo 1 || echo 0)}
+XDEV_ARG=""
+echo "[train.sh] CROSS_DEVICE_NEGATIVES=$CROSS_DEVICE_NEGATIVES (nproc=$NPROC)"
 echo "[train.sh] MODE=$MODE TRAIN_NAME=$TRAIN_NAME RUN_ID=$RUN_ID base=$BASE_MODEL q=$QUERY_MAX_LEN p=$PASSAGE_MAX_LEN group=$GROUP_SIZE nproc=$NPROC"
 
 PY=/opt/pytorch/bin/python3
@@ -65,6 +91,13 @@ if [ -n "${DRYRUN:-}" ]; then
   STEPS_PER_EPOCH=$(( (N_PAIRS + EFFECTIVE_BATCH - 1) / EFFECTIVE_BATCH ))
   WARMUP=$(( STEPS_PER_EPOCH / 10 )); [ "$WARMUP" -lt 1 ] && WARMUP=1
   echo "[train.sh][DRYRUN] N_PAIRS=$N_PAIRS NPROC=$NPROC per_device_batch=$BATCH effective_batch=$EFFECTIVE_BATCH steps_per_epoch=$STEPS_PER_EPOCH warmup_steps=$WARMUP"
+  if [ "$CROSS_DEVICE_NEGATIVES" = 1 ]; then
+    XDEV_ARG="--negatives_cross_device True"
+    echo "[train.sh][DRYRUN] cross-device negatives ON -> in-batch negatives $((EFFECTIVE_BATCH - 1)) (vs $((BATCH - 1)) per-rank without it)"
+    echo "[train.sh][DRYRUN] NOTE: on a real box this is gated on grep --negatives_cross_device /opt/flagembed-help.txt, which needs the install step — DRYRUN cannot run that check."
+  else
+    echo "[train.sh][DRYRUN] cross-device negatives OFF -> in-batch negatives $((BATCH - 1)) per rank"
+  fi
   echo "[train.sh][DRYRUN] would run (via /opt/train/run_trainer.py, a thin wrapper that patches"
   echo "[train.sh][DRYRUN] Trainer._issue_warnings_after_load before import — see the comment in section 3):"
   cat <<PLAN
@@ -92,7 +125,7 @@ $RUN_PREFIX /opt/train/run_trainer.py \\
   --save_total_limit ${SAVE_TOTAL_LIMIT:-3} \\
   --temperature 0.02 \\
   --sentence_pooling_method cls \\
-  --normalize_embeddings True
+  --normalize_embeddings True $XDEV_ARG
 PLAN
   exit 0
 fi
@@ -104,6 +137,23 @@ $PY -m pip install -U FlagEmbedding 2>&1 | tail -40
 $PY -m pip install "transformers>=4.44.2,<5" 2>&1 | tail -10
 echo "[train.sh] --help for the INSTALLED version (use ITS flags, don't guess):"
 $PY -m FlagEmbedding.finetune.embedder.encoder_only.m3 --help 2>&1 | tee /opt/flagembed-help.txt || true
+
+# 1b. Gate the cross-device-negatives flag on THIS box's installed CLI. Same
+#     shape as the --resume_from_checkpoint gate below: if the flag is not in
+#     the installed version's --help, say so loudly and train without it rather
+#     than passing an argument the parser will reject (HfArgumentParser exits
+#     non-zero on an unknown flag, which the OOM loop would misread as a
+#     non-OOM failure and abort the whole run).
+if [ "$CROSS_DEVICE_NEGATIVES" = 1 ]; then
+  if [ "$NPROC" -le 1 ]; then
+    echo "[train.sh] CROSS_DEVICE_NEGATIVES=1 but NPROC=1 — nothing to share negatives across, leaving it OFF"
+  elif grep -q -- '--negatives_cross_device' /opt/flagembed-help.txt 2>/dev/null; then
+    XDEV_ARG="--negatives_cross_device True"
+    echo "[train.sh] installed CLI exposes --negatives_cross_device — ON. in-batch negatives will be $((BATCH * NPROC - 1)), not $((BATCH - 1))."
+  else
+    echo "[train.sh] WARNING: --negatives_cross_device NOT in this version's --help. Training WITHOUT it: $NPROC ranks x batch $BATCH give $((BATCH - 1)) in-batch negatives each, NOT $((BATCH * NPROC - 1)). Recorded so the run is not later described as something it was not."
+  fi
+fi
 
 # 2. Pull the converted training slice
 mkdir -p /opt/train && cd /opt/train
@@ -258,7 +308,7 @@ while true; do
   EFFECTIVE_BATCH=$((BATCH * NPROC))
   STEPS_PER_EPOCH=$(( (N_PAIRS + EFFECTIVE_BATCH - 1) / EFFECTIVE_BATCH ))
   WARMUP=$(( STEPS_PER_EPOCH / 10 )); [ "$WARMUP" -lt 1 ] && WARMUP=1
-  echo "[train.sh] attempt: nproc=$NPROC per_device_batch=$BATCH effective_batch=$EFFECTIVE_BATCH warmup_steps=$WARMUP gradient_checkpointing=${CKPT_FLAG:+on}${CKPT_FLAG:-off} save_steps=$SAVE_STEPS"
+  echo "[train.sh] attempt: nproc=$NPROC per_device_batch=$BATCH effective_batch=$EFFECTIVE_BATCH in_batch_negatives=$([ -n "$XDEV_ARG" ] && echo $((EFFECTIVE_BATCH - 1)) || echo $((BATCH - 1))) warmup_steps=$WARMUP gradient_checkpointing=${CKPT_FLAG:+on}${CKPT_FLAG:-off} save_steps=$SAVE_STEPS cross_device_negatives=$([ -n "$XDEV_ARG" ] && echo on || echo off)"
   rm -rf "$OUT"
   if [ -n "$RESUME_CKPT_NAME" ] && [ -z "$RESUMED_ONCE" ]; then
     mkdir -p "$OUT"
@@ -296,6 +346,7 @@ while true; do
     --temperature 0.02 \
     --sentence_pooling_method cls \
     --normalize_embeddings True \
+    $XDEV_ARG \
     2>&1 | tee /opt/train/train.log
   EXIT=${PIPESTATUS[0]}
   set -e
@@ -312,7 +363,7 @@ while true; do
   echo "[train.sh] training failed (non-OOM)"; exit "$EXIT"
 done
 T1=$(date +%s)
-echo "[train.sh] wall-clock: $((T1 - T0))s EXIT=$EXIT final_batch=$BATCH gradient_checkpointing=${CKPT_FLAG:+on}${CKPT_FLAG:-off}"
+echo "[train.sh] wall-clock: $((T1 - T0))s EXIT=$EXIT final_batch=$BATCH final_effective_batch=$((BATCH * NPROC)) gradient_checkpointing=${CKPT_FLAG:+on}${CKPT_FLAG:-off} cross_device_negatives=$([ -n "$XDEV_ARG" ] && echo on || echo off)"
 kill $SYNC_PID 2>/dev/null || true
 aws s3 sync "$OUT" "$CKPT_S3/" --exclude '*' --include 'checkpoint-*/**' --only-show-errors 2>/dev/null || true
 echo "[train.sh] final checkpoint sync done"

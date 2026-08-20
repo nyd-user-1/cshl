@@ -58,3 +58,18 @@ CREATE TABLE IF NOT EXISTS preprint_embeddings_cshl_qp (
   embedded_at timestamptz NOT NULL DEFAULT now()
 );
 COMMIT;
+
+-- LANE-WIN (2026-08-20): the FOURTH encoder table. cshl_qp may be serving
+-- production tonight (ship lane), so this run does not write over it — same
+-- reasoning that put the qpairs run in a third table rather than the second.
+-- Same 1024-d cosine shape: same base model, same objective family, more data
+-- and a benchmark-weighted family mix.
+BEGIN;
+CREATE TABLE IF NOT EXISTS preprint_embeddings_cshl_qp2 (
+  key_number  text PRIMARY KEY REFERENCES preprints(key_number) ON DELETE CASCADE,
+  embedding   vector(1024) NOT NULL,           -- our fine-tune of BAAI/bge-m3, query-pairs objective, 100k weighted slice
+  model       text NOT NULL DEFAULT 'cshl-encoder-bge-m3-qpairs2',
+  text_hash   text NOT NULL,
+  embedded_at timestamptz NOT NULL DEFAULT now()
+);
+COMMIT;

@@ -18,6 +18,9 @@
 #     which is one command against a rig that is already dry-run verified.
 #   - TRAIN_ARGS passthrough so query/passage_max_len can be raised for this
 #     corpus without editing the box script.
+#   - CROSS_DEVICE_NEGATIVES passthrough (LANE-WIN). Unset is not "off": train.sh
+#     defaults it ON whenever NPROC>1, because 4 GPUs without it give the same 7
+#     in-batch negatives as 1 GPU. Pass CROSS_DEVICE_NEGATIVES=0 to force it off.
 #
 # Usage (run from repo root):
 #   DRYRUN=1 MODE=train TRAIN_NAME=full ./scripts/train/launch.sh
@@ -129,6 +132,7 @@ export EPOCHS=${EPOCHS:-1} BATCH=${BATCH:-16} QUERY_MAX_LEN=${QUERY_MAX_LEN:-128
 export SAVE_STEPS=${SAVE_STEPS:-600} SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-3} CKPT_SYNC_INTERVAL=${CKPT_SYNC_INTERVAL:-60}
 ${RESUME_FROM:+export RESUME_FROM=$RESUME_FROM}
 ${NPROC:+export NPROC=$NPROC}
+${CROSS_DEVICE_NEGATIVES:+export CROSS_DEVICE_NEGATIVES=$CROSS_DEVICE_NEGATIVES}
 DATABASE_URL="\$DBURL" ./train.sh
 set -x
 aws s3 cp /var/log/train.log s3://$BUCKET/logs/cshl-train-$RUN_ID.log

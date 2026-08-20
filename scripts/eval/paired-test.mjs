@@ -20,8 +20,25 @@ const B = process.env.B ?? (() => { throw new Error('set B') })()
 const RESAMPLES = Number(process.env.RESAMPLES ?? 5000)
 const SEED = Number(process.env.SEED ?? 20260819)
 
+// FAMILY=MESH|AUTHORKW restricts the comparison to one query family. The
+// aggregate over both families is a different question from "did we beat
+// MedCPT on MeSH": the two families have different difficulty and different
+// n, so a blended win can hide a per-family loss. score.mjs writes the family
+// vector into perquery.json precisely so this can be sliced without re-scoring.
+const FAMILY = process.env.FAMILY ?? ''
 const load = (arm) => JSON.parse(readFileSync(join(DIR, `${arm}.perquery.json`), 'utf8'))
-const a = load(A), b = load(B)
+let a = load(A), b = load(B)
+if (FAMILY) {
+  if (!a.family || !b.family) { console.error(`FATAL: FAMILY=${FAMILY} requested but ${!a.family ? A : B}.perquery.json has no family vector (doc->doc results do not carry one)`); process.exit(1) }
+  const keep = a.family.map((f, i) => (f === FAMILY ? i : -1)).filter((i) => i >= 0)
+  if (!keep.length) { console.error(`FATAL: no queries with family '${FAMILY}' (have: ${[...new Set(a.family)].join(', ')})`); process.exit(1) }
+  const sub = (o) => ({ ...o, keys: keep.map((i) => o.keys[i]), hits10: keep.map((i) => o.hits10[i]), family: keep.map((i) => o.family[i]) })
+  // Slice B by A's positions only after the pairing check below confirms the
+  // two files are in the same order — so slice both by the SAME index list and
+  // let that check run on the sliced arrays.
+  a = sub(a); b = sub(b)
+  console.log(`FAMILY=${FAMILY}: ${keep.length.toLocaleString()} of the ${load(A).hits10.length.toLocaleString()} scored queries`)
+}
 
 // Pairing is the entire premise. Check it rather than assume it.
 if (a.hits10.length !== b.hits10.length) { console.error(`FATAL: ${A} has ${a.hits10.length} queries, ${B} has ${b.hits10.length}`); process.exit(1) }

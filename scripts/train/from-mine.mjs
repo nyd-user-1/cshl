@@ -37,6 +37,43 @@ const NAME = process.env.NAME ?? 'parity'
 const OUT = process.env.OUT ?? `data/train/${NAME}/train.jsonl`
 const NEGS = Number(process.env.NEGS ?? 8)
 const SUBSAMPLE = Number(process.env.SUBSAMPLE ?? 0)
+// FAMILY_TAKE="MESH:55000,AUTHORKW:40000,EXTRACT:5000" — an EXACT per-family
+// take, overriding SUBSAMPLE's proportional stratification.
+//
+// Why this exists: SUBSAMPLE takes each family in proportion to its size in the
+// mined set, which for cshl-query-pairs is EXTRACT 61% / MESH 24% / AUTHORKW
+// 15%. The benchmark is 62% MESH / 38% AUTHORKW and contains no EXTRACT at all,
+// so the proportional take spends most of the training budget on the one family
+// nobody is scored on. Last night's 40k slice carried only 5,854 AUTHORKW pairs
+// and AUTHORKW is where we lose to MedCPT by the widest margin. Proportional is
+// the right default for "a representative sample"; it is the wrong shape for
+// "supervision aimed at a known benchmark", and that is a spec the caller has
+// to be able to state, not a constant to be edited.
+//
+// Contract, deliberately unforgiving:
+//   - every family named must exist and must have at least the requested count;
+//   - families NOT named are dropped entirely (the spec is exact, not a floor);
+//   - the emitted per-family counts are re-counted from the emitted set and
+//     asserted against the spec, so "families_emitted matches the spec" is a
+//     check rather than a claim. Any mismatch aborts non-zero.
+// Order within a family is the same deterministic md5 sort SUBSAMPLE uses, so a
+// FAMILY_TAKE of N is a prefix of a FAMILY_TAKE of N+1 — reruns are stable and
+// two sizes are nested rather than disjoint.
+const FAMILY_TAKE = (() => {
+  const raw = (process.env.FAMILY_TAKE ?? '').trim()
+  if (!raw) return null
+  const spec = new Map()
+  for (const part of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const m = part.match(/^([A-Za-z0-9_-]+):(\d+)$/)
+    if (!m) { console.error(`ABORT: FAMILY_TAKE segment '${part}' is not <FAMILY>:<count>`); process.exit(1) }
+    if (spec.has(m[1])) { console.error(`ABORT: FAMILY_TAKE names '${m[1]}' twice`); process.exit(1) }
+    const n = Number(m[2])
+    if (!(n > 0)) { console.error(`ABORT: FAMILY_TAKE '${part}' must request a positive count`); process.exit(1) }
+    spec.set(m[1], n)
+  }
+  if (!spec.size) { console.error('ABORT: FAMILY_TAKE is set but parses to nothing'); process.exit(1) }
+  return spec
+})()
 const EVAL_DIR = process.env.EVAL_DIR ?? 'data/eval/cshl-eval-v1'
 const h32 = (s) => parseInt(createHash('md5').update(s).digest('hex').slice(0, 8), 16) / 0xffffffff
 
@@ -117,7 +154,20 @@ if (total === 0) { console.error('ABORT: 0 convertible records — refusing to w
 
 let out = []
 const emitted = new Map()
-if (SUBSAMPLE && SUBSAMPLE < total) {
+if (FAMILY_TAKE) {
+  console.log(`FAMILY_TAKE: ${[...FAMILY_TAKE].map(([f, n]) => `${f}:${n.toLocaleString()}`).join(' ')}`)
+  const missing = [...FAMILY_TAKE.keys()].filter((f) => !byFamily.has(f))
+  if (missing.length) { console.error(`ABORT: FAMILY_TAKE names families absent from the input: ${missing.join(', ')} (input has: ${[...byFamily.keys()].join(', ')})`); process.exit(1) }
+  const short = [...FAMILY_TAKE].filter(([f, n]) => byFamily.get(f).length < n)
+  if (short.length) { console.error(`ABORT: FAMILY_TAKE asks for more than exists: ${short.map(([f, n]) => `${f} wants ${n}, has ${byFamily.get(f).length}`).join('; ')}`); process.exit(1) }
+  for (const [fam, n] of FAMILY_TAKE) {
+    const arr = byFamily.get(fam)
+    arr.sort((a, b) => h32(a.k) - h32(b.k))                    // deterministic, same rule as SUBSAMPLE
+    out.push(...arr.slice(0, n))
+    console.log(`  ${fam}: ${arr.length.toLocaleString()} -> ${n.toLocaleString()}`)
+  }
+  for (const fam of byFamily.keys()) if (!FAMILY_TAKE.has(fam)) console.log(`  ${fam}: ${byFamily.get(fam).length.toLocaleString()} -> 0 (not named in FAMILY_TAKE)`)
+} else if (SUBSAMPLE && SUBSAMPLE < total) {
   for (const [fam, arr] of byFamily) {
     arr.sort((a, b) => h32(a.k) - h32(b.k))                    // deterministic
     const take = Math.max(1, Math.round((arr.length / total) * SUBSAMPLE))
@@ -142,6 +192,22 @@ console.log(`EMITTED families: ${JSON.stringify(Object.fromEntries(emitted))}`)
 console.log(`EMITTED disjointness: ${emittedLeaks} references to frozen-benchmark gold papers (must be 0)`)
 console.log(`EMITTED query-string overlap with benchmark: ${emittedCollisions.toLocaleString()} / ${out.length.toLocaleString()} (disclosed, not a leak — benchmark splits by paper)`)
 if (emittedLeaks > 0) { console.error('ABORT: emitted set references frozen-benchmark gold papers.'); process.exit(1) }
+// The FAMILY_TAKE contract, verified against the RE-COUNTED emitted set rather
+// than against the slice() calls that produced it. A take that silently emitted
+// a different mix than it was asked for is the same failure shape as an empty
+// slice reporting success — the run would train on the wrong distribution and
+// nothing downstream would ever say so.
+if (FAMILY_TAKE) {
+  const want = [...FAMILY_TAKE].sort(([a], [b]) => a.localeCompare(b))
+  const got = [...emitted].sort(([a], [b]) => a.localeCompare(b))
+  const mismatch = want.length !== got.length ||
+    want.some(([f, n], i) => got[i][0] !== f || got[i][1] !== n)
+  if (mismatch) {
+    console.error(`ABORT: families_emitted does not match FAMILY_TAKE.\n  requested ${JSON.stringify(Object.fromEntries(want))}\n  emitted   ${JSON.stringify(Object.fromEntries(got))}`)
+    process.exit(1)
+  }
+  console.log(`FAMILY_TAKE VERIFIED: families_emitted matches the spec exactly (${out.length.toLocaleString()} pairs)`)
+}
 
 mkdirSync(dirname(OUT), { recursive: true })
 // Stream it: 40k pairs x 10 documents is ~800 MB, past V8's max string length.
@@ -155,6 +221,8 @@ await new Promise((res, rej) => {
 writeFileSync(join(dirname(OUT), 'manifest.json'), JSON.stringify({
   name: NAME, built_at: new Date().toISOString(), input: IN, text_source: TEXTS,
   pairs: out.length, negs_per_pair: NEGS, subsample: SUBSAMPLE || null,
+  family_take: FAMILY_TAKE ? Object.fromEntries(FAMILY_TAKE) : null,
+  family_take_verified: FAMILY_TAKE ? true : null,
   query_side: { literal_text: textQueries, slug_into_corpus: slugQueries },
   families_convertible: Object.fromEntries([...byFamily].map(([f, a]) => [f, a.length])),
   families_emitted: Object.fromEntries(emitted),
