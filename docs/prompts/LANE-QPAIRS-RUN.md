@@ -679,8 +679,16 @@ the scripts' claims.
 | | **TOTAL** | | | **≈ 2.95** |
 
 **Under the $5.00 cap, with $2.05 unspent.** Two capacity-refused launches cost nothing, and no
-box was ever left running idle — every one self-terminated and `describe-instances` confirms
-zero GPU instances alive at close.
+box was ever left running idle — all three of this lane's boxes self-terminated on completion.
+
+*Correction to an earlier draft of this line:* it claimed `describe-instances` showed **zero**
+GPU instances alive at close. That is not literally true and the corrected claim is narrower.
+At close there is one GPU box running — `i-0dfea6c5e6adfe0ea`, `g5.12xlarge`, tagged
+`cshl-train-mgpu-rehearsal`, launched 00:56:55Z. **It is not this lane's**: it belongs to the
+rig lane doing the multi-GPU upgrade in a separate worktree, it launched after this lane's
+embed boxes had already begun terminating, and it is neither my spend nor mine to terminate.
+Recorded here so that its cost is not later attributed to this lane's ledger, and so that
+"zero boxes running" is not the sentence someone finds when it was never true.
 
 ### Waste, itemised — mine, not folded into the total
 
