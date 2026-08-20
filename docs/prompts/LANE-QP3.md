@@ -1013,3 +1013,35 @@ The direction is the whole argument: training a held-out paper's text as a
 **negative** can only make it *harder* to retrieve at eval. It cannot inflate a
 result; it can only cost us one. A **positive** matching held-out text would
 genuinely leak the answer and stays fatal.
+
+---
+
+## 2026-08-20T10:55Z — Q4 dry-run verified, and one IAM interaction noted before it bites
+
+```
+table       preprint_embeddings_cshl_qp3   (exists, 0 rows, verified by psql)
+DIM=1024 NORMALIZE=1 CAP=4000 · 16 lanes across N=4 boxes
+tags        Name=cshl-embed-cshl-encoder-bge-m3-qpairs3-{0..3}, Arm/Table/Part
+shutdown    instance-initiated-shutdown-behavior=terminate
+```
+
+**The embed rig re-puts `read-dburl` with `logs/*` + `eval/*` only** — dropping
+the `models/*`, `train/*`, `prep/*` grants `launch-prep.sh` added. Traced
+through rather than assumed, and it is harmless here:
+
+- train box's weight upload -> `write-model-artifacts` (separate policy) ✓
+- train box's `qemb` upload -> `write-eval-artifacts` (separate policy) ✓
+- train box's checkpoint-resume `aws s3 ls` -> `ListBucket`, still granted ✓
+- embed boxes reading the model from `models/.../serve` -> `GetObject` on
+  `cshl-embed-rxiv/*`, still granted ✓
+
+This is LANE-WIN's observation holding: the grants that matter live in policies
+the embed rig does not touch. `launch-prep.sh` re-puts its own grants if the
+prep box is ever re-run, so nothing is permanently lost.
+
+**`launch-until.sh` must NOT be used for the embed rig.** It refuses to launch
+when an instance matching the tag already exists — correct for a single training
+box, actively wrong for a rig whose whole design is N=4 boxes in parallel. The
+"observable existence" rule still applies there; the "refuse if one exists" rule
+does not. Noted in the script's header as a scope limit rather than left to be
+discovered by someone launching one embed box instead of four.
