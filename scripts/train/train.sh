@@ -193,30 +193,39 @@ if [ -n "$RESUME_FROM" ]; then
   # a prefix" and "every file in it finished uploading" — reproduced for real
   # in this lane's acceptance test: killing mid-sync left checkpoint-20 in S3
   # as a lone 658-byte config.json, no weights, no trainer_state.json. Resume
-  # must walk newest-to-oldest and skip any checkpoint missing the weight file
-  # or the state file (trainer_state.json is written last by the Trainer, so
-  # its presence is the completion signal), rather than trusting the highest
-  # number. Silently resuming from a truncated checkpoint would either crash
-  # (as it did here) or, worse, load partial weights without error.
+  # must walk newest-to-oldest and skip any checkpoint missing a required
+  # file, rather than trusting the highest number. Silently resuming from a
+  # truncated checkpoint would either crash (as it did here) or, worse, load
+  # partial state without error.
+  #
+  # REQUIRED_CKPT_FILES was model.safetensors + trainer_state.json only,
+  # on the (single-GPU-run) observation that trainer_state.json looked like
+  # the last file the Trainer writes locally. The multi-GPU rehearsal
+  # (2026-08-20) falsified that: `aws s3 sync` does not upload in write
+  # order — it can finish trainer_state.json (900 bytes) while optimizer.pt
+  # (4.5GB, the single largest file in the checkpoint) is still mid-transfer.
+  # A real checkpoint-20 in that state passed the old two-file check and
+  # would have resumed with a missing/reinitialized optimizer, silently.
+  # optimizer.pt is now required too — it is the single best proxy for "the
+  # whole sync finished" since it is reliably the largest, slowest file.
+  REQUIRED_CKPT_FILES="model.safetensors optimizer.pt trainer_state.json"
   CKPT_CANDIDATES=$(aws s3 ls "${RESUME_FROM%/}/" | awk '{print $2}' | sed 's#/$##' | grep '^checkpoint-' | sort -t- -k2 -rn)
   [ -n "$CKPT_CANDIDATES" ] || { echo "[train.sh] RESUME_FROM set but no checkpoint-* found under ${RESUME_FROM%/}/ — refusing"; exit 1; }
   for c in $CKPT_CANDIDATES; do
-    # `|| true` on both: under `set -o pipefail` (part of this script's own
-    # `set -euo pipefail`), `aws s3 ls <missing-key> | wc -l` reports the
-    # *ls* command's nonzero exit even though `wc -l` itself succeeds — and a
-    # failing command substitution in a plain assignment kills the whole
-    # script under `set -e`. This is the identical bug class documented in
-    # CSHL-CPT-REPORT.md's AZ-failover post-mortem, freshly reproduced here
-    # while testing THIS fix: checkpoint-20 legitimately has no
-    # model.safetensors (that's the point of the check), so the very first
-    # loop iteration silently killed the script before it could report
-    # "incomplete — skipping" — see the acceptance-test log below.
-    HAS_WEIGHTS=$(aws s3 ls "${RESUME_FROM%/}/$c/model.safetensors" 2>/dev/null | wc -l) || true
-    HAS_STATE=$(aws s3 ls "${RESUME_FROM%/}/$c/trainer_state.json" 2>/dev/null | wc -l) || true
-    if [ "${HAS_WEIGHTS:-0}" -ge 1 ] && [ "${HAS_STATE:-0}" -ge 1 ]; then
-      RESUME_CKPT_NAME="$c"; break
-    fi
-    echo "[train.sh] $c is incomplete (missing model.safetensors and/or trainer_state.json) — skipping, trying older"
+    COMPLETE=1
+    for f in $REQUIRED_CKPT_FILES; do
+      # `|| true` is load-bearing: under `set -o pipefail` (part of this
+      # script's own `set -euo pipefail`), `aws s3 ls <missing-key> | wc -l`
+      # reports ls's nonzero exit even though wc -l itself succeeds, and a
+      # failing command substitution in a plain assignment kills the whole
+      # script under `set -e`. Identical bug class to CSHL-CPT-REPORT.md's
+      # AZ-failover post-mortem, freshly reproduced here while testing THIS
+      # fix the first time it was written.
+      HAS=$(aws s3 ls "${RESUME_FROM%/}/$c/$f" 2>/dev/null | wc -l) || true
+      [ "${HAS:-0}" -ge 1 ] || { COMPLETE=0; break; }
+    done
+    [ "$COMPLETE" -eq 1 ] && { RESUME_CKPT_NAME="$c"; break; }
+    echo "[train.sh] $c is incomplete (missing one of: $REQUIRED_CKPT_FILES) — skipping, trying older"
   done
   [ -n "$RESUME_CKPT_NAME" ] || { echo "[train.sh] RESUME_FROM set but no COMPLETE checkpoint-* found under ${RESUME_FROM%/}/ — refusing"; exit 1; }
   echo "[train.sh] resuming from $RESUME_CKPT_NAME (verified complete)"

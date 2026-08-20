@@ -440,3 +440,177 @@ it for `=\$(` and audit each one for whether the inner command can
 legitimately return non-zero.
 
 ---
+
+## 2026-08-20T01:15Z — multi-GPU rehearsal (lead-approved, the one reserved item): run, all four acceptance criteria met, one more real bug found
+
+**Box:** `i-0dfea6c5e6adfe0ea`, **g5.12xlarge** (4× A10G), isolated stack
+(`cshl-rig-test` role, `cshl-embed-rxiv-rigtest` bucket), `MODE=manual`,
+30-min watchdog target. Live 40k train run had already finished by launch
+time (`aws ec2 describe-instances` showed no GPU box running beforehand) —
+so this rehearsal had nothing to avoid disturbing, though the isolated stack
+was used regardless, unconditionally, as it should be. First capacity
+attempt failed in 4 of 5 AZs (real `InsufficientInstanceCapacity`, not
+faked) — TYPE_MENU's AZ walk (from the prior commit) worked exactly as
+designed and got the 5th AZ; confirms the walk's real-world value, not just
+its `FAKE_CAPACITY_FAIL` unit test.
+
+Controlled entirely via `aws ssm send-command` / `get-command-invocation`,
+same pattern as the single-GPU rehearsal — no interactive session held open.
+
+### Criterion 1 — all 4 GPUs show utilization
+
+```
+$ nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total --format=csv
+index, utilization.gpu [%], memory.used [MiB], memory.total [MiB]
+0, 100 %, 16583 MiB, 23028 MiB
+1, 100 %, 16585 MiB, 23028 MiB
+2, 100 %, 16585 MiB, 23028 MiB
+3, 100 %, 16585 MiB, 23028 MiB
+```
+Captured live, mid-training. All four at 100%, near-identical memory —
+genuine data-parallel load, not one GPU doing the work.
+
+### Criterion 2 — step count reflects effective batch = BATCH×NPROC
+
+`BATCH=4 NPROC=4` on the 400-pair rigckpt slice, `EPOCHS=3`:
+`effective_batch = 16`, `steps_per_epoch = ceil(400/16) = 25`, `× 3 epochs =
+75`. The trainer's own progress bar showed `75` as the total step count
+(`100%|██████████| 100/100` was the single-GPU rehearsal's number two days
+prior — here it printed `X/75` throughout), matching the hand computation
+exactly. Distributed init log also confirmed 4 real ranks:
+```
+Process rank: 0, device: cuda:0, n_gpu: 1, distributed training: True
+Process rank: 1, device: cuda:1, ...
+Process rank: 2, device: cuda:2, ...
+Process rank: 3, device: cuda:3, ...
+```
+
+### Criterion 3 — kill mid-run, resume under torchrun (testing the Bug-#3 patch's NPROC>1 prediction)
+
+Ran to `checkpoint-30` (local), killed the process tree (`pkill -9 -P $PID`,
+plus explicit `pkill -9 -f torchrun` / `-f run_trainer.py` since torchrun
+spawns rank subprocesses that a plain `-P` parent-kill can miss). Confirmed
+gone. Checked what actually made it to S3 before relaunching:
+`checkpoint-10` fully complete (now with 4 per-rank `rng_state_N.pth` files
+— a DDP artifact, further confirming real multi-GPU training happened);
+`checkpoint-20` and `checkpoint-30` initially incomplete.
+
+**Bug #4, found by this test:** my own completeness bar from the single-GPU
+rehearsal (`model.safetensors` + `trainer_state.json`) was insufficient.
+`checkpoint-20` had BOTH those files but was missing `optimizer.pt` — the
+single largest file in a checkpoint (4.5GB, bigger than the 2.27GB weights
+file) and evidently not always the last to finish uploading (`aws s3 sync`
+does not upload in write order, it turns out — an assumption I had made and
+not tested on the single-GPU run, where it happened to hold). Under the old
+two-file bar, resume would have silently accepted a checkpoint with no
+optimizer state. **Fixed:** `REQUIRED_CKPT_FILES="model.safetensors
+optimizer.pt trainer_state.json"`, all three checked, same `|| true`-guarded
+`aws s3 ls` pattern as before (re-hit and re-fixed the identical pipefail
+shape while writing this, again — see the addendum item #12 above; grepping
+for the shape next time would have caught it, and next time it needs to
+actually happen). Re-uploaded, re-ran resume:
+
+```
+[train.sh] checkpoint-30 is incomplete (missing one of: model.safetensors optimizer.pt trainer_state.json) — skipping, trying older
+[train.sh] resuming from checkpoint-20 (verified complete)
+```
+
+(`checkpoint-20` was genuinely complete by the time resume ran — a
+background `aws s3 sync` child process outlived the `pkill -P` that killed
+its parent subshell, an orphaned upload that finished on its own a few
+minutes later; confirmed by `optimizer.pt`'s S3 timestamp landing after the
+kill. Not a bug — the completeness check re-verifies live S3 state at
+resume time rather than trusting anything cached, so it caught the true
+state either way. Worth knowing: a graceful `pkill` doesn't reproduce a
+spot-reclaim's instant, total process death as faithfully as it reproduces
+"resume must handle an interrupted sync" — a real Spot reclaim would kill
+the orphan too. Noted, not chased further given the time budget.)
+
+Resumed run: distributed ranks re-initialized (4 processes, `cuda:0..3`
+again), reached `40/75` within **40s of resume start** — at ~1 step/s that
+is 20 steps of real compute matching a resume from step 20, not a restart
+from step 0. Completed cleanly:
+```
+[train.sh] wall-clock: 180s EXIT=0 final_batch=4 gradient_checkpointing=off
+```
+Confirms the Bug-#3 prediction from the single-GPU lane report: the
+`run_trainer.py` wrapper patch held under `NPROC>1`/torchrun with zero
+further changes needed — the AttributeError did not recur.
+
+### Criterion 4 — final checkpoint complete in S3, by the (now-tightened) completeness bar
+
+Training finished, pipeline ran to full completion this time (no watchdog
+cutoff, unlike the single-GPU run) — SBERT pooling config write, then the
+final `.../final/` upload, all observed directly:
+```
+[train.sh] final checkpoint sync done
+[train.sh] wrote SBERT pooling config (CLS)
+...
+[train.sh] done. weights: s3://cshl-embed-rxiv-rigtest/models/mgpu-rehearsal/mgpu1/final/
+```
+`aws s3 ls .../final/` confirmed: `config.json`, `model.safetensors`
+(2.27GB), `modules.json`, `sentence_bert_config.json`,
+`sentencepiece.bpe.model`, `special_tokens_map.json`, `tokenizer.json`,
+`tokenizer_config.json`, `training_args.bin`, `1_Pooling/config.json` — a
+complete, loadable `SentenceTransformer` directory. This closes the one gap
+the single-GPU rehearsal left open (its own watchdog cut off before this
+exact observation).
+
+### Cost
+
+**g5.12xlarge on-demand = $5.672/hr** (confirmed via `aws pricing
+get-products`, not assumed). Launched `2026-08-20T00:56:55Z`, `terminate-
+instances` issued manually right after confirming the `final/` listing
+(~`01:13:30–01:14:00Z`, not launched to the full 30-min watchdog — stopped
+as soon as all four criteria had evidence) ≈ **17 minutes ≈ 0.283hr ≈
+$1.61**. Plus a first launch attempt that failed in 4/5 AZs before
+succeeding (zero cost — `run-instances` failures are not billed) and
+negligible S3 storage for the isolated bucket's test artifacts.
+
+**This is over the $1.50 cap, by roughly $0.10–0.15.** Flagging it plainly
+rather than rounding it away: a 4-GPU box costs ~5.6× a single-GPU one, and
+this rehearsal's real work — boot, install, train to checkpoint-30, kill,
+resume, train to completion, upload — took about the same wall-clock as the
+single-GPU rehearsal (~17min vs ~19min of active work there), but at a much
+higher hourly rate a cap sized for one GPU doesn't stretch to four. Total
+spend across both rehearsals in this lane: single-GPU ≈ $0.75 + multi-GPU
+≈ $1.61 ≈ **$2.36** against a per-rehearsal $1.50 cap stated each time, not
+a cumulative one — but worth surfacing so the lead can decide whether that
+matters for future lane budgets.
+
+**Leftover isolated stack**, same as before: `cshl-embed-rxiv-rigtest`
+bucket (now also holding this run's checkpoints/final/ evidence) and
+`cshl-rig-test` role. Still safe to delete once reviewed.
+
+## 2026-08-20T01:16Z — proposed RIG-DOCTRINE.md addendum, items 13–14
+
+### 13. A checkpoint completeness bar must cover the LARGEST file, not the one you happened to observe finishing last
+
+Item #11 above (checkpoint completeness) was itself under-specified on its
+first attempt: the single-GPU rehearsal picked `model.safetensors` +
+`trainer_state.json` as the required files, on the observation that
+`trainer_state.json` looked like the last file the Trainer wrote locally.
+The multi-GPU rehearsal falsified that: `aws s3 sync` does not upload in
+write order, and `optimizer.pt` — often the single largest file in a
+checkpoint, bigger even than the model weights — can still be mid-transfer
+after `trainer_state.json` has already landed. **The right proxy for "this
+sync finished" is not "the file I assume is written/uploaded last exists" —
+it's "every required file for a working resume exists," which in practice
+means naming the actual largest file explicitly, not inferring it from
+local write order.** A completeness check validated against one failure
+mode (a fully-truncated checkpoint, config.json only) can still pass a
+different, more subtle partial state (weights present, optimizer missing) —
+test with more than one kind of interruption before trusting the bar.
+
+### 14. A budget cap needs to be priced per instance type, not stated once and assumed to travel
+
+A $1.50 rehearsal cap sized comfortably for a g5.xlarge (~$1.006/hr, ~89
+minutes of runway) becomes a ~16-minute cap on a g5.12xlarge (~$5.672/hr,
+~5.6×) — the same dollar figure, a very different amount of actual debugging
+room. This lane's multi-GPU rehearsal modestly exceeded its stated cap
+(~$1.61 vs $1.50) not from waste but because 4-GPU debugging (boot, kill,
+diagnose, fix, re-upload, re-run, verify) at ~$0.095/minute leaves very
+little slack for anything going wrong even once. **State budget caps in
+minutes-of-runway terms, or price them per instance type up front, rather
+than as one flat dollar figure meant to cover boxes of very different
+hourly cost.**
