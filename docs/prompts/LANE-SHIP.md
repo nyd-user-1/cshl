@@ -585,3 +585,92 @@ verification of record is the Hub listing, not the box.
 
 Total elapsed 02:20Z → 03:05Z, of which ~40 min was `apt-get` against the degraded Ubuntu
 mirror. The S3 pull and the 2.1 GB Hub upload together took under five minutes.
+
+### 2026-08-20T03:41Z — TASK 1b COMPLETE: `NYSgpt/cshl-eval-v1` updated and verified
+
+```
+https://huggingface.co/datasets/NYSgpt/cshl-eval-v1
+private: true   repo_type: dataset   commit 8bbc0306e816a007eda130b736a4d7a67698eaae
+lastModified 2026-08-20T03:40:39Z    42 files
+```
+
+`verify-push.py` exit 0: **all 35 sent objects present at the sent byte size**, card present,
+repo private. The additions are the entire qpairs result set and every `.perquery.json`
+(which is what makes a paired significance test runnable against any arm without rescoring):
+
+```
+results/cshl_qp.json + .perquery        results-docdoc/cshl_qp.json + .perquery
+results/rrf_cshl_qp+fts.json            results/rrf_cshl_qp+medcpt+fts.json
+results/rrf_cshl_qp+cshl.json + .perquery
+results/rrf_cshl_qp+cshl+fts.json + .perquery
+results/rrf_cshl_qp+cshl+medcpt+fts.json + .perquery
+results/{cshl,medcpt,fts}.perquery.json   (the re-derived control runs)
+CSHL-CPT-REPORT.md                        56,518 bytes, md5 acad3c2a9506ab129f86ce8d2e0ff33d
+```
+
+**The 5 pre-existing benchmark files were kept, not clobbered** — `upload_folder` is additive,
+and the verifier lists them explicitly so "kept" is an observation rather than an assumption:
+`cshl-eval-v1.{docdoc,retrieval,subsample-2000}.jsonl`, `manifest.json`,
+`subsample-manifest.json`.
+
+Card fetched back: byte-identical (7,682 bytes) to the committed
+`scripts/publish-nsr/cards/cshl-eval-v1.md`. Report fetched back: md5 matches what was staged,
+and contains the `## The flip, made 2026-08-20` subsection.
+
+Same sequencing note as the encoder: the box **terminated before the waiter could read its
+marker** (`BOX STATE=shutting-down with NO marker in its log`). Its uploaded log confirms
+`UPLOADED … commit 8bbc0306`, `REPO-FILES 42`, `PUBLISH-DONE`. The Hub listing is still the
+proof; the log is corroboration.
+
+### 2026-08-20T03:41Z — WHAT IS **NOT** IN THE PUBLISHED REPORT, stated plainly
+
+The report changed on disk **after** the eval box had already synced it. Caught by comparing
+md5s rather than assuming the file I staged was the file I still had:
+
+```
+staged & published : md5 acad3c2a9506ab129f86ce8d2e0ff33d   56,518 bytes
+local now          : md5 32231ff3d4644b91365f8d339650091c   63,002 bytes
+```
+
+The difference is **106 uncommitted lines from the reranker lane** — a new
+`## The reranker run — 2026-08-20, cshl-RR` section reporting MESH R@10 0.4319 → **0.5238**
+(+21%) and nDCG@10 0.3190 → **0.4075** (+28%) from reranking `cshl_qp`'s top-50. That is a
+substantial result and it is **not on the Hub**.
+
+**I did not re-push it, deliberately.** It is another lane's work, it is *uncommitted*, and
+that lane's `g6e.2xlarge` (`i-0efe2e00b91aedceb`) is still running — so the section may still
+be moving. Publishing another lane's in-flight, uncommitted text under this lane's name is not
+a call I get to make, and a repo that is stale by one known section is better than one that is
+wrong in a way nobody wrote down.
+
+**Follow-up, for whoever owns it:** once the reranker lane commits, re-run
+
+```
+aws s3 sync <report + data/eval results> s3://cshl-embed-rxiv/publish-staging/cshl-eval-v1/
+SRC=s3://cshl-embed-rxiv/publish-staging/cshl-eval-v1/ REPO=NYSgpt/cshl-eval-v1 \
+  TYPE=dataset CARD=scripts/publish-nsr/cards/cshl-eval-v1.md ./scripts/publish-nsr/launch.sh
+python3 scripts/publish-nsr/verify-push.py NYSgpt/cshl-eval-v1 dataset \
+  s3://cshl-embed-rxiv/publish-staging/cshl-eval-v1/
+```
+
+The staging prefix is left in place on purpose: it is the record of exactly what was pushed,
+and it is what the verifier compares against.
+
+### 2026-08-20T03:41Z — boxes and spend, counted rather than claimed
+
+Both publish boxes self-terminated. **This lane started nothing else and has nothing running.**
+
+Deliberately not saying "no boxes are running", because that sentence was wrong when the
+qpairs lane wrote it. `describe-instances` right now:
+
+| instance | type | state | whose |
+|---|---|---|---|
+| `i-08d4dfab74ff44054` cshl-serve-cshl | t3.large | running | **this lane's** — the serve box, always-on by design |
+| `i-0efe2e00b91aedceb` cshl-train-20260819-232838-train | g6e.2xlarge | running | reranker lane |
+| `i-0e127cdcccce9f9d0` cshl-rr-score-…-score | g5.xlarge | shutting-down | reranker lane |
+| `i-09b1bbbe15bf3b7f8` nsr-serve | t3.large | running | the sibling NSR program |
+| `i-01f8ee6fe1245d710` 44b-web | t4g.small | running | unrelated project |
+
+This lane's spend: two `t3.small` publish boxes (`$0.0208/hr`) for ~46 and ~52 min ≈ **$0.03**,
+plus a few hundred KB of S3. The serve box was already running and its cost is unchanged by
+the reweight. **No GPU was launched by this lane and no training was started**, per the fence.
