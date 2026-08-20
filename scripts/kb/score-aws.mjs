@@ -46,7 +46,7 @@ function retrievalConfig() {
       type: 'BEDROCK_RERANKING_MODEL',
       bedrockRerankingConfiguration: {
         numberOfRerankedResults: Math.min(POOL, 100),
-        modelConfiguration: { modelArn: `arn:aws:bedrock:${REGION}::foundation-model/amazon.rerank-v1:0` },
+        modelConfiguration: { modelArn: `arn:aws:bedrock:${REGION}::foundation-model/cohere.rerank-v3-5:0` },
       },
     }
   }
@@ -99,6 +99,7 @@ console.log(`AWS KB ${KB_ID} mode=${MODE} pool=${POOL} queries=${QUERIES.length}
 const res = await pool(QUERIES, CONC, async (qq) => [qq.qid, await retrieve(qq.text)])
 const ranked = new Map(res.map((r) => [r[0], r[1]]))
 const errs = res.filter((r) => r[2]).length
+if (errs) console.log('first error:', res.find((r) => r[2])[2])
 const acc = {}
 for (const qq of QUERIES) {
   const m = metrics(ranked.get(qq.qid) ?? [], QRELS.get(qq.qid))
