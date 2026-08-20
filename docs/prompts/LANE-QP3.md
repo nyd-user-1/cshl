@@ -778,3 +778,84 @@ instance   i-0d0898e8384ca6a11   g6.2xlarge   subnet-0200d8f947fcf9090   08:48:4
 ```
 `g6.2xlarge` this time — capacity refused in one AZ, taken in the next, so the
 run gets the cheaper box I wanted originally ($0.97760/h vs $1.21200/h).
+
+---
+
+## 2026-08-20T09:24–09:29Z — RUN 2: the slice is BUILT and PROMOTED. Two gates disagreed; the miner was right.
+
+```
+[mine] 140,000/140,000 · 111 q/s · 1261s
+  struck: 95,322 own-gold · 28,337 frozen-benchmark gold
+  ANCE negatives/row: {"8":140000} · fallbacks: 0
+  rows on ANCE negatives: {MESH:45000, OAKW:50000, AUTHORKW:40000, EXTRACT:5000}
+  emitted negatives referencing frozen-benchmark gold papers: 0
+  rows repaired (negative text == positive text): 1        <- run 1 dropped this row; now repaired
+  ACCOUNTING: written 140,000 + unwritable 0 = 140,000 of 140,000    [gate] PASS
+```
+
+**Reproducibility, unplanned but worth having:** run 2's `gold_rank_hist` is
+**bit-identical** to run 1's — `top1 57,907 · top2 11,813 · … · 51-100 6,224`,
+`gold_struck 95,322` — across different GPU types (A10G vs L4) and independent
+query-embedding passes. The mine is deterministic.
+
+**The staging fix worked.** The 2.1 GiB slice reached
+`s3://cshl-embed-rxiv/prep/qp3/staging/` *before* verification ran, so when the
+box exited 1 the artifact survived. Run 1 lost 21 minutes to the opposite
+ordering.
+
+### Two independent checks disagreed. That is what the second one is for.
+
+```
+miner   (slug-level) : emitted negatives referencing frozen-benchmark gold: 0
+verify  (text-level) : slugs in cshl-eval-v1 gold: 9 · in cshl-eval-2k gold: 1
+```
+
+Resolved locally, from the corpus rather than by argument. Of the 31
+duplicate-`embed_text` groups, exactly **two** contain a gold paper:
+
+```
+2021.07.29.21261312  GOLD-v1/GOLD-2k  <-> 2021.07.29.454261  not-gold
+2023.10.19.562780    GOLD-v1          <-> 2024.11.07.622468  not-gold
+```
+
+So the emitted negatives are **legitimately non-gold papers** whose `embed_text`
+is byte-identical to a held-out paper's. The paper-level holdout held exactly;
+my text-level check was reporting first-wins `text -> slug` mapping artifacts as
+slug leaks (the two non-gold twins were mined as negatives for 9 different
+queries out of 1,120,000 negative slots).
+
+**What IS real, stated precisely:** to a text encoder those are the same
+document. So one held-out paper's text does appear in training — **as a
+negative**. Direction matters: training a gold paper's text as a negative can
+only make it *harder* to retrieve at eval. **This cannot inflate our result;
+if it does anything it costs us.** At 9 slots in 1,120,000 (0.0008%), it does
+nothing measurable. Reported, not fixed — a re-mine to remove it would cost
+$1.35 and 40 min to make our own numbers very slightly better.
+
+**Promoted** `staging/ -> train/qpairs3/` by server-side copy, byte sizes
+verified equal on both objects (`train.jsonl` 2,226,414,192 B). The manifest
+carries `disjointness.pass: true`, which is what `train.sh` refuses to train
+without.
+
+## 2026-08-20T09:29:14Z — Q2 BLOCKED on capacity, ladder widened
+
+`g6e.2xlarge` refused in all 4 AZs; `g6e.4xlarge` refused in all 4. **L40S
+capacity is at zero region-wide.**
+
+Re-priced the whole family rather than guessing, and found a rung I should have
+had from the start:
+
+```
+g6e.xlarge    $1.86100/h    4 vCPU    32 GiB   1x L40S 48 GB   <- CHEAPER than D8's type, same GPU
+g6e.2xlarge   $2.24208/h    8 vCPU    64 GiB   1x L40S 48 GB
+g6e.4xlarge   $3.00424/h   16 vCPU   128 GiB   1x L40S 48 GB
+g6e.8xlarge   $4.52856/h   32 vCPU   256 GiB   1x L40S 48 GB
+g6e.12xlarge $10.49264/h   48 vCPU   384 GiB   4x L40S          <- EXCLUDED: 3.5h = $36, over cap
+```
+
+Retrying `g6e.xlarge,g6e.2xlarge,g6e.4xlarge,g6e.8xlarge` every 90 s, stopping
+at the first success. Every rung is the same single L40S at batch 8 / 384
+tokens / 33.9 GB measured, so **which rung wins changes the host and nothing
+about the experiment.** Not trading down to a 24 GB card and not cutting
+`PASSAGE_MAX_LEN` to 256 — either would break comparability with QP2, which is
+the entire point of the run.
