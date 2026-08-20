@@ -936,3 +936,94 @@ ranking decisively.
   cshl-QP2 fusion makes it monotonically worse.
 - **Raising `hnsw.ef_search`.** Measured at 04:09Z: costs both arms 3.1% of top-10 equally. Not
   a free win, and it would break comparability with every published digit.
+
+---
+
+### 2026-08-20T06:55Z — ADDENDUM: my #1 contingency lever was already fired by the cshl-RR lane,
+on this model, while I was writing the verdict
+
+Found on the branch after committing, not by being told: `35f05b4 lane-rerank: QP2+cshl-RR —
+the system loss becomes a TIE (-0.0060, p=0.55)`, scored `2026-08-20T06:46:04Z` — four minutes
+before I finished the contingency ranking that put a reranker at #1. **These are their numbers,
+not mine; I did not produce them and have not re-derived them.** Recording them here because
+the contingency section above is stale without them.
+
+| arm (their file `cshl_qp2+cshl_rr.json`) | MeSH R@10 | AUTHORKW R@10 |
+|---|---:|---:|
+| cshl-QP2 raw (mine, matches my run exactly) | 0.5238 | 0.7642 |
+| **cshl-QP2 + cshl-RR reranked top-50** | **0.5488** | **0.8024** |
+| `ncbi/MedCPT` encoder — the brief's bar | 0.4569 | 0.8076 |
+
+The reranker added **+0.0382 to AUTHORKW**, against the +0.0434 that was needed. **It closes
+88% of the remaining author-keyword gap and lands 0.0052 short of the bar.** My estimate that
+the R@50 headroom made re-ranking the highest-value lever was right; the size of the move was
+almost exactly what the headroom predicted.
+
+**The comparison to make next, which nobody has run:** the reranker was applied to
+**cshl-QP2 alone** (pool R@50 = 0.8669). The better pool is **RRF(cshl-QP2 + FTS)**, whose
+AUTHORKW R@50 is **0.8775** — a full point more gold in the candidate set to reorder. Same
+cross-encoder, same pool size, strictly more to find. That is the cheapest remaining shot at
+0.8076 and it belongs to the cshl-RR lane, whose endpoint and model it needs:
+```sh
+ARMS="cshl_qp2,fts,rrf:cshl_qp2+fts,rerank:rrf_cshl_qp2+fts@http://<cshl-RR-ip>:8081" \
+  RERANK_POOL=50 EVAL_VERSION=cshl-eval-2k node scripts/eval/score.mjs
+```
+
+**One caveat that has to be stated, and the cshl-RR lane already states it correctly in their
+own file** (`"note": "SYSTEM arm: encoder retrieval + cross-encoder rerank of its top-50. Not
+an encoder-vs-encoder row."`): 0.8024 is *our system* against *MedCPT's bare encoder*. That is
+not the same kind of object. The honest system-vs-system comparison is theirs (`a7f4e24`: we
+lose to MedCPT's full stack by −0.0350, p=0.0002; `35f05b4`: with cshl-QP2 that becomes
+−0.0060, p=0.55, a tie). **My verdict above stands as stated because the brief's targets are
+MedCPT's encoder numbers and my arm is an encoder** — but nobody should quote 0.8024 against
+0.8076 as if it settled a like-for-like question.
+
+### 2026-08-20T06:55Z — the 0.5238 coincidence, checked rather than admired
+
+`0fd5a1b lane-rerank: cshl-RR trained and scored — MeSH R@10 0.4319 -> 0.5238 (+21%)` was
+committed **hours before my encoder existed**, and my cshl-QP2 scored **MeSH R@10 0.5238**.
+Identical to four decimal places. Given that this program's clearest published failure is *two
+arms scored from one model*, an aggregate that matches that precisely is a thing to test, not
+to enjoy:
+
+```
+MESH n = 1,241
+  cshl_qp2         650 hits -> 0.5238
+  cshl_qp+cshl_rr  650 hits -> 0.5238
+  per-query DISAGREEMENTS: 198   (qp2-only 99 | qp+rr-only 99)
+  keys in same order: true · hits10 vectors byte-identical: FALSE
+```
+
+**A genuine coincidence.** The two systems disagree on **198 of 1,241 queries** — 16% — and
+the disagreement happens to be perfectly symmetric at 99 each way, which is the only reason the
+totals tie. Different arms, same aggregate.
+
+It is also a real finding rather than a curiosity: **the new encoder alone equals the old
+encoder plus a cross-encoder reranker on MeSH.** cshl-QP2 delivers, for one 152-minute training
+run and no extra serving cost, what cshl-QP needed a second model and a rerank hop at query
+time to reach. And the two are demonstrably finding *different* documents, which is exactly the
+condition under which stacking them helps — as the 0.5488 above shows it does.
+
+Lastly, the honest note about the aggregate: two arms at R@10 0.5238 that disagree on 16% of
+queries is the clearest possible argument for the paired per-query testing this lane added
+tonight. Two identical headline numbers, two different systems.
+
+### 2026-08-20T06:55Z — working-tree hazard, disclosed
+
+This lane is not alone in the working tree. Three lanes (`lane-win`, `lane-rerank`,
+`lane-proof`) committed to it tonight, and the checked-out branch **changed under me** from
+`lane/rxiv-load` to `lane/proof-page` mid-run. Two consequences, both mine to disclose:
+
+- **My commit `1d9c5d5` swept in two files that are not mine** — `scripts/enrich-openalex-cshl.mjs`
+  and `scripts/mine/oakw.mjs` — because I used `git add -A scripts/`. Nothing was deleted or
+  overwritten; they were untracked and are now committed, possibly mid-edit. Not rewritten by
+  me: `lane/proof-page` is shared and rewriting its history to tidy my own mistake would be a
+  worse error than the mistake.
+- **The same thing happened to me in reverse**: `35f05b4` (lane-rerank) contains 80 lines of
+  *this* file, my uncommitted `LANE-WIN.md` text, swept into their commit the same way.
+- **My commits are on `lane/proof-page`, not `lane/rxiv-load`.** `7364a1c` and `d4c2359` reached
+  `lane/rxiv-load` and `main`; `1d9c5d5` — the one carrying THE RESULT — has not. Brendan or the
+  ship lane should cherry-pick it where it belongs; I am not moving branches under three other
+  lanes at 07:00Z.
+
+`git add -A` in a shared tree is the hazard. `git add <explicit paths>` is the fix.
