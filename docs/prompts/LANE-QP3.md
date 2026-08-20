@@ -609,3 +609,172 @@ the resolved directory as the first line of output, so every result carries its
 own provenance. Per-family works the same way and reproduces the published MESH
 row (`0.5238` vs `0.4569` on 1,241 queries). All Q6/Q7 command lines in this
 document are corrected to pass `EVAL_VERSION=cshl-eval-2k`.
+
+---
+
+## 2026-08-20T08:36Z — what QP3 can and cannot attribute (stated before the result, not after)
+
+D3 called for "a clean single-variable experiment — protect that property above
+all else." **D8 supersedes D3 and is deliberately not that experiment**, and the
+morning report must not borrow D3's language for D8's run. Against QP2, this
+slice changes **three** things at once:
+
+| | QP2 (100k) | QP3 (140k) | changed |
+|---|---:|---:|---|
+| MESH | 55,000 | 45,000 | **−10,000** |
+| AUTHORKW | 40,000 | 40,000 | — |
+| OAKW | 0 | 50,000 | **+50,000, a new family** |
+| EXTRACT | 5,000 | 5,000 | — |
+| negatives | lane-mine | **ANCE-remined** | **yes** |
+
+So: if QP3 beats QP2 on AUTHORKW, **this run cannot say how much of that came
+from ANCE negatives versus from OAKW's 50k keyword-shaped pairs.** That
+attribution needs a fourth run holding one lever fixed. D8 asks for the win, not
+the ablation, and that is a legitimate choice — chaining three levers is the
+fastest route to the target. But it is an attribution the report must decline to
+make rather than imply.
+
+**The risk this creates, named now:** MESH loses 10,000 pairs, and MeSH is the
+family we currently WIN (`cshl_qp2` 0.5238 vs `medcpt` 0.4569, +0.0669,
+p = 0.0159 — re-derived above). A slice tuned to close the AUTHORKW gap can pay
+for it out of the MeSH win. If QP3 comes back AUTHORKW-up and MESH-down, that is
+not a win with a caveat — it is a trade, and the report will present it as one,
+with both McNemar tests, and leave the keep/discard call to Brendan. The
+headline "we beat MedCPT on MeSH" belongs to QP2 and does not automatically
+transfer.
+
+`cshl_qp2` remains fully intact — table `preprint_embeddings_cshl_qp2` (433,449
+rows, HNSW), weights in S3, results scored — so QP3 losing costs nothing but the
+box time. That is the property actually worth protecting here.
+
+---
+
+## 2026-08-20T08:31–08:45Z — guards exercised while the mine ran (no GPU, $0)
+
+**1. The cross-arm digest guard fires.** `qemb-from-run.mjs` is what Q5 leans
+on, and it exists because two arms were once scored from one model in this
+program — same dim, same row count, same query strings, plausible floats, no
+error anywhere. Fed QP2's query vectors under the name `cshl_qp3`:
+
+```
+distinct from qemb/bge-m3.jsonl   OK
+distinct from qemb/cshl.jsonl     OK
+distinct from qemb/cshl_qp.jsonl  OK
+FATAL: byte-identical to qemb/cshl_qp2.jsonl (md5 7eadd492…) — two arms, one model. Refusing to write.
+```
+Nothing written. Verified live rather than assumed.
+
+**2. Duplicate corpus text, measured because a verification depends on it.**
+The box's stage-4 check maps `embed_text -> slug` to test the emitted *text-only*
+slice against the paper-level holdout, keeping the first slug per identical text.
+Hash-only pass over the local sidecar, bounded memory, no DB:
+
+```
+rows with embed_text : 433,449
+distinct embed_text  : 433,418
+rows sharing a text  :      31   (0.0072%), all pairs
+```
+So that cross-check is precise to within 31 papers in 433,449, and it is a third
+line of defence regardless — `from-mine.mjs` and `mine-ance.mjs` both gate on
+actual slugs. It also bounds the related question: at most 31 papers could ever
+appear as both a positive and a negative via identical text, which is exactly
+what the writer's `neg.some(t => t === posText)` check catches.
+
+**3. My own error, logged.** I ran `coverage-gate.mjs` against `cshl_qp3` to
+prove it fails on an empty table — while the mine held 16 concurrent readers on
+Neon. It timed out at 120 s. The mine was unaffected (107 q/s through the
+window), but adding heavy aggregate scans to a loaded database to test something
+off the critical path was careless. The empty-table check belongs at Q5, where
+the gate runs anyway. No further DB queries until the mine completes.
+
+---
+
+## 2026-08-20T08:45:43Z — RUN 1 FAILED at its last gate. The mine was perfect; my gate was not.
+
+`i-04addd198e067c44f` terminated with `rc=1` and **no slice in S3**. The `.rc`
+sentinel is why that was known in seconds rather than inferred from a missing
+artifact.
+
+### The mine itself did everything it was supposed to
+
+```
+[mine] 140,000/140,000 · 111 q/s · 1260s elapsed
+retrieved 140,000 x top-100
+  struck: 95,322 own-gold · 28,337 frozen-benchmark gold · 606,906 discarded (SKIP_TOP=5)
+  kept 140,000 queries with >= 4 negatives · dropped 0 for too few
+  ANCE negatives/row: {"8":140000}
+  rows on ANCE negatives: {OAKW:50000, MESH:45000, AUTHORKW:40000, EXTRACT:5000}
+  emitted negatives referencing frozen-benchmark gold papers: 0 (must be 0)
+```
+
+Every family got ANCE negatives, every row got the full 8, no row needed the
+inherited-negative fallback, and the benchmark-leak gate emitted zero. **Neon
+load, measured:** 140,000 HNSW top-100 lookups over 433,449 rows at
+`ef_search=200`, 16 concurrent, **21 min at 111 q/s sustained**.
+
+### The dead gate's exposure, now measured at production scale
+
+The gold-rank histogram makes it exact rather than arguable:
+
+```
+queries whose gold appeared anywhere in top-100 : 116,311
+golds struck during negative collection         :  95,322
+  at ranks 1-5  (SKIP_TOP would have discarded) :  82,974
+  at ranks >=6  (SKIP_TOP does NOT cover)       :  12,348   <- would have been poisoned
+                                                = 8.8% of the slice
+```
+
+**12,348 training rows — 8.8% of the slice — would have carried their own
+correct answer as a hard negative** under the pre-fix code. That is the bug the
+`slice-slugs` shape fixed, quantified on the real run rather than on a 40-row
+fixture.
+
+### What actually failed: my gate, twice over
+
+```
+  unwritable for missing text: 0 · rejected because the positive appeared as its own negative: 1
+wrote 139,999 pairs
+ABORT: final slice is 139999 lines, expected 140000
+```
+
+One row in 140,000 tripped the belt-and-braces text check — a negative whose
+*text* equals the positive's. That is one of the **31 duplicate-`embed_text`
+pairs** measured at 08:45Z: two different papers, genuinely different slugs, so
+the slug-level gate cannot see it and the text check is the only thing that can.
+**The check was right.** My two reactions to it were wrong:
+
+1. **Wrong remedy.** Dropping the offending negative repairs the row — 7 remain,
+   above `MIN_NEGS=4`. Dropping the ROW costs a training pair *and* silently
+   changes the FAMILY_TAKE mix that was verified upstream. Now repairs, and the
+   count is reported as `rows_repaired_...` rather than `rows_rejected_...`.
+2. **Wrong ordering, and this is the expensive one.** Verification ran BEFORE the
+   upload, so a failing gate terminated the box — with its `DeleteOnTermination`
+   volume — and destroyed 21 minutes of correct, expensive work. **A verification
+   step must never be capable of destroying the artifact it is verifying.** The
+   slice now goes to `prep/qp3/staging/` first, is gated there, and is promoted
+   to `train/qpairs3/` by server-side copy only on PASS. A failed run now leaves
+   its artifact behind for inspection instead of a log describing something that
+   no longer exists.
+
+The bare equality is also gone, replaced by an accounting identity —
+`written + unwritable == expected` **and** `unwritable == 0` — which rejects real
+loss while tolerating a legitimate repair.
+
+**A third bug caught before it shipped:** the new promote loop was written as
+`aws s3 cp .../\$f`, which bash reads as the literal string `$f`. It would have
+tried to copy a file named `$f` four times. Found by expanding the loop and
+printing the resolved keys instead of trusting it.
+
+### Cost of my error
+
+33.7 min x $1.21200/h = **$0.68**, itemised as waste below, not folded into the
+phase total.
+
+## 2026-08-20T08:48:49Z — RUN 2 fired
+
+```
+run_id     20260820-044828-prep
+instance   i-0d0898e8384ca6a11   g6.2xlarge   subnet-0200d8f947fcf9090   08:48:49Z
+```
+`g6.2xlarge` this time — capacity refused in one AZ, taken in the next, so the
+run gets the cheaper box I wanted originally ($0.97760/h vs $1.21200/h).

@@ -276,7 +276,18 @@ const writtenBy = { ance: {}, inherited: {} }
     }
     const posText = r.posText ?? (r.posSlug ? text.get(r.posSlug) : null)
     if (!posText || neg.length < MIN_NEGS) { unresolved++; continue }
-    if (neg.some((t) => t === posText)) { posAsNeg++; continue }   // belt and braces over the slug gate
+    // REPAIR, don't discard. A negative whose TEXT equals the positive's is a
+    // different paper carrying identical embed_text — 31 such pairs exist in the
+    // 433,449-row corpus, measured. The slug-level gate cannot see it because the
+    // slugs genuinely differ. Dropping that one negative fixes the row; dropping
+    // the ROW costs a training pair and, worse, silently changes the FAMILY_TAKE
+    // mix that was verified upstream. It happened once in 140,000 on the first
+    // full run and aborted a 33-minute box at its last step.
+    if (neg.some((t) => t === posText)) {
+      posAsNeg++
+      neg = neg.filter((t) => t !== posText)
+      if (neg.length < MIN_NEGS) { unresolved++; continue }
+    }
     if (!ws.write(JSON.stringify({ query: r.text, pos: [posText], neg }) + '\n')) await new Promise((d) => ws.once('drain', d))
     written++
     writtenBy[usedAnce ? 'ance' : 'inherited'][r.family ?? 'MIXED'] = (writtenBy[usedAnce ? 'ance' : 'inherited'][r.family ?? 'MIXED'] ?? 0) + 1
@@ -291,11 +302,12 @@ writeFileSync(join(dirname(OUT), 'manifest.json'), JSON.stringify({
   negatives_source: writtenBy,
   rows_unwritable_for_missing_text: unresolved,
   rows_fell_back_because_ance_negatives_had_no_text: anceUnresolved,
-  rows_rejected_positive_appeared_as_negative: posAsNeg,
+  rows_repaired_positive_appeared_as_negative: posAsNeg,
   disjointness: { pass: leaks === 0, checked_against: join(EVAL_DIR, 'qrels.tsv'),
                   frozen_benchmark_papers: evalKeys.size, emitted_references_to_gold_papers: leaks },
 }, null, 2))
 console.log(`\nwrote ${written.toLocaleString()} pairs -> ${OUT}`)
 console.log(`  by negatives source: ANCE ${JSON.stringify(writtenBy.ance)} · inherited ${JSON.stringify(writtenBy.inherited)}`)
 console.log(`  fell back to inherited negatives because ANCE text was missing: ${anceUnresolved}`)
-console.log(`  unwritable for missing text: ${unresolved} · rejected because the positive appeared as its own negative: ${posAsNeg} (must be 0)`)
+console.log(`  unwritable for missing text: ${unresolved} (must be 0) · rows repaired by dropping a negative whose text equals the positive: ${posAsNeg}`)
+console.log(`  ACCOUNTING: written ${written.toLocaleString()} + unwritable ${unresolved} = ${(written + unresolved).toLocaleString()} of ${ok.length.toLocaleString()} mined rows`)

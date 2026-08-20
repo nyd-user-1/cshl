@@ -123,7 +123,39 @@ node --max-old-space-size=24000 scripts/train/mine-ance.mjs
 
 FINAL_N=$(wc -l < data/train/$SLICE_NAME/train.jsonl)
 say "final slice: $FINAL_N pairs"
-[ "$FINAL_N" = "$EXPECT_PAIRS" ] || { say "ABORT: final slice is $FINAL_N lines, expected $EXPECT_PAIRS"; exit 1; }
+
+# ── 4b. STAGE THE ARTIFACT BEFORE VERIFYING IT ──────────────────────────────
+# The first full run mined all 140,000 rows correctly in 21 minutes and then
+# ABORTED at an exact-equality line-count gate that was off by one — for a
+# legitimate reason — and the box terminated with its EBS volume, taking the
+# whole mine with it. Verification must never be the thing that destroys the
+# work it is verifying. The slice goes to a STAGING prefix first; it is promoted
+# to train/ only after the gates pass, and a failed run leaves its artifact
+# behind for inspection instead of a log describing something that no longer
+# exists. The promote is a server-side S3 copy: instant, no re-upload.
+say "staging slice -> s3://$BUCKET/$PREFIX/staging/ (before verification, so a failed gate cannot destroy it)"
+aws s3 cp data/train/$SLICE_NAME/train.jsonl   s3://$BUCKET/$PREFIX/staging/train.jsonl   --only-show-errors
+aws s3 cp data/train/$SLICE_NAME/manifest.json s3://$BUCKET/$PREFIX/staging/manifest.json --only-show-errors
+aws s3 cp data/train/$SLICE_NAME-base/slice-slugs.jsonl s3://$BUCKET/$PREFIX/staging/slice-slugs.jsonl --only-show-errors
+aws s3 cp data/train/$SLICE_NAME-base/manifest.json     s3://$BUCKET/$PREFIX/staging/base-manifest.json --only-show-errors
+say "staged."
+
+# The gate is an ACCOUNTING IDENTITY, not a bare equality: every mined row must
+# be accounted for as either written or explicitly unwritable, and unwritable
+# must be zero. That rejects real loss while tolerating a legitimate repair.
+$PY - <<PYEOF
+import json, sys
+m = json.load(open('/opt/qp3/data/train/$SLICE_NAME/manifest.json'))
+written    = m['pairs']
+unwritable = m.get('rows_unwritable_for_missing_text', 0)
+repaired   = m.get('rows_repaired_positive_appeared_as_negative', 0)
+expect     = $EXPECT_PAIRS
+print(f"[gate] written {written} + unwritable {unwritable} = {written+unwritable} (expect {expect})")
+print(f"[gate] rows repaired (negative text == positive text): {repaired}")
+ok = (written + unwritable == expect) and unwritable == 0 and written == expect
+print("[gate] PASS" if ok else "[gate] FAIL")
+sys.exit(0 if ok else 1)
+PYEOF
 
 # ── 5. independent verification of the emitted slice ────────────────────────
 say "STAGE 4 — verifying the emitted slice from source, not from the miner's word"
@@ -178,9 +210,9 @@ PYEOF
 say "verification passed"
 
 # ── 6. upload ───────────────────────────────────────────────────────────────
-say "uploading slice -> s3://$BUCKET/train/$SLICE_NAME/"
-aws s3 cp data/train/$SLICE_NAME/train.jsonl    s3://$BUCKET/train/$SLICE_NAME/train.jsonl    --only-show-errors
-aws s3 cp data/train/$SLICE_NAME/manifest.json  s3://$BUCKET/train/$SLICE_NAME/manifest.json  --only-show-errors
-aws s3 cp data/train/$SLICE_NAME-base/manifest.json    s3://$BUCKET/train/$SLICE_NAME/base-manifest.json --only-show-errors
-aws s3 cp data/train/$SLICE_NAME-base/slice-slugs.jsonl s3://$BUCKET/train/$SLICE_NAME/slice-slugs.jsonl --only-show-errors
+# PROMOTE from staging — server-side copies, nothing re-uploaded.
+say "promoting staging -> s3://$BUCKET/train/$SLICE_NAME/"
+for f in train.jsonl manifest.json slice-slugs.jsonl base-manifest.json; do
+  aws s3 cp "s3://$BUCKET/$PREFIX/staging/$f" "s3://$BUCKET/train/$SLICE_NAME/$f" --only-show-errors
+done
 say "DONE. pairs=$FINAL_N"
