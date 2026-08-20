@@ -1140,6 +1140,63 @@ close this; better retrieval would.
 **Spend: $0.23** (one `g5.xlarge`, 14 min, both cells, `COMPARE-EXIT=0`, both uploads
 verified by `head-object` before shutdown) against the $0.75 the lead authorised.
 
+## The final system row — `cshl-QP2` + `cshl-RR` vs MedCPT's full stack
+
+The system comparison above was run against `cshl-QP`. `cshl-QP2` (the win lane's
+100k-weighted retrain) landed later the same night, and the reranker was re-run over **its**
+top-50 — the same `cshl-RR` checkpoint, untouched, because a cross-encoder scores
+(query, document) text and is indifferent to which encoder built the pool.
+
+**The verdict changes from a significant loss to a statistical dead heat.**
+
+| comparison | scope | R@10 | Δ | *p* | 95% CI |
+|---|---|---|---:|---:|---|
+| **`QP2`+`cshl-RR` vs `MedCPT`+`MedCPT-CE`** | blended | 0.6450 vs 0.6510 | **−0.0060** | **0.5543** | [−0.024, +0.013] |
+| | MESH | **0.5488** vs 0.5246 | **+0.0242** | 0.0632 | [−0.001, +0.048] |
+| | AUTHORKW | 0.8024 vs 0.8577 | −0.0553 | 3.9e-5 | [−0.080, −0.030] |
+| *(for contrast, the `QP` system)* | blended | 0.6160 vs 0.6510 | −0.0350 | 0.0002 | [−0.054, −0.016] |
+| `cshl-RR`'s lift on QP2 | blended | 0.6450 vs 0.6150 | +0.0300 | 9.9e-5 | [+0.016, +0.045] |
+| | MESH | +0.0250 | | 0.0171 | [+0.005, +0.045] |
+| | AUTHORKW | +0.0382 | | 0.0009 | [+0.016, +0.059] |
+| encoder upgrade, at system level | blended | 0.6450 vs 0.6160 | +0.0290 | 2.8e-5 | [+0.016, +0.042] |
+
+### Full matrix, R@10 / nDCG@10
+
+| system | AUTHORKW | MESH |
+|---|---|---|
+| `cshl_qp` | 0.7497 / 0.6395 | 0.4319 / 0.3190 |
+| `cshl_qp` + `cshl-RR` | 0.7668 / 0.6746 | 0.5238 / 0.4075 |
+| `cshl_qp2` encoder | 0.7642 / 0.6502 | 0.5238 / 0.3881 |
+| **`cshl_qp2` + `cshl-RR`** | 0.8024 / 0.7002 | **0.5488 / 0.4193** |
+| `medcpt` | 0.8076 / 0.6885 | 0.4569 / 0.3373 |
+| `medcpt` + `MedCPT-CE` | **0.8577 / 0.7741** | 0.5246 / 0.4047 |
+| `medcpt` + `cshl-RR` | 0.8235 / 0.7225 | 0.5439 / 0.4236 |
+
+### What changed, and what did not
+
+- **Blended is now a tie** (−0.0060, *p* = 0.55, CI straddling zero). The −0.0350 loss is gone,
+  and the encoder upgrade accounts for essentially all of it: +0.0290 at system level,
+  *p* = 2.8e-5. **This is the prediction from the previous section confirmed** — the gap was
+  the encoder, and a better encoder closed it.
+- **MeSH now leads**: 0.5488 vs 0.5246, +0.0242. Honest caveat: *p* = 0.063 and the CI is
+  [−0.001, +0.048], so this is **a lead, not a proven win** — it does not clear the bar and
+  should not be quoted as if it did. `cshl_qp2`+`cshl-RR` is nonetheless the best MeSH R@10
+  of any configuration tested, above `medcpt`+`cshl-RR` (0.5439).
+- **AUTHORKW is still a clear loss** (−0.0553, *p* = 3.9e-5), narrowed from −0.0909 but not
+  closed. This remains the single lever on the system comparison.
+- The reranker keeps earning its place on the better encoder — +0.0300 blended, significant
+  in **both** families, and its AUTHORKW lift actually grew (+0.0382 vs +0.0171 on QP).
+
+**Caveat carried forward:** `cshl-RR` is fine-tuned on this domain; `MedCPT-CE` is zero-shot
+here. And unlike the `cshl_qp` and `medcpt` pools, **the `cshl_qp2` pool could not be
+cross-checked against a published encoder row, because none existed when this ran** — the
+encoder numbers in the matrix above are this lane's own derivation from its own top-50 dump
+and are offered to the win lane for confirmation.
+
+**Spend: $0.15** (one `g5.xlarge`, ~9 min, `SCORE-EXIT=0 UPLOAD-EXIT=0`), plus **$0.03**
+wasted on a box killed 80 seconds in — see the lane log; a stale S3 object let a preflight
+pass against a document set that did not contain QP2's pool.
+
 ## Open follow-ups
 
 1. **The Hugging Face push used the NSR-scoped token** (`/nsr/hf/token`), on Brendan's
@@ -1161,12 +1218,12 @@ verified by `head-object` before shutdown) against the $0.75 the lead authorised
 6. **Benchmark builder filename** is still `scripts/eval/build-rxiv-eval.mjs` while the
    artifact it builds is `cshl-eval-v1`. Cosmetic; left alone mid-flight to avoid breaking
    another lane's reference.
-7. ~~Score MedCPT's full system~~ — **DONE**, see "System vs system" above. We lose the
-   blended comparison (−0.0350, *p* = 0.0002), tie on MeSH, and lose on AUTHORKW. The gap
-   localises to the **encoder**: on an identical pool our reranker ties MedCPT's
-   cross-encoder blended and beats it on MeSH. **The successor follow-up is therefore an
-   encoder question, not a reranker one — close the AUTHORKW retrieval gap (R@50 0.8208 vs
-   0.8920) and the system comparison changes.**
+7. ~~Score MedCPT's full system~~ — **DONE**, and then **re-done on `cshl-QP2`**, which
+   turned the −0.0350 loss into a **−0.0060 tie** (*p* = 0.55) with a MeSH lead of +0.0242
+   (*p* = 0.063, not significant). See "The final system row". **The remaining lever is
+   AUTHORKW retrieval**, still −0.0553 against MedCPT's stack: `cshl_qp2` R@50 is 0.8669
+   there against MedCPT's 0.8920, so the pool still caps what any reranker can recover.
+   Closing that gap is now the whole game — it is an encoder question, not a reranker one.
 8. **CPU latency for the cross-encoder is unmeasured.** GPU is 150.8 ms p50 per query over 50
    candidates; the serving decision needs the CPU number too, and the current serve box is a
    `t3.large`.

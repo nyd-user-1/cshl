@@ -551,3 +551,83 @@ arms the same to three significant figures. It is not a hidden handicap on our s
 `ef` is not a free win worth invalidating the published numbers for, and the 0.4319-vs-0.4569
 gap is an encoder difference rather than an index artifact. $0.00, and one fewer thing the
 result can be argued away with.
+
+### 2026-08-20T05:57Z — TRAINING COMPLETE, clean, and this time the query upload worked
+
+```
+{'train_runtime': 8554.83, 'train_samples_per_second': 11.689, 'train_steps_per_second': 1.461,
+ 'train_loss': 0.21003, 'epoch': 1.0}
+[train.sh] wall-clock: 8620s EXIT=0 final_batch=8 final_effective_batch=8
+           gradient_checkpointing=off cross_device_negatives=off
+[train.sh] final checkpoint sync done
+[train.sh] wrote SBERT pooling config (CLS)
+[train.sh] embedded 2000 eval queries, dim 1024
+[train.sh] done. weights: s3://…/models/cshl-encoder-bge-m3/20260819-232838-train/final/
+```
+
+**12,500 steps at batch 8, one epoch over 100,000 pairs, EXIT=0, no OOM at any point.**
+`final_batch=8` is the batch we asked for — unlike last night, nothing was silently halved.
+`cross_device_negatives=off` is correct and deliberate at `NPROC=1`, and the script says so
+itself rather than leaving it to be inferred.
+
+**`AccessDenied` count in the entire box log: 0.** Last night's incident — `train.sh` §5b's
+query-vector upload denied and swallowed by `|| true`, discovered only after the box was gone
+— did not recur. The `write-eval-artifacts` inline policy held, because `launch.sh` only
+re-puts `read-dburl` by name and cannot clobber a policy it does not know about. That is a
+fix that was verified by being exercised, not by being remembered.
+
+**`embedded 2000 eval queries`, not 10,000.** `EVAL_VERSION=cshl-eval-2k` meant the box
+embedded the frozen benchmark's own 2,000 queries directly. Last night's qid-namespace trap
+(943 of the 2k's qids name *different queries* in v1) had nothing to bite on.
+
+Weights complete and byte-checked: `model.safetensors` **2,271,064,456 bytes**, identical in
+size to last night's — same 568M-parameter architecture, as it must be. Plus `1_Pooling/`,
+`modules.json` and `sentence_bert_config.json`, the CLS-pooling config whose absence would
+silently give mean pooling.
+
+Box `i-0efe2e00b91aedceb` self-terminated **06:00:38Z**. Lifetime 03:28:38 → 06:00:38 =
+**152 min = $5.68**, against the $5.60 projected at 03:34Z from the measured it/s. The watchdog
+at 06:24:31Z was never approached.
+
+### 2026-08-20T05:58Z — P1/P3 fired within 60s of the weights landing (lead addendum 2)
+
+**P1 — weights slimmed before four boxes could download them.** `final/` was **21.2 GiB**
+(three retained `checkpoint-*` dirs carrying 4.5 GB optimizer states each). `serve/` is
+**2.1 GiB, 10 objects**. Four boxes x 19 GiB not downloaded.
+
+**P3 — query vectors installed, and the guard that matters passed:**
+```
+2,000 rows -> 2,000 matched this benchmark   (zero missing: the qid trap did not fire)
+dim 1024 · norms [1.0000, 1.0000] · non-finite 0 · all-zero 0
+  distinct from qemb/bge-m3.jsonl   (b86fe21a81f6… vs 7eadd4928ce2…) OK
+  distinct from qemb/cshl.jsonl     (9be967585172… vs 7eadd4928ce2…) OK
+  distinct from qemb/cshl_qp.jsonl  (30c8a3e6490c… vs 7eadd4928ce2…) OK
+  distinct from qemb/medcpt.jsonl   (18ed37ddaffc… vs 7eadd4928ce2…) OK
+  distinct from qemb/specter2.jsonl (2e8911a7ccbb… vs 7eadd4928ce2…) OK
+md5 7eadd4928ce22fbc2c4ae27c8e761ca5
+```
+**`distinct from qemb/cshl_qp.jsonl` is the load-bearing line tonight.** cshl-QP and cshl-QP2
+are two fine-tunes of the same base model, on overlapping data, scored on the same queries —
+the two arms in this whole program most able to collide into "two arms, one model." They did
+not.
+
+### 2026-08-20T06:02Z — P2 fired: re-embed into the FOURTH table, N=4
+
+```
+box 0: i-00d51fd0f63ce6242   g6e.xlarge   subnet-0407bd1ff7e9d8c44
+box 1: i-02af1bf6e2a3cb916   g6e.xlarge   subnet-09e840612db030382  (3 AZs refused first)
+box 2: i-0b8320cd013cbb9db   g6e.xlarge   subnet-09e840612db030382  (3 AZs refused first)
+box 3: i-088e3a8e277a4b698   g6e.xlarge   subnet-09e840612db030382  (2 AZs refused first)
+EMB_TABLE=preprint_embeddings_cshl_qp2  DIM=1024  NORMALIZE=1  CAP=4000  PARTS=4
+```
+
+All four are `g6e.xlarge` (L40S), so the default Ada TEI image `89-1.8` is the correct one and
+no `TEI_IMAGE` override was needed. `preprint_embeddings_cshl_qp` is **not** touched — it may
+be serving production tonight.
+
+Query and document vectors now match in **both recipe and precision** on this arm: the corpus
+side goes through TEI at fp16 with `NORMALIZE=1`, and… the query side came from
+sentence-transformers at fp32 on the train box. Disclosed rather than glossed: that is the same
+mismatch the incumbent `cshl` arm has, and the opposite of `cshl_qp`, whose query vectors were
+recovered through TEI. It favours no one, but it is a difference between two arms' measurement
+and it should be on the record before the numbers are.

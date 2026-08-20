@@ -1332,3 +1332,88 @@ the win lane's own ledger still lists its re-embed as *projected*. The QP2 reran
 asked for is **queued, not skipped** — it is three commands against the rig already proven
 here, ≈$0.15, and `cshl-RR` needs no retraining for it (a cross-encoder scores (query,
 document) text and is indifferent to which encoder built the pool).
+
+---
+
+## 2026-08-20T06:30–06:46Z — QP2 landed; the queued rerank ran; the verdict flipped to a tie
+
+QP2 became usable at 06:2xZ: 433,449 vectors and `idx_pp_emb_cshl_qp2_hnsw` valid (3,386 MB,
+same shape as QP's). Its query embeddings were validated before use — the qid trap this
+program has been bitten by would surface exactly here and did not:
+
+```
+qemb/cshl_qp2.jsonl  2,000 lines · 2,000 distinct qids · 0 duplicates · dim 1024 (registry: 1024)
+  qids not in queries.jsonl: 0 · missing from qemb: 0 · all-zero vectors: 0   -> USABLE
+```
+
+**A gate I added an hour earlier did its job.** My first QP2 watcher fired on vector count
+alone. Retrieving then would have given QP2 an **exact** kNN pool while `cshl_qp`, `medcpt`
+and every published row used HNSW at `ef_search=100` — which the win lane measured as costing
+~3% of top-10 slots. QP2 would have quietly received a better pool than everything it was
+about to be compared against. Rearmed the watcher to require a **valid `hnsw` index** as well,
+and made `dump-candidates.mjs` **refuse** (exit 3) on a plan without `Index Scan` instead of
+printing a warning, with an explicit `ALLOW_SEQ_SCAN=1` escape. The refusal is now structural
+rather than something I have to remember.
+
+### G9 — a stale S3 object let a preflight pass against the wrong document set (my error)
+
+I renamed `docs.jsonl` to `docs-<width>.jsonl` when the compare rig needed two truncations,
+updated `compare-launch.sh`, and **did not update `score-launch.sh`**, which still pulled the
+literal name `docs.jsonl`. The old 72.8 MiB object — cshl_qp's 81,751 keys only — was still
+sitting in S3, so the preflight found it, said "docs present", and launched. QP2's pool needs
+**82,576** candidates, almost none of them in that file; the box would have scored nearly
+every candidate as an empty string and produced a confident, meaningless ranking.
+
+Caught by reading the launcher rather than by the result looking wrong. Box
+`i-050881493f805ff55` terminated ~80 s in (**$0.03**). Three fixes: `DOCS`/`MAXLEN` are now
+parameters, the stale object was **deleted** (verified first that `docs-900.jsonl`'s 156,874
+keys are a strict superset — 0 missing for both QP2's and QP's pools), and the old name now
+**refuses** rather than resolving (negative test: `DOCS=docs.jsonl` → exit 1).
+
+**Existence is not freshness.** The preflight checked that a key existed; nothing checked it
+was the right file. That is the same family as the 03:31Z IAM miss: a check that passes for
+the wrong reason is worse than no check. The relaunch confirmed the fix from the other side —
+`candidates with no resolved text: 0`, which is precisely the counter the bug would have lit up.
+
+### Result — `i-0a0a6b8d560df85ac`, SCORE-EXIT=0 UPLOAD-EXIT=0, p50 151.9 ms/query
+
+QP2's encoder alone (this lane's own derivation; **no published QP2 row existed to check
+against**, unlike QP and MedCPT — offered to the win lane for confirmation):
+AUTHORKW **0.7642** R@10 (+1.9% over QP), MESH **0.5238** (+21.3%), R@50 0.8669 / 0.6728.
+
+| | AUTHORKW R@10 / nDCG | MESH R@10 / nDCG |
+|---|---|---|
+| `cshl_qp2` encoder | 0.7642 / 0.6502 | 0.5238 / 0.3881 |
+| **`cshl_qp2` + `cshl-RR`** | **0.8024 / 0.7002** | **0.5488 / 0.4193** |
+| `medcpt` + `MedCPT-CE` | 0.8577 / 0.7741 | 0.5246 / 0.4047 |
+
+**THE FINAL SYSTEM ROW**
+
+| scope | ours | theirs | Δ | p | CI |
+|---|---|---|---:|---:|---|
+| blended | 0.6450 | 0.6510 | **−0.0060** | **0.5543** | [−0.024, +0.013] |
+| MESH | **0.5488** | 0.5246 | **+0.0242** | 0.0632 | [−0.001, +0.048] |
+| AUTHORKW | 0.8024 | 0.8577 | −0.0553 | 3.9e-5 | [−0.080, −0.030] |
+
+**The −0.0350 significant loss is now a −0.0060 tie (p = 0.55).** The encoder upgrade
+accounts for essentially all of it: `QP2+RR` vs `QP+RR` is **+0.0290, p = 2.8e-5**. That is
+the previous section's diagnosis — *the gap is the encoder, not the reranker* — confirmed by
+prediction rather than by hindsight.
+
+**Stated carefully:** MeSH now *leads* at +0.0242, but **p = 0.063 and the CI includes zero**.
+It is a lead, not a proven win, and must not be quoted as one. AUTHORKW remains a clear loss
+(−0.0553) and is now the only lever left on the system comparison — QP2's AUTHORKW R@50 is
+0.8669 against MedCPT's 0.8920, so the pool still caps what any reranker can recover.
+
+The reranker keeps paying on the better encoder: +0.0300 blended (p = 9.9e-5), significant in
+**both** families, with its AUTHORKW lift *growing* (+0.0382 vs +0.0171 on QP).
+
+### Spend
+
+| box | type | min | $ |
+|---|---|---:|---:|
+| `i-050881493f805ff55` killed (G9) | g5.xlarge | 1.3 | **0.03** |
+| `i-0a0a6b8d560df85ac` QP2 rerank | g5.xlarge | ~9 | **0.15** |
+
+**Lane total ≈ $2.45 of $5.00.** All boxes self-terminated or were terminated by me; none
+left running. Nothing published.

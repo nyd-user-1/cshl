@@ -54,7 +54,17 @@ console.log(`${ARM}: ${queries.length} queries, ${emb.size} query vectors, table
 const probe = queries.find((qq) => emb.has(qq.qid))
 const plan = await sql.query(`EXPLAIN SELECT key_number FROM ${spec.table} ORDER BY embedding ${OP} $1::vector LIMIT ${TOPK}`, [emb.get(probe.qid)])
 const ptext = plan.map((r) => Object.values(r)[0]).join(' | ').replace(/'\[[^\]]*\]'::vector/g, "'<vec>'::vector")
-console.log(`  plan: ${ptext.includes('Index Scan') ? 'Index Scan CONFIRMED' : 'WARNING no Index Scan — ' + ptext.slice(0, 200)}`)
+const indexScan = ptext.includes('Index Scan')
+console.log(`  plan: ${indexScan ? 'Index Scan CONFIRMED' : 'NO Index Scan — ' + ptext.slice(0, 200)}`)
+// REFUSE, don't warn. A sequential scan returns EXACT nearest neighbours, while
+// every other arm's pool was built by HNSW at ef_search=100 and loses ~3% of its
+// top-10 slots to the approximation (measured by the win lane). Mixing the two
+// silently hands whichever arm skipped the index a better pool — a bug that
+// would flatter a result and leave no trace in the output. Wait for the index.
+if (!indexScan && process.env.ALLOW_SEQ_SCAN !== '1') {
+  console.error(`REFUSING: ${spec.table} has no usable vector index yet, so this pool would be exact kNN while every other arm's is ANN at ef_search=${EF}. Build the index first (or set ALLOW_SEQ_SCAN=1 if you truly want an incomparable pool).`)
+  process.exit(3)
+}
 
 async function pool(items, conc, fn) {
   const out = new Array(items.length); let i = 0
