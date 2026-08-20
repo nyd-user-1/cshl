@@ -12,8 +12,10 @@
 // training converter. Same text budget in training, scoring and serving, or the
 // number does not transfer.
 //
-// Out: <out>/<arm>.lists.json   {arm, version, topk, metric, qids[], lists[][]}
-//      <out>/docs.jsonl         {key, text}  — deduped across all arms
+// Out: <out>/<arm>.lists.json      {arm, version, topk, metric, qids[], lists[][]}
+//      <out>/docs-<DOC_CHARS>.jsonl  {key, text} — deduped across arms. The width is IN
+//      the filename on purpose: two arms sharing a docs file at different truncations
+//      would be an unfair comparison that nothing downstream could detect.
 // Usage: ARM=cshl_qp EVAL_VERSION=cshl-eval-2k node scripts/rerank-nsr/dump-candidates.mjs
 import { neon } from '@neondatabase/serverless'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream } from 'node:fs'
@@ -31,6 +33,8 @@ const OUT = process.env.OUT ?? join(process.cwd(), 'data/reranker/eval', VERSION
 const TOPK = Number(process.env.TOPK ?? 50)
 const CONC = Number(process.env.CONC ?? 12)
 const DOC_CHARS = Number(process.env.DOC_CHARS ?? 900)
+const DOCS = process.env.DOCS ?? `docs-${DOC_CHARS}.jsonl`
+const SKIP_RETRIEVE = process.env.SKIP_RETRIEVE === '1'
 const EF = Number(process.env.EF_SEARCH ?? 100)
 
 const spec = REGISTRY[ARM]
@@ -65,7 +69,15 @@ const withRetry = async (fn, tries = 4) => {
 
 const lists = new Map()
 let done = 0
-await pool(queries, CONC, async (qq) => {
+const listsPath = join(OUT, `${ARM}.lists.json`)
+if (SKIP_RETRIEVE && existsSync(listsPath)) {
+  const prev = JSON.parse(readFileSync(listsPath, 'utf8'))
+  if (prev.topk !== TOPK || prev.metric !== spec.metric || prev.ef_search !== EF) {
+    throw new Error(`SKIP_RETRIEVE=1 but ${listsPath} was built with different retrieval settings — refusing to reuse it`)
+  }
+  prev.qids.forEach((id, i) => lists.set(id, prev.lists[i]))
+  console.log(`  SKIP_RETRIEVE=1 — reusing ${lists.size} lists from ${listsPath} (topk/metric/ef verified identical)`)
+} else await pool(queries, CONC, async (qq) => {
   const v = emb.get(qq.qid); if (!v) return
   const res = await withRetry(() => sql.transaction([
     sql.query(`SET LOCAL hnsw.ef_search = ${EF}`),
@@ -89,13 +101,13 @@ console.log(`wrote ${OUT}/${ARM}.lists.json — ${qids.length} queries, ${short}
 
 // Candidate text, deduped across arms so a second arm's dump appends nothing new.
 const seen = new Set()
-if (existsSync(join(OUT, 'docs.jsonl'))) {
-  for (const l of readFileSync(join(OUT, 'docs.jsonl'), 'utf8').split('\n')) { if (l) seen.add(JSON.parse(l).key) }
-  console.log(`  docs.jsonl already has ${seen.size} keys — appending only what is new`)
+if (existsSync(join(OUT, DOCS))) {
+  for (const l of readFileSync(join(OUT, DOCS), 'utf8').split('\n')) { if (l) seen.add(JSON.parse(l).key) }
+  console.log(`  `+DOCS+` already has ${seen.size} keys — appending only what is new`)
 }
 const need = [...new Set([...lists.values()].flat())].filter((k) => !seen.has(k))
 console.log(`  ${need.length} new candidate documents to resolve`)
-const ws = createWriteStream(join(OUT, 'docs.jsonl'), { flags: 'a' })
+const ws = createWriteStream(join(OUT, DOCS), { flags: 'a' })
 let wrote = 0
 for (let i = 0; i < need.length; i += 5000) {
   const batch = need.slice(i, i + 5000)
@@ -105,4 +117,4 @@ for (let i = 0; i < need.length; i += 5000) {
   console.log(`  resolved ${Math.min(i + 5000, need.length)}/${need.length}`)
 }
 ws.end()
-console.log(`wrote ${wrote} documents -> ${OUT}/docs.jsonl (${wrote}/${need.length} resolved)`)
+console.log(`wrote ${wrote} documents -> ${OUT}/${DOCS} (${wrote}/${need.length} resolved)`)

@@ -43,8 +43,18 @@ missing = sum(1 for lst in L['lists'] for k in lst if k not in docs)
 log(f'candidates with no resolved text: {missing} (scored as empty string, rank preserved by tie-break)')
 
 tok = AutoTokenizer.from_pretrained(A.model)
-model = AutoModelForSequenceClassification.from_pretrained(A.model, num_labels=1).to(DEV).eval()
-log('model loaded')
+# Do NOT force num_labels here. Passing num_labels=N when the published head is a
+# different size makes transformers silently REINITIALISE the classifier with
+# random weights — the model loads, scores, and reports a number that is not the
+# published model's at all. Load as published, then assert the shape we rely on.
+model = AutoModelForSequenceClassification.from_pretrained(A.model).to(DEV).eval()
+nl = model.config.num_labels
+mp = getattr(model.config, 'max_position_embeddings', None)
+log(f'model loaded: {A.model} · num_labels={nl} · max_position_embeddings={mp} · using max_len={A.max_len}')
+if nl != 1:
+    sys.exit(f'FATAL: num_labels={nl}, expected 1 — this scorer reads a single relevance logit.')
+if mp is not None and A.max_len > mp:
+    sys.exit(f'FATAL: --max-len {A.max_len} exceeds the model max_position_embeddings {mp}.')
 
 out = []
 lat = []

@@ -1037,10 +1037,10 @@ over 50 candidates is a second model and roughly 150 ms of extra GPU work per qu
 encoder row is one vector lookup. The encoder-only rows elsewhere in this report remain the
 encoder-vs-encoder claim and are unaffected by anything here.
 
-**MedCPT also publishes a cross-encoder** (`ncbi/MedCPT-Cross-Encoder`). Scoring MedCPT's
-*full* system — its encoder plus its reranker — against ours is the comparison that would
-settle the matter, and it **has not been run**. It is a named follow-up below, not a result.
-Until it exists, the honest summary is: *our system beats their encoder; our encoder does not.*
+**MedCPT also publishes a cross-encoder** (`ncbi/MedCPT-Cross-Encoder`), so beating their
+encoder is the weaker of the two available claims. **The full system-vs-system comparison has
+since been run — see the next section. We lose it.** The row above stands as written, but it
+is not the headline number; the one below is.
 
 ### Serving cost, measured
 
@@ -1054,6 +1054,91 @@ so this does not yet pick a serving tier.
 $0.14 for a rerun after an `AccessDenied` on the results prefix destroyed a completed scoring
 pass. All three boxes self-terminated. **Not pushed to Hugging Face** — that is a separate
 ruling by name.
+
+## System vs system — `cshl-QP`+`cshl-RR` against MedCPT's full stack
+
+Follow-up #7, run the same night. This is the comparison that decides whether the program has
+a better *retrieval system* than the in-domain baseline, and the answer is **no, not yet** —
+but the reason is specific, measurable, and not the reranker.
+
+### Method — each system at its own published or trained configuration
+
+Handicapping MedCPT would make a win worthless, so its cross-encoder ran at the config its
+model card specifies: `max_length=512`, `[[query, article]]` pairs, higher logit = more
+relevant. That needed wider documents than our own pipeline uses, and the gap is not
+cosmetic — **at our 900-character serving slice, 97.5% of candidate documents are truncated;
+at 2,000 characters, 30.1%** (mean 895 → 1,646 chars). MedCPT therefore got a 2,000-char
+document set built for it. `cshl-RR` ran at 900 chars / 256 tokens, which is both what it was
+trained on and what `api/_lib/embed.ts` actually sends — our system measured as it would
+serve, theirs measured at its published best.
+
+Both candidate pools were regenerated with each arm's own registry operator (`cosine <=>` for
+ours, `ip <#>` for MedCPT) and **verified against the published rows before use: all ten
+metrics reproduced exactly for both arms.** `rerank.py` was also hardened first — it no longer
+forces `num_labels`, because forcing a head size that does not match a published checkpoint
+makes `transformers` silently reinitialise the classifier with random weights and report a
+number that is not the published model's at all. Both models were confirmed to load with
+`num_labels=1` (MedCPT `max_position_embeddings=512`, ours 8192).
+
+### The 2×2 — pool × cross-encoder, R@10 / nDCG@10
+
+| system | AUTHORKW | MESH |
+|---|---|---|
+| `cshl_qp` encoder only | 0.7497 / 0.6395 | 0.4319 / 0.3190 |
+| **`cshl_qp` + `cshl-RR`** (ours) | 0.7668 / 0.6746 | **0.5238 / 0.4075** |
+| `medcpt` encoder only | 0.8076 / 0.6885 | 0.4569 / 0.3373 |
+| **`medcpt` + `MedCPT-CE`** (theirs) | **0.8577 / 0.7741** | 0.5246 / 0.4047 |
+| `medcpt` + `cshl-RR` *(cross cell)* | 0.8235 / 0.7225 | **0.5439 / 0.4236** |
+
+### Paired significance (exact McNemar + seeded bootstrap, `FAMILY=` slices)
+
+| comparison | scope | R@10 | Δ | *p* | 95% CI |
+|---|---|---|---:|---:|---|
+| **ours vs theirs, system vs system** | blended | 0.6160 vs 0.6510 | **−0.0350** | **0.0002** | [−0.054, −0.016] |
+| | MESH | 0.5238 vs 0.5246 | −0.0008 | **1.0000** | [−0.025, +0.024] |
+| | AUTHORKW | 0.7668 vs 0.8577 | −0.0909 | 2.3e-11 | [−0.117, −0.065] |
+| **same pool, our RR vs their CE** | blended | 0.6500 vs 0.6510 | −0.0010 | **0.9312** | [−0.013, +0.010] |
+| | MESH | 0.5439 vs 0.5246 | **+0.0193** | **0.0127** | [+0.005, +0.034] |
+| | AUTHORKW | 0.8235 vs 0.8577 | −0.0343 | 0.0002 | [−0.053, −0.017] |
+| their reranker's own lift | blended | 0.6510 vs 0.5900 | +0.0610 | 7.3e-18 | [+0.047, +0.075] |
+
+### What this actually says
+
+**We lose the system comparison, and it is not close on the blended number** — −0.0350,
+*p* = 0.0002. Reported as the deciding result, because it is.
+
+But the second block localises the loss, and this is the part worth acting on:
+
+- **On MedCPT's own candidate pool, our reranker and theirs are a statistical dead heat**
+  (−0.0010, *p* = 0.93, CI ±0.01).
+- **On MeSH queries, our reranker beats MedCPT's cross-encoder outright** on their own pool
+  (+0.0193, *p* = 0.013, CI excludes zero) — and `medcpt`+`cshl-RR` at **0.5439** is the best
+  MeSH R@10 any configuration produced tonight, better than either complete system.
+- On author-keyword queries our reranker is genuinely weaker (−0.0343).
+
+So **essentially the whole system gap is the encoder, not the reranker.** Our reranker is
+competitive with MedCPT's on equal footing and better than it on the family this program
+cares most about; it is being handed a worse pool to work with. The pool ceilings say the
+same thing — R@50 is 0.8208/0.6076 for `cshl_qp` against 0.8920/0.6237 for `medcpt`, so
+AUTHORKW retrieval is short by 7 points of recall before any reranking happens.
+
+**The lever is the encoder, specifically on AUTHORKW.** Another reranker epoch would not
+close this; better retrieval would.
+
+### Two caveats that cut in opposite directions, both recorded
+
+1. **`cshl-RR` is fine-tuned on this domain; MedCPT's cross-encoder is zero-shot here.** Ours
+   saw 40,000 in-domain groups mined from this corpus. Theirs was trained on PubMed click
+   logs and has never seen bioRxiv/medRxiv. That our tuned reranker only *ties* theirs
+   overall is a weaker result than the raw numbers suggest, and it flatters us on MeSH.
+2. **MedCPT may have seen some of these papers.** It was trained on PubMed, and a large share
+   of this corpus is preprints of papers later published in PubMed-indexed journals. We
+   cannot rule out that its advantage on AUTHORKW is partly familiarity. This cuts in
+   *their* favour, so it does not rescue our loss — but it does mean the AUTHORKW gap is an
+   upper bound on their genuine modelling advantage, not a clean measurement of it.
+
+**Spend: $0.23** (one `g5.xlarge`, 14 min, both cells, `COMPARE-EXIT=0`, both uploads
+verified by `head-object` before shutdown) against the $0.75 the lead authorised.
 
 ## Open follow-ups
 
@@ -1076,12 +1161,12 @@ ruling by name.
 6. **Benchmark builder filename** is still `scripts/eval/build-rxiv-eval.mjs` while the
    artifact it builds is `cshl-eval-v1`. Cosmetic; left alone mid-flight to avoid breaking
    another lane's reference.
-7. **Score MedCPT's full system, not just its encoder.** `ncbi/MedCPT-Cross-Encoder` is
-   published alongside the article encoder. Our reranked system beats MedCPT's *encoder*
-   (*p* = 0.012); whether it beats MedCPT's *encoder + cross-encoder* is untested, and that
-   is the comparison a reviewer will ask for first. The rig to do it already exists —
-   `scripts/rerank-nsr/dump-candidates.mjs` freezes any arm's top-50 and
-   `scripts/rerank-nsr/rerank.py` scores any cross-encoder over it.
+7. ~~Score MedCPT's full system~~ — **DONE**, see "System vs system" above. We lose the
+   blended comparison (−0.0350, *p* = 0.0002), tie on MeSH, and lose on AUTHORKW. The gap
+   localises to the **encoder**: on an identical pool our reranker ties MedCPT's
+   cross-encoder blended and beats it on MeSH. **The successor follow-up is therefore an
+   encoder question, not a reranker one — close the AUTHORKW retrieval gap (R@50 0.8208 vs
+   0.8920) and the system comparison changes.**
 8. **CPU latency for the cross-encoder is unmeasured.** GPU is 150.8 ms p50 per query over 50
    candidates; the serving decision needs the CPU number too, and the current serve box is a
    `t3.large`.

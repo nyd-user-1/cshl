@@ -1231,3 +1231,104 @@ second arm costs a fraction of the first. Estimated **≈$0.15** and ~10 min of 
 inside the $2.96 left under the cap. **cshl-RR itself does not need retraining for QP2** — it
 is a cross-encoder over (query, document) text and is independent of which encoder retrieved
 the pool.
+
+---
+
+## 2026-08-20T03:45–04:14Z — follow-up #7, on the lead's instruction: SYSTEM vs SYSTEM
+
+**Verdict up front: we lose it.** `cshl-QP`+`cshl-RR` 0.6160 vs `MedCPT`+`MedCPT-CE` 0.6510
+blended R@10, **Δ −0.0350, exact McNemar p = 0.0002**. That is the deciding comparison and it
+goes against us. Everything below is why, and what it points at.
+
+### Fairness first, because a rigged win is worthless
+
+MedCPT's card specifies `max_length=512`, `[[query, article]]` pairs, higher logit = more
+relevant. Our `docs.jsonl` was cut to 900 chars to match `api/_lib/embed.ts`'s serving slice —
+running MedCPT in that window would have handicapped it. Measured rather than assumed:
+
+```
+docs-900.jsonl    n=132,585  mean 895 chars   truncated at cap: 129,248 (97.5%)
+docs-2000.jsonl   n= 81,578  mean 1,646 chars truncated at cap:  24,584 (30.1%)
+```
+
+**97.5% of documents were being truncated at 900.** So MedCPT got a purpose-built 2,000-char
+document set and `max_len=512`; `cshl-RR` ran at 900/256, which is both what it was trained on
+and what we actually serve. Ours measured as it ships, theirs measured at its published best.
+The docs filename now carries the width (`docs-<N>.jsonl`) because two arms sharing one docs
+file at different truncations would be an unfair comparison nothing downstream could detect.
+
+**A trap caught before it cost anything:** `rerank.py` was passing `num_labels=1` to
+`from_pretrained`. If a published checkpoint's head is a different size, `transformers`
+**silently reinitialises the classifier with random weights** — the model loads, scores, and
+reports a number that is not the published model's. It would have looked like a MedCPT
+baseline and been noise. Now the model loads as published and the script *asserts*
+`num_labels == 1` and that `--max-len` fits `max_position_embeddings`. Both confirmed live:
+`MedCPT-Cross-Encoder num_labels=1 max_position_embeddings=512 using max_len=512`;
+ours `num_labels=1 max_position_embeddings=8192 using max_len=256`.
+
+Pools verified before use, same discipline as before — the regenerated `medcpt` top-50
+reproduced the published `medcpt.json` on **all ten metrics, both families**, and the raw side
+of the scorer matched `medcpt.perquery.json` with **0** differences. Permutation guard: 0/2000
+on both cells. Per-path IAM simulated individually for all **8** paths before launch.
+
+### The 2×2 — R@10 / nDCG@10
+
+| system | AUTHORKW | MESH |
+|---|---|---|
+| `cshl_qp` | 0.7497 / 0.6395 | 0.4319 / 0.3190 |
+| **`cshl_qp` + `cshl-RR`** | 0.7668 / 0.6746 | 0.5238 / 0.4075 |
+| `medcpt` | 0.8076 / 0.6885 | 0.4569 / 0.3373 |
+| **`medcpt` + `MedCPT-CE`** | **0.8577 / 0.7741** | 0.5246 / 0.4047 |
+| `medcpt` + `cshl-RR` | 0.8235 / 0.7225 | **0.5439 / 0.4236** |
+
+### Paired tests (`FAMILY=` slicing, added by the win lane tonight)
+
+| comparison | scope | R@10 | Δ | p | CI |
+|---|---|---|---:|---:|---|
+| ours vs theirs (systems) | blended | 0.6160 / 0.6510 | **−0.0350** | **0.0002** | [−0.054, −0.016] |
+| | MESH | 0.5238 / 0.5246 | −0.0008 | **1.0000** | [−0.025, +0.024] |
+| | AUTHORKW | 0.7668 / 0.8577 | −0.0909 | 2.3e-11 | [−0.117, −0.065] |
+| same pool: our RR vs their CE | blended | 0.6500 / 0.6510 | −0.0010 | **0.9312** | [−0.013, +0.010] |
+| | MESH | 0.5439 / 0.5246 | **+0.0193** | **0.0127** | [+0.005, +0.034] |
+| | AUTHORKW | 0.8235 / 0.8577 | −0.0343 | 0.0002 | [−0.053, −0.017] |
+| their CE's own lift | blended | 0.6510 / 0.5900 | +0.0610 | 7.3e-18 | [+0.047, +0.075] |
+
+### The finding that matters: the gap is the ENCODER, not the reranker
+
+The cross cell was worth the extra five minutes of box time. **Handed MedCPT's own candidate
+pool, our reranker and theirs are a statistical dead heat** (−0.0010, p = 0.93, CI ±0.01) —
+and on **MeSH our reranker beats their cross-encoder outright** (+0.0193, p = 0.013). The
+single best MeSH R@10 produced tonight by any configuration is **`medcpt` + `cshl-RR` =
+0.5439**, above both complete systems.
+
+Pool ceilings agree: R@50 is 0.8208 / 0.6076 for `cshl_qp` against 0.8920 / 0.6237 for
+`medcpt`. **AUTHORKW retrieval is short by ~7 points of recall before a reranker sees
+anything.** No further reranker training closes that; only a better encoder does.
+
+**Two caveats, recorded because they cut opposite ways.** (a) `cshl-RR` is fine-tuned on this
+domain on 40,000 in-domain groups; MedCPT's CE is **zero-shot** here — that our tuned model
+only ties theirs overall is *worse* than the bare numbers look. (b) MedCPT trained on PubMed,
+and much of this corpus is preprints of PubMed-indexed papers, so part of its AUTHORKW
+advantage may be familiarity — which cuts in *their* favour and does not rescue our loss, but
+does make the AUTHORKW gap an upper bound on their real modelling advantage.
+
+### Run record
+
+```
+i-0ef6b4e758dcfc75b  g5.xlarge (A10G)  03:59:21Z -> ~04:13Z  ~14 min  $1.006/h  = $0.23
+  CELL medcpt_medcptce  UPLOAD-VERIFIED bytes=4044286   p50 153.7 ms · p95 172.4 ms (512 tok)
+  CELL medcpt_cshlrr    UPLOAD-VERIFIED bytes=4044286   p50 153.2 ms · p95 163.3 ms (256 tok)
+  COMPARE-EXIT=0
+```
+
+Both cells uploaded and `head-object`-verified before shutdown — the fix from the 03:31Z
+incident, working. **$0.23 against the $0.75 the lead authorised.** Lane total now
+**≈$2.27 of $5.00.**
+
+### QP2 — still not landed
+
+`preprint_embeddings_cshl_qp2` is **0 / 433,449 rows** and `qemb/cshl_qp2.jsonl` is absent;
+the win lane's own ledger still lists its re-embed as *projected*. The QP2 rerank the lead
+asked for is **queued, not skipped** — it is three commands against the rig already proven
+here, ≈$0.15, and `cshl-RR` needs no retraining for it (a cross-encoder scores (query,
+document) text and is indifferent to which encoder built the pool).
