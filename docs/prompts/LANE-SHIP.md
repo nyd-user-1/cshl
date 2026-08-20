@@ -525,3 +525,63 @@ NYSgpt/cshl-eval-v1 vs the staged prefix, BEFORE the push lands
 
 It fails correctly on a repo that has not received the push yet, and the specific failures are
 the right ones — which is the only evidence that a passing run later will mean anything.
+
+### 2026-08-20T03:05Z — TASK 1a COMPLETE: `NYSgpt/cshl-encoder-bge-m3-qpairs` is published and verified
+
+```
+https://huggingface.co/NYSgpt/cshl-encoder-bge-m3-qpairs
+private: true   repo_type: model   commit fc639c3d343691137e5790952d725013042520cc
+lastModified 2026-08-20T03:05:33Z
+```
+
+Verified three independent ways, because one of them is the box's own report and a box that
+reports on itself is the thing being checked:
+
+**1. The Hub listed back and compared to what was handed to the box**
+(`scripts/publish-nsr/verify-push.py`, exit 0):
+
+```
+  ok                255  1_Pooling/config.json
+  ok                658  config.json
+  ok      2,271,064,456  model.safetensors      <- the byte count that matters
+  ok                183  modules.json
+  ok                 47  sentence_bert_config.json
+  ok          5,069,051  sentencepiece.bpe.model
+  ok                964  special_tokens_map.json
+  ok         17,082,897  tokenizer.json
+  ok              1,203  tokenizer_config.json
+  ok              6,225  training_args.bin
+VERIFIED: all 10 sent objects present at the sent byte size, card present, repo private.
+```
+
+**2. The card fetched back from the Hub is byte-identical** (11,692 bytes) to
+`scripts/publish-nsr/cards/cshl-encoder-bge-m3-qpairs.md`, and carries every claim the brief
+requires: 39,999 pairs; the proportional emitted mix EXTRACT 24,477 · MESH 9,668 ·
+AUTHORKW 5,854; "launched at `BATCH=16` and OOMed on the L40S"; NVIDIA L40S; 128/384 and
+`max_seq_length: 384`; MeSH parity at p = 0.071; the AUTHORKW loss at p = 0.0003 stated as a
+real loss; and the doc→doc trade with "spent all of it" and 0.1980.
+
+*(My first pass at checking those claims reported the batch line missing. It was not missing —
+my grep failed on a line wrap. The card was right and the check was wrong, which is worth a
+sentence because it is the one direction of error that makes you go break something correct.)*
+
+**3. The box's own read-back**, the hardening added to the rig tonight, recovered from the log
+it uploaded to S3 before terminating:
+
+```
+UPLOADED NYSgpt/cshl-encoder-bge-m3-qpairs .../commit/fc639c3d...
+REPO-FILES 12
+   .gitattributes  1_Pooling/config.json  README.md  config.json  model.safetensors
+   modules.json  sentence_bert_config.json  sentencepiece.bpe.model  special_tokens_map.json
+   tokenizer.json  tokenizer_config.json  training_args.bin
+PUBLISH-DONE
+```
+
+Note the sequencing: the box **terminated before my waiter could read its log**, so the waiter
+reported `BOX STATE=terminated with NO marker in its log`. Under the old rig that is
+indistinguishable from a failed push — the evidence terminates with the box. It was recoverable
+only because the log is uploaded to S3 first, and it did not matter at all because the
+verification of record is the Hub listing, not the box.
+
+Total elapsed 02:20Z → 03:05Z, of which ~40 min was `apt-get` against the degraded Ubuntu
+mirror. The S3 pull and the 2.1 GB Hub upload together took under five minutes.
