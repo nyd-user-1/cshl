@@ -7,7 +7,12 @@
 BEGIN;
 CREATE TABLE IF NOT EXISTS query_vec_cache (
   text_hash  text         NOT NULL,
-  model      text         NOT NULL,   -- 'bge' (stock, free Cloudflare path) | 'nsr' (fine-tuned)
+  model      text         NOT NULL,   -- the EMBEDDING SPACE, i.e. the corpus table name:
+                                      -- 'preprint_embeddings' (stock bge-m3) |
+                                      -- 'preprint_embeddings_cshl_qp' (fine-tuned, currently served).
+                                      -- NOT the encoder name: SEARCH_ENCODER=nsr is a slot whose
+                                      -- weights change, and a cache keyed on the slot outlives the
+                                      -- model in it. See cacheKeyModel() in api/_lib/embed.ts.
   embedding  vector(1024) NOT NULL,
   hits       int          NOT NULL DEFAULT 1,
   created_at timestamptz  NOT NULL DEFAULT now(),

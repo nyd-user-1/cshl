@@ -1,19 +1,20 @@
-// Query-side encoder + reranker clients for NSR retrieval.
+// Query-side encoder + reranker clients for CSHL / RxivGPT retrieval.
 //
-// The corpus vectors are permanent (scripts/embed-nsr → nsr_embeddings, stock
-// bge-m3; LANE-TRAIN → nsr_embeddings_nsr, our fine-tuned encoder). Every
-// search still has to encode the user's text in the SAME model as the table it
-// searches, so:
+// The corpus vectors are permanent sidecars on `preprints`, one table per model.
+// Every search still has to encode the user's text in the SAME model as the table
+// it searches, so:
 //
 //   SEARCH_ENCODER=bge (default)  Cloudflare Workers AI @cf/baai/bge-m3 — free
 //        tier 10k neurons/day (~450k queries/day), hard-fails rather than bills.
 //        Parity vs stored TEI vectors cos ≥ 0.996, identical top-10 (2026-08-16).
 //        Fallback: HF hf-inference BAAI/bge-m3 (cos 0.99999) when HF_TOKEN set.
-//   SEARCH_ENCODER=nsr            NYSgpt/nsr-encoder-bge-m3 served by TEI —
-//        either our nsr-serve box (scripts/serve-nsr) or a HF Inference
-//        Endpoint: NSR_ENCODER_URL (the /embed URL) + NSR_SERVE_KEY (bearer;
-//        falls back to HF_TOKEN). Searches nsr_embeddings_nsr. If the endpoint
-//        errors, callers fall back to bge.
+//   SEARCH_ENCODER=nsr            our fine-tuned encoder served by TEI on the
+//        cshl-serve box (scripts/serve-nsr): NSR_ENCODER_URL (the /embed URL) +
+//        NSR_SERVE_KEY (bearer; falls back to HF_TOKEN). If the endpoint errors,
+//        callers fall back to bge — and the table follows, see vectorTable().
+//        The env var name is `nsr` for the same reason NSR_ENCODER_URL is: this
+//        app was cloned from the NSR program. It selects whatever fine-tuned
+//        encoder the serve box is currently loaded with, not a specific model.
 //
 //   SEARCH_RERANK=on              NYSgpt/nsr-reranker-gte-modernbert by TEI:
 //        NSR_RERANKER_URL (base URL; /rerank is appended) + NSR_SERVE_KEY.
@@ -28,17 +29,30 @@ const HF_BGE_URL = "https://router.huggingface.co/hf-inference/models/BAAI/bge-m
 export function activeEncoder(): EncoderName {
   return process.env.SEARCH_ENCODER === "nsr" && process.env.NSR_ENCODER_URL ? "nsr" : "bge";
 }
-// CSHL corpus vector tables.
-//   bge -> preprint_embeddings       stock bge-m3, 433,449 rows
-//   nsr -> preprint_embeddings_cshl  our fine-tuned encoder, 433,449 rows
+// CSHL corpus vector tables. All three are populated (433,449 rows each) and all
+// three stay populated — this constant chooses which one the dense arm reads.
+//   bge -> preprint_embeddings          stock bge-m3
+//   nsr -> preprint_embeddings_cshl_qp  the qpairs encoder (query->doc supervision,
+//                                       run 20260819-192100-train). Serving as of
+//                                       2026-08-20: MeSH R@10 0.4319 vs the CITE
+//                                       model's 0.3320, statistical parity with MedCPT.
+//          preprint_embeddings_cshl     the CITE encoder (doc->doc supervision) —
+//                                       NOT dead weight and NOT to be dropped: it is
+//                                       still the better document->document encoder
+//                                       (R@10 0.2120 vs 0.1980) and is the right arm
+//                                       for "more like this" / reviewer matching. It
+//                                       has no query-side route today; whatever reads
+//                                       it must serve the CITE weights, not these.
 //
 // This name is load-bearing and was wrong once: it read `preprint_embeddings_ft`, a
 // table that does not exist. hasEmbeddings() would have probed it, found nothing, and
 // silently degraded the dense arm to FTS-only — so /chat would have looked like it was
 // running on the fine-tuned encoder while serving keyword-only results. No error, no
-// signal, plausible output. Caught by rig-port before the flip. If either table is ever
-// renamed, this constant is the thing that has to move with it.
-export const vectorTable = (enc: EncoderName) => (enc === "nsr" ? "preprint_embeddings_cshl" : "preprint_embeddings");
+// signal, plausible output. Caught by rig-port before the flip. This constant and the
+// weights loaded on the serve box are ONE decision in two places: change either and the
+// other has to move with it, or the app queries one model's space with another model's
+// vector and returns confident nonsense with a 200.
+export const vectorTable = (enc: EncoderName) => (enc === "nsr" ? "preprint_embeddings_cshl_qp" : "preprint_embeddings");
 
 /**
  * Is the vector sidecar actually populated? The dense arm is worth an encoder round
@@ -136,10 +150,33 @@ export function rrf(lists: string[][], k = 60): Map<string, number> {
 }
 
 /**
- * Memoized query embedding: a Neon table keyed by md5(encoder:text) so a
- * repeated question costs one indexed lookup (~ms) instead of an encoder call
- * (~1 s on the CPU serve box). Falls through to embedQuery on any cache error.
- * Table: sql/27-query-vec-cache.sql.
+ * Cache key for a query vector. It is the CORPUS TABLE NAME, not the encoder name.
+ *
+ * This matters and it was a live trap. `SEARCH_ENCODER=nsr` names a *slot* — "whatever
+ * the serve box is loaded with" — not a model. The 2026-08-20 flip changed the weights
+ * behind that slot (CITE -> qpairs) while the slot kept its name, so a cache keyed on
+ * `'nsr'` would have gone on serving CITE-space vectors for every previously-seen
+ * question and used them to search the qpairs table. Confident nonsense, HTTP 200, no
+ * error, and only on the queries users repeat most.
+ *
+ * The table name is 1:1 with the embedding space by construction, so keying on it means
+ * a future re-flip invalidates the cache by *not matching* it rather than by anyone
+ * remembering to purge. Rows written under the old `'bge'` / `'nsr'` keys simply stop
+ * matching and age out; the miss costs one encoder call.
+ *
+ * (Measured 2026-08-20: `query_vec_cache` does not exist in this database —
+ * `sql/09-query-vec-cache.sql` was inherited from NSR and never applied here, so
+ * embedQueryCached currently falls through to embedQuery on every call. The trap was
+ * therefore not armed tonight. It arms itself the day someone applies that migration,
+ * which is exactly when nobody is thinking about encoder flips.)
+ */
+const cacheKeyModel = (enc: EncoderName) => vectorTable(enc);
+
+/**
+ * Memoized query embedding: a Neon table keyed by md5(space:text) so a repeated
+ * question costs one indexed lookup (~ms) instead of an encoder call (~1 s on the CPU
+ * serve box). Falls through to embedQuery on any cache error, including the table not
+ * existing. Table: sql/09-query-vec-cache.sql.
  */
 export async function embedQueryCached(
   sql: { query: (t: string, p?: unknown[]) => Promise<Record<string, unknown>[]> },
@@ -147,11 +184,12 @@ export async function embedQueryCached(
   encoder: EncoderName = activeEncoder(),
 ): Promise<{ vector: number[]; provider: string; encoder: EncoderName; cached: boolean }> {
   const norm = text.trim().slice(0, 2000);
+  const space = cacheKeyModel(encoder);
   try {
     const hit = await sql.query(
       `UPDATE query_vec_cache SET hits = hits + 1, last_seen = now()
        WHERE text_hash = md5($1) AND model = $2 RETURNING embedding::text AS v`,
-      [`${encoder}:${norm}`, encoder],
+      [`${space}:${norm}`, space],
     );
     if (hit[0]?.v) return { vector: JSON.parse(String(hit[0].v)), provider: "cache", encoder, cached: true };
   } catch { /* cache table missing or unreachable — encode */ }
@@ -160,7 +198,7 @@ export async function embedQueryCached(
     await sql.query(
       `INSERT INTO query_vec_cache (text_hash, model, embedding) VALUES (md5($1), $2, $3::vector)
        ON CONFLICT (text_hash, model) DO UPDATE SET hits = query_vec_cache.hits + 1, last_seen = now()`,
-      [`${e.encoder}:${norm}`, e.encoder, toVectorLiteral(e.vector)],
+      [`${cacheKeyModel(e.encoder)}:${norm}`, cacheKeyModel(e.encoder), toVectorLiteral(e.vector)],
     );
   } catch { /* best effort */ }
   return { ...e, cached: false };

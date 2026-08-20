@@ -20,13 +20,16 @@ metric code, rather than quoted from its own paper.
 | `queries.jsonl` | 2,000 (frozen deterministic subsample of 10,000) | `{qid, family, text, server, pub_year, published, abs_len}` |
 | `qrels.tsv` | 2,000 | `qid \t key_number`, one line per gold pair |
 | `manifest.json` | 1 | freeze date, holdout rule, per-family provenance, leak audit |
-| `results/*.json` | 11 | one file per scored arm, per-family and per-segment |
+| `results/*.json` | 18 | query→document: one file per scored arm, per-family and per-segment |
+| `results/*.perquery.json` | — | per-query hit/miss, so a paired significance test can be run against any arm without rescoring |
+| `results-docdoc/*.json` | 10 | document→document: the "more like this" task, scored separately |
 
 ## Query families
 
 | family | queries | source | note |
 |---|---:|---|---|
 | `MESH` | 1,241 | NLM MeSH descriptors on the published half | hierarchical, indexer-assigned gold |
+| `AUTHORKW` | 759 | author-supplied keywords on the published half | the authors' own vocabulary, not an indexer's |
 | `CITE` | 0 | held-out citation pairs | document-shaped, not query-shaped |
 | `SYNTH` | 0 | LLM questions over held-out abstracts | the only genuinely query-shaped family |
 | `TITLE` | 0 | the paper's own title | **leaked by construction** — a plumbing floor, never blended into a headline |
@@ -49,10 +52,39 @@ R@1, R@5, R@10, R@50, MRR, nDCG@10 — per family and per segment
 ## Arms measured
 
 Postgres FTS · stock `BAAI/bge-m3` · `ncbi/MedCPT` (query + article encoders) ·
-`allenai/specter2_base` · `malteos/scincl` · `NYSgpt/cshl-encoder-bge-m3` ·
-RRF fusions · cross-encoder rerank stages.
+`allenai/specter2_base` · `malteos/scincl` · `NYSgpt/cshl-encoder-bge-m3` (CITE,
+document→document supervision) · **`NYSgpt/cshl-encoder-bge-m3-qpairs`** (query→document
+supervision) · RRF fusions · cross-encoder rerank stages.
 
-See `docs/CSHL-CPT-REPORT.md` in the source repository for the full 11-arm table.
+`CSHL-CPT-REPORT.md` ships in this repo and carries the full table, the method, and every
+failure worth knowing about.
+
+## Headline, 2026-08-20 — the query-shaped retrain
+
+The benchmark existed to settle one question: whether our encoder trailed `ncbi/MedCPT`
+because of an **objective mismatch** — trained document→document, evaluated query→document.
+Scored here, on these queries, it did.
+
+| arm | MeSH R@10 | AUTHORKW R@10 |
+|---|---:|---:|
+| RRF(qpairs + MedCPT + FTS) | **0.5197** | **0.8300** |
+| `ncbi/MedCPT` | 0.4569 | 0.8076 |
+| `cshl-encoder-bge-m3-qpairs` | **0.4319** | 0.7497 |
+| `cshl-encoder-bge-m3` (CITE) | 0.3320 | 0.6693 |
+| Postgres FTS | 0.0806 | 0.2398 |
+
+MeSH R@10 **0.3320 → 0.4319, +30.1%**, closing 80% of the gap to MedCPT (paired McNemar
+p = 2.3e-16). Against MedCPT itself the MeSH difference is **no longer significant**
+(p = 0.071, CI [−0.0516, +0.0016]) — while on `AUTHORKW` **MedCPT is still significantly
+better** (p = 0.0003) and that is not rounded off.
+
+It was a trade, not a free win: on document→document the qpairs model drops to 0.1980 R@10
+against CITE's 0.2120 (p = 0.043), which is statistically indistinguishable from the base
+model it started from (stock bge-m3, 0.1955, p = 0.78). See `results-docdoc/`. Both encoders
+stay published because they are good at different tasks.
+
+One confound, stated rather than buried: that run changed the objective **and** doubled the
+effective batch (4 → 8), and cannot separate them. See the report.
 
 ## Reproducing
 
@@ -62,10 +94,8 @@ ARM=bge-m3 node scripts/eval/embed-queries.mjs        # query side, per arm
 ARMS=fts,bge-m3,medcpt,rrf:fts+bge-m3 node scripts/eval/score.mjs
 ```
 
-<!-- Shared corpus/provenance block. Every card below includes this verbatim.
-     Update ONE place when the corpus changes. Numbers marked {{...}} are filled
-     from the actual load at publish time — scripts/publish-nsr/launch.sh refuses
-     to publish a card that still contains {{ markers. -->
+<!-- Shared corpus/provenance block — kept verbatim across every card in this
+     program, so it is updated in one place when the corpus changes. -->
 
 ## Corpus
 
