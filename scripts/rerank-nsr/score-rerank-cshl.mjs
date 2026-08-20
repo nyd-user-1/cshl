@@ -90,10 +90,24 @@ for (const [side, name] of [['raw', `${BASE}_rawtop50`], ['reranked', ARM]]) {
   writeFileSync(join(RESULTS, `${name}.perquery.json`),
     JSON.stringify({ arm: name, version: VERSION, keys, family, hits10: perq[side] }))
 }
+// SHAPE FIX (LANE-QP3, 2026-08-20). This file used to write
+//   metrics: { raw: {FAM:{seg}}, reranked: {FAM:{seg}} }
+// while EVERY encoder arm written by score.mjs writes
+//   metrics: {FAM:{seg}}
+// Two costs, both paid: (a) any generic reader — fill-card.mjs does exactly this —
+// resolves `metrics[family]` to undefined and silently emits null; (b) a human
+// opening the file sees `metrics.raw` FIRST, and `metrics.raw` is byte-identical
+// to the base encoder's own results row, so the file reads as if the rerank did
+// nothing. Both are silent failures. `metrics` now means the same thing for every
+// arm in results/ — THIS arm's numbers — and the base encoder's top-50 baseline
+// moves to `base_metrics`, named for what it is.
 writeFileSync(join(RESULTS, `${ARM}.json`), JSON.stringify({
   arm: ARM, version: VERSION, source: IN, base_arm: BASE, n_queries: scored,
   note: 'SYSTEM arm: encoder retrieval + cross-encoder rerank of its top-50. Not an encoder-vs-encoder row.',
-  scored_at: new Date().toISOString(), metrics: agg,
+  metrics_note: `metrics = the SYSTEM (${ARM}); base_metrics = ${BASE}'s own top-50 in retrieval order, the paired baseline. Same shape as every encoder arm, so metrics[family].blended[k] is comparable across all of results/.`,
+  scored_at: new Date().toISOString(),
+  metrics: agg.reranked,
+  base_metrics: agg.raw,
 }, null, 1))
 
 let gate = true
