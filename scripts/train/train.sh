@@ -40,11 +40,62 @@ BATCH=${BATCH:-8}
 GROUP_SIZE=${GROUP_SIZE:-8}
 QUERY_MAX_LEN=${QUERY_MAX_LEN:-128}
 PASSAGE_MAX_LEN=${PASSAGE_MAX_LEN:-512}
-echo "[train.sh] MODE=$MODE TRAIN_NAME=$TRAIN_NAME RUN_ID=$RUN_ID base=$BASE_MODEL q=$QUERY_MAX_LEN p=$PASSAGE_MAX_LEN group=$GROUP_SIZE"
+OUT=/opt/train/out
+NPROC=${NPROC:-1}
+TORCHRUN=/opt/pytorch/bin/torchrun
+echo "[train.sh] MODE=$MODE TRAIN_NAME=$TRAIN_NAME RUN_ID=$RUN_ID base=$BASE_MODEL q=$QUERY_MAX_LEN p=$PASSAGE_MAX_LEN group=$GROUP_SIZE nproc=$NPROC"
 
 PY=/opt/pytorch/bin/python3
 SP=/opt/pytorch/lib/python3.12/site-packages
 export LD_LIBRARY_PATH="$(find "$SP/nvidia" -maxdepth 2 -type d -name lib | tr '\n' ':')"
+
+# DRYRUN: print the exact resolved training command (single- or multi-GPU)
+# and exit — no install, no S3, no GPU, no box required. Uses a placeholder
+# pair count (DRYRUN_N_PAIRS, default 40000 — the real slice's rough size) so
+# the printed steps/warmup match what a real run would compute.
+if [ -n "${DRYRUN:-}" ]; then
+  N_PAIRS=${DRYRUN_N_PAIRS:-40000}
+  if [ "$NPROC" -gt 1 ]; then
+    RUN_PREFIX="$TORCHRUN --standalone --nproc_per_node=$NPROC"
+    EFFECTIVE_BATCH=$((BATCH * NPROC))
+  else
+    RUN_PREFIX="$PY"
+    EFFECTIVE_BATCH=$BATCH
+  fi
+  STEPS_PER_EPOCH=$(( (N_PAIRS + EFFECTIVE_BATCH - 1) / EFFECTIVE_BATCH ))
+  WARMUP=$(( STEPS_PER_EPOCH / 10 )); [ "$WARMUP" -lt 1 ] && WARMUP=1
+  echo "[train.sh][DRYRUN] N_PAIRS=$N_PAIRS NPROC=$NPROC per_device_batch=$BATCH effective_batch=$EFFECTIVE_BATCH steps_per_epoch=$STEPS_PER_EPOCH warmup_steps=$WARMUP"
+  echo "[train.sh][DRYRUN] would run (via /opt/train/run_trainer.py, a thin wrapper that patches"
+  echo "[train.sh][DRYRUN] Trainer._issue_warnings_after_load before import — see the comment in section 3):"
+  cat <<PLAN
+$RUN_PREFIX /opt/train/run_trainer.py \\
+  --model_name_or_path $BASE_MODEL \\
+  --cache_dir /opt/train/hf-cache \\
+  --train_data train.jsonl \\
+  --cache_path /opt/train/data-cache \\
+  --train_group_size $GROUP_SIZE \\
+  --query_max_len $QUERY_MAX_LEN \\
+  --passage_max_len $PASSAGE_MAX_LEN \\
+  --pad_to_multiple_of 8 \\
+  --knowledge_distillation False \\
+  --unified_finetuning False \\
+  --use_self_distill False \\
+  --output_dir $OUT \\
+  --learning_rate ${LR:-1e-5} \\
+  --bf16 \\
+  --num_train_epochs $EPOCHS \\
+  --per_device_train_batch_size $BATCH \\
+  --dataloader_drop_last True \\
+  --warmup_steps $WARMUP \\
+  --logging_steps 10 \\
+  --save_steps ${SAVE_STEPS:-600} \\
+  --save_total_limit ${SAVE_TOTAL_LIMIT:-3} \\
+  --temperature 0.02 \\
+  --sentence_pooling_method cls \\
+  --normalize_embeddings True
+PLAN
+  exit 0
+fi
 
 # 1. Install. Base FlagEmbedding (no [finetune] extra — its flash-attn/deepspeed
 #    deps don't build on this box and encoder_only.m3 never imports either),
@@ -78,17 +129,147 @@ fi
 #    --overwrite_output_dir and --warmup_ratio do NOT exist in this installed
 #    version's TrainingArguments (confirmed via --help on NSR): rm -rf instead,
 #    and compute --warmup_steps.
-OUT=/opt/train/out
 export OUT_DIR="$OUT"
 CKPT_FLAG=""
+
+# --resume_from_checkpoint bug, found and fixed by this lane's acceptance
+# test (not reasoned about — see docs/prompts/LANE-RIG-UPGRADE.md): on the
+# transformers version this box's own unpinned-upper-bound install picks up
+# (4.57.6, matching what a real fresh box gets today), Trainer._load_from_
+# checkpoint -> _issue_warnings_after_load reads self.model._keys_to_ignore_
+# on_save, which FlagEmbedding's EncoderOnlyEmbedderM3Model does not define
+# (it is not a transformers.PreTrainedModel subclass, so patching that base
+# class does nothing — confirmed by testing both). AttributeError, every
+# time, on every resume. A trainer.tokenizer-lands-with-transformers-5-and-
+# breaks-save fact is already documented at the top of this file (header
+# fact 3); this is the same species one version range earlier, in the load
+# path instead of the save path. Downgrading transformers to 4.44.2 does NOT
+# fix it either — that version's XLMRobertaModel doesn't accept the `dtype`
+# kwarg FlagEmbedding passes, a DIFFERENT crash. The only fix that worked:
+# neutralize the specific buggy method, not the model. Applied via a wrapper
+# script instead of `-m`, so it fires before FlagEmbedding imports anything.
+cat > /opt/train/run_trainer.py <<'PYWRAP'
+import transformers.trainer as T
+T.Trainer._issue_warnings_after_load = lambda self, load_result: None
+import runpy
+runpy.run_module("FlagEmbedding.finetune.embedder.encoder_only.m3", run_name="__main__")
+PYWRAP
+
+# NPROC>1: wrap the trainer in torchrun, data-parallel across NPROC GPUs.
+# per-device batch stays BATCH; effective batch = BATCH * NPROC, so
+# steps/warmup are computed off the effective batch, not the per-device one.
+# NPROC==1 keeps the exact single-process invocation (OOM loop unchanged).
+# Both run the wrapper script above (not `-m FlagEmbedding...` directly) so
+# the checkpoint-load patch is in effect whether or not this attempt resumes.
+if [ "$NPROC" -gt 1 ]; then
+  RUN_PREFIX=("$TORCHRUN" --standalone --nproc_per_node="$NPROC")
+else
+  RUN_PREFIX=("$PY")
+fi
+TRAINER_ENTRY=/opt/train/run_trainer.py
+EFFECTIVE_BATCH=$((BATCH * NPROC))
+
+# --- checkpointing -------------------------------------------------------
+# SAVE_STEPS must be a real number: a fallback that is never exercised is a
+# comment, not a fallback (RIG-DOCTRINE #4). Default sized off the CSHL night's
+# measured worst case — A10G, batch 4, 384 passage len, 1.22 it/s — so a spot
+# reclaim loses at most ~8 minutes: 600 steps * ~0.82s/step ~= 8.2min < 10min.
+# Wall-clock per step is roughly batch-invariant for fixed hardware (bigger
+# batch = proportionally fewer it/s), so one step-count default travels
+# reasonably across the OOM loop's batch halving; override per-box if needed.
+SAVE_STEPS=${SAVE_STEPS:-600}
+SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-3}
+CKPT_SYNC_INTERVAL=${CKPT_SYNC_INTERVAL:-60}
+CKPT_S3="s3://$BUCKET/models/$MODEL_NAME/$RUN_ID/checkpoints"
+RESUME_FROM=${RESUME_FROM:-}
+RESUME_ARG=""
+RESUME_STAGE=/opt/train/resume-ckpt
+RESUME_CKPT_NAME=""
+if [ -n "$RESUME_FROM" ]; then
+  echo "[train.sh] RESUME_FROM=$RESUME_FROM — locating latest COMPLETE checkpoint"
+  # Highest checkpoint-N is not necessarily complete: the background syncer
+  # uploads a multi-GB checkpoint dir over the network, and a spot reclaim (or
+  # this box's own OOM/watchdog kill) can land between "checkpoint-N exists as
+  # a prefix" and "every file in it finished uploading" — reproduced for real
+  # in this lane's acceptance test: killing mid-sync left checkpoint-20 in S3
+  # as a lone 658-byte config.json, no weights, no trainer_state.json. Resume
+  # must walk newest-to-oldest and skip any checkpoint missing a required
+  # file, rather than trusting the highest number. Silently resuming from a
+  # truncated checkpoint would either crash (as it did here) or, worse, load
+  # partial state without error.
+  #
+  # REQUIRED_CKPT_FILES was model.safetensors + trainer_state.json only,
+  # on the (single-GPU-run) observation that trainer_state.json looked like
+  # the last file the Trainer writes locally. The multi-GPU rehearsal
+  # (2026-08-20) falsified that: `aws s3 sync` does not upload in write
+  # order — it can finish trainer_state.json (900 bytes) while optimizer.pt
+  # (4.5GB, the single largest file in the checkpoint) is still mid-transfer.
+  # A real checkpoint-20 in that state passed the old two-file check and
+  # would have resumed with a missing/reinitialized optimizer, silently.
+  # optimizer.pt is now required too — it is the single best proxy for "the
+  # whole sync finished" since it is reliably the largest, slowest file.
+  REQUIRED_CKPT_FILES="model.safetensors optimizer.pt trainer_state.json"
+  CKPT_CANDIDATES=$(aws s3 ls "${RESUME_FROM%/}/" | awk '{print $2}' | sed 's#/$##' | grep '^checkpoint-' | sort -t- -k2 -rn)
+  [ -n "$CKPT_CANDIDATES" ] || { echo "[train.sh] RESUME_FROM set but no checkpoint-* found under ${RESUME_FROM%/}/ — refusing"; exit 1; }
+  for c in $CKPT_CANDIDATES; do
+    COMPLETE=1
+    for f in $REQUIRED_CKPT_FILES; do
+      # `|| true` is load-bearing: under `set -o pipefail` (part of this
+      # script's own `set -euo pipefail`), `aws s3 ls <missing-key> | wc -l`
+      # reports ls's nonzero exit even though wc -l itself succeeds, and a
+      # failing command substitution in a plain assignment kills the whole
+      # script under `set -e`. Identical bug class to CSHL-CPT-REPORT.md's
+      # AZ-failover post-mortem, freshly reproduced here while testing THIS
+      # fix the first time it was written.
+      HAS=$(aws s3 ls "${RESUME_FROM%/}/$c/$f" 2>/dev/null | wc -l) || true
+      [ "${HAS:-0}" -ge 1 ] || { COMPLETE=0; break; }
+    done
+    [ "$COMPLETE" -eq 1 ] && { RESUME_CKPT_NAME="$c"; break; }
+    echo "[train.sh] $c is incomplete (missing one of: $REQUIRED_CKPT_FILES) — skipping, trying older"
+  done
+  [ -n "$RESUME_CKPT_NAME" ] || { echo "[train.sh] RESUME_FROM set but no COMPLETE checkpoint-* found under ${RESUME_FROM%/}/ — refusing"; exit 1; }
+  echo "[train.sh] resuming from $RESUME_CKPT_NAME (verified complete)"
+  rm -rf "$RESUME_STAGE"; mkdir -p "$RESUME_STAGE/$RESUME_CKPT_NAME"
+  aws s3 sync "${RESUME_FROM%/}/$RESUME_CKPT_NAME/" "$RESUME_STAGE/$RESUME_CKPT_NAME/" --only-show-errors
+  echo "[train.sh] staged $RESUME_CKPT_NAME ($(du -sh "$RESUME_STAGE/$RESUME_CKPT_NAME" | cut -f1)) from $RESUME_FROM"
+  if grep -q -- '--resume_from_checkpoint' /opt/flagembed-help.txt 2>/dev/null; then
+    RESUME_ARG="--resume_from_checkpoint $OUT/$RESUME_CKPT_NAME"
+    echo "[train.sh] installed CLI exposes --resume_from_checkpoint — passing it explicitly"
+  else
+    echo "[train.sh] no --resume_from_checkpoint in --help — relying on the Trainer's own last-checkpoint-in-output_dir detection (output_dir seeded, not wiped, for this attempt only)"
+  fi
+fi
+
+# Background syncer: mirrors any checkpoint-*/ that lands under $OUT to S3 as
+# training runs, since the box's disk dies with the box. This is what makes
+# SAVE_STEPS actually protective rather than a local-only safety net.
+(
+  while true; do
+    sleep "$CKPT_SYNC_INTERVAL"
+    [ -d "$OUT" ] && aws s3 sync "$OUT" "$CKPT_S3/" --exclude '*' --include 'checkpoint-*/**' --only-show-errors 2>/dev/null
+  done
+) &
+SYNC_PID=$!
+trap 'kill $SYNC_PID 2>/dev/null || true' EXIT
+
+RESUMED_ONCE=""
 T0=$(date +%s)
 while true; do
-  STEPS_PER_EPOCH=$(( (N_PAIRS + BATCH - 1) / BATCH ))
+  EFFECTIVE_BATCH=$((BATCH * NPROC))
+  STEPS_PER_EPOCH=$(( (N_PAIRS + EFFECTIVE_BATCH - 1) / EFFECTIVE_BATCH ))
   WARMUP=$(( STEPS_PER_EPOCH / 10 )); [ "$WARMUP" -lt 1 ] && WARMUP=1
-  echo "[train.sh] attempt: batch=$BATCH warmup_steps=$WARMUP gradient_checkpointing=${CKPT_FLAG:+on}${CKPT_FLAG:-off}"
+  echo "[train.sh] attempt: nproc=$NPROC per_device_batch=$BATCH effective_batch=$EFFECTIVE_BATCH warmup_steps=$WARMUP gradient_checkpointing=${CKPT_FLAG:+on}${CKPT_FLAG:-off} save_steps=$SAVE_STEPS"
   rm -rf "$OUT"
+  if [ -n "$RESUME_CKPT_NAME" ] && [ -z "$RESUMED_ONCE" ]; then
+    mkdir -p "$OUT"
+    cp -r "$RESUME_STAGE/$RESUME_CKPT_NAME" "$OUT/$RESUME_CKPT_NAME"
+    RESUMED_ONCE=1
+    echo "[train.sh] seeded $OUT/$RESUME_CKPT_NAME for resume"
+  else
+    RESUME_ARG=""   # only attempt resume once; a later OOM retry starts clean
+  fi
   set +e
-  $PY -m FlagEmbedding.finetune.embedder.encoder_only.m3 \
+  "${RUN_PREFIX[@]}" "$TRAINER_ENTRY" \
     --model_name_or_path "$BASE_MODEL" \
     --cache_dir /opt/train/hf-cache \
     --train_data train.jsonl \
@@ -109,7 +290,9 @@ while true; do
     --dataloader_drop_last True \
     --warmup_steps $WARMUP \
     --logging_steps 10 \
-    --save_steps ${SAVE_STEPS:-999999} \
+    --save_steps $SAVE_STEPS \
+    --save_total_limit $SAVE_TOTAL_LIMIT \
+    $RESUME_ARG \
     --temperature 0.02 \
     --sentence_pooling_method cls \
     --normalize_embeddings True \
@@ -130,6 +313,9 @@ while true; do
 done
 T1=$(date +%s)
 echo "[train.sh] wall-clock: $((T1 - T0))s EXIT=$EXIT final_batch=$BATCH gradient_checkpointing=${CKPT_FLAG:+on}${CKPT_FLAG:-off}"
+kill $SYNC_PID 2>/dev/null || true
+aws s3 sync "$OUT" "$CKPT_S3/" --exclude '*' --include 'checkpoint-*/**' --only-show-errors 2>/dev/null || true
+echo "[train.sh] final checkpoint sync done"
 
 # 4. Write the SBERT pooling config into the checkpoint. NON-OPTIONAL: the
 #    trainer saves none, and a bare SentenceTransformer(ckpt) then silently
