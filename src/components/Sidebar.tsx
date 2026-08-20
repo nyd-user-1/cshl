@@ -9,6 +9,7 @@ import {
   Pencil,
   Trash2,
   MessageSquare,
+  Sparkles,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { useChatSessions } from "@/hooks/useChatSessions";
@@ -331,6 +332,23 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             )}
           </div>
         </nav>
+
+        {/* Footer — this shell has no page footer, so the bottom of the sidebar
+            is where site-level links live. */}
+        <div className="px-3 pb-1 pt-2">
+          <button
+            onClick={() => { navigate("/announcing"); closeMobile(); }}
+            onMouseEnter={() => { import("@/pages/Announcing"); }}
+            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs transition-colors ${
+              location.pathname === "/announcing"
+                ? "bg-muted font-medium text-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            }`}
+          >
+            <Sparkles className="h-3.5 w-3.5 flex-shrink-0" />
+            <span className="truncate">Announcing CSHL-CPT</span>
+          </button>
+        </div>
 
         {/* User menu at bottom */}
         <div className="px-3 py-2">

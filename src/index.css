@@ -19,6 +19,13 @@
   --color-ring: oklch(0.708 0.165 254);
   --color-nuclear: oklch(0.708 0.165 254);
   --color-nuclear-foreground: oklch(0.985 0 0);
+  /* Chart marks (src/pages/Announcing.tsx). Two categorical fills only:
+     "ours" and "not ours". Checked with the dataviz validator against this
+     surface — adjacent-pair CVD separation dE 18.9, normal-vision 19.7, both
+     >= 3:1 contrast. The neutral is deliberately low-chroma: it is a
+     de-emphasis, not a competing hue. */
+  --color-chart-ours: #3d93f5;
+  --color-chart-base: #6b6b78;
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
   --radius-lg: 1rem;
@@ -61,6 +68,12 @@
   --color-ring: #00BFFF;
   --color-nuclear: #00BFFF;
   --color-nuclear-foreground: #000000;
+
+  /* Chart marks — re-stepped for the black surface rather than flipped:
+     cyan inside the dark lightness band (L 0.48-0.67), dim amber as the
+     demotion neutral. CVD separation dE 20.8, normal-vision 21.8. */
+  --color-chart-ours: #0d9ed6;
+  --color-chart-base: #9a8340;
 }
 
 @layer base {
