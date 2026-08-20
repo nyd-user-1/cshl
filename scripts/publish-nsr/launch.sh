@@ -72,7 +72,9 @@ esac
 # carries: every existing card was unpublishable, and the refusal printed an EMPTY
 # list of offenders because the list is built with the narrow pattern. A guard that
 # refuses without naming a reason gets worked around instead of read.
-UNFILLED=$(grep -o '{{[A-Z_]\+}}' "$CARD" | sort -u)
+# `|| true` is load-bearing: grep exits 1 when it finds nothing, and this file runs
+# under `set -euo pipefail`, so the CLEAN case would abort the script.
+UNFILLED=$(grep -o '{{[A-Z_]\+}}' "$CARD" | sort -u || true)
 if [ -n "$UNFILLED" ]; then
   echo "REFUSING: $CARD still contains {{PLACEHOLDER}} markers:"; echo "$UNFILLED" | sed 's/^/  /'
   echo "Fill them from the actual run before publishing. A card with placeholders is worse than no card."

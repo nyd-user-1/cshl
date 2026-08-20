@@ -701,6 +701,65 @@ populated table is `preprint_embeddings_cshl`. Flipping without reconciling thos
 `/chat` appearing to run on our encoder while serving keyword-only results — no error,
 plausible output. Flagged to the owning lane before the flip.
 
+### The flip, made 2026-08-20 — now serving the qpairs encoder
+
+*This subsection supersedes "the flip itself was deliberately not made tonight" above, which is
+kept because the reasoning for waiting was sound and the sequence matters.*
+
+The serve box (`i-08d4dfab74ff44054`, unchanged, same IP) was re-pointed in place at the qpairs
+weights — `models/cshl-encoder-bge-m3/20260819-192100-train/serve/`, md5
+`7a508120e27bd708ea5bcd070fa435c2` against the CITE model's `ec06108315187750f9cdbf07813c2de0`
+— and `vectorTable("nsr")` moved with it to `preprint_embeddings_cshl_qp`. The box and that
+constant are one decision in two places.
+
+Parity re-verified on the new weights, three papers, against all three tables:
+
+| | vs `_cshl_qp` (serving) | vs `_cshl` (CITE) | vs `preprint_embeddings` (stock) |
+|---|---:|---:|---:|
+| cosine | **0.999998 – 0.999999** | 0.4647 – 0.6551 | 0.4575 – 0.6326 |
+
+The disagreement column is wider than the 0.77 measured for stock-vs-CITE: query-shaped
+fine-tuning moved the embedding space considerably further from the citation model than the
+citation model moved from stock.
+
+**Two things this cutover proved that the staging had not.**
+
+*The encoder-down fallback binds the table to the encoder, tested rather than reasoned about.*
+On a throwaway preview with a deliberately unreachable `NSR_ENCODER_URL`, the serve box logged
+**zero** requests, the dense arm still returned four rows, and they came from
+`preprint_embeddings` at cos 0.63–0.64 with a different neighbour set — stock bge-m3's space,
+not ours. A box failure costs retrieval quality and nothing else.
+
+*The flip was already half-made, and finding that out late cost a real mismatch window.* This
+section said the flip had not been made; by the time it was acted on, `SEARCH_ENCODER=nsr`,
+`NSR_ENCODER_URL` and `NSR_SERVE_KEY` had all been set in Vercel Production. So re-pointing the
+box put production into exactly the state this report warns about — a live build reading the
+**CITE** table with **qpairs** query vectors — for about seven minutes, until the code deploy
+landed. It is visible in the numbers rather than inferred: the same question returned dense
+similarities of 0.41 / 0.41 / 0.40 mismatched and 0.58 / 0.58 / 0.58 matched, with no error at
+any point in between. Zero requests had hit the box in the preceding hour and the only request
+inside the window was the operator's own probe, but that is luck and not a control. **The
+correct sequence, when the flip is already live, is `SEARCH_ENCODER=bge` → reweight → deploy →
+`SEARCH_ENCODER=nsr`, which has no mismatched state at any point.** The general lesson is
+narrower and worse: a document was trusted over a thirty-second measurement, on precisely the
+question the document was least likely to still be current about.
+
+**Both remaining arms stay populated and untouched.** `preprint_embeddings_cshl` (CITE) is not
+dead weight — it is still the better document→document encoder (R@10 0.2120 vs 0.1980) and the
+right arm for "more like this", reviewer matching and systematic-review expansion. Fusing it
+back into the *query* path was measured and makes things worse in every combination:
+RRF(qpairs+CITE+FTS) 0.4230 and RRF(qpairs+CITE) 0.4077 both land below qpairs alone at 0.4319.
+
+**Rollback is `SEARCH_ENCODER=bge` plus a redeploy**, and it is correct under *any* version of
+`api/_lib/embed.ts` because `vectorTable("bge")` is `preprint_embeddings` in all of them —
+which is what makes it a rollback rather than a second flip. The CITE weights also remain on
+the box at `/models/enc.cite` for a box-level revert.
+
+**Open hazard.** Production is deployed from `main` by GitHub integration; this fix is a CLI
+deploy from `lane/rxiv-load`. A routine push to `main` would restore a build whose
+`vectorTable("nsr")` is the CITE table while the box keeps serving qpairs — the mismatch above,
+re-created silently by someone who never touched serving. Merging the branch closes it.
+
 ## Licensing — measured, for the record
 
 Everything publishes **private**, per standing policy — the same posture as the sibling NSR

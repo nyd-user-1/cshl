@@ -211,3 +211,260 @@ sync pulled from `final/` and that a serving box has no use for.
 Confirmed after the swap: `/models/enc/model.safetensors` md5 is `7a508120…`. TEI restarted
 and is warming the model (this box takes ~3.5 min on CPU; the ORT-backend error in its log is
 normal — there is no ONNX export, so it falls back to Candle, same as the previous boot).
+
+### 2026-08-20T02:34Z — MANDATORY PARITY CHECK: passed, and it discriminates
+
+TEI came ready at 02:32Z (`health=200`) after ~3.5 min warming the model on CPU. Then the
+check the report calls the most portable thing this program produced — one paper's **exact
+indexed text**, taken from the DB through the canonical `recipeSql()` expression, embedded
+through the **live** endpoint, cosine against that paper's stored vector in each table.
+Three papers, deterministically sampled by `md5('parity:'||key_number)`:
+
+| paper | vs `_cshl_qp` (serving) | vs `_cshl` (CITE) | vs `preprint_embeddings` (stock) |
+|---|---:|---:|---:|
+| 2023.08.22.23294416 | **0.999998** | 0.464701 | 0.457467 |
+| 2025.12.06.692718 | **0.999999** | 0.655088 | 0.632601 |
+| 429662 | **0.999998** | 0.582269 | 0.475665 |
+
+Live vectors: dim 1024, L2 norm 1.000000 on all three.
+
+**≈1.0 against the table we serve, and 0.46–0.66 against the one we do not.** The second
+column is what makes the first mean anything: a check that only confirms agreement proves
+less than one that also shows clear *dis*agreement. Note it is a much wider gap than the
+0.77 the report measured for stock-vs-CITE — the query-shaped fine-tune moved the embedding
+space considerably further from the citation model than the citation model moved from stock.
+
+Kept as `scripts/serve-nsr/parity-check.mjs` so it is a script and not a habit.
+
+### 2026-08-20T02:35Z — the flip was ALREADY LIVE, and my reweight broke production for ~7 minutes
+
+This is the important entry in this log and it is a mistake of mine.
+
+The report says, of the serving flip: *"The flip itself was deliberately not made tonight."*
+I carried that forward and treated the serve box as out of the live path. Before touching
+Vercel I probed production to confirm — and it was **already flipped**:
+
+```
+POST https://cshl.nysgpt.com/api/chat  ->  200
+serve box: docker logs --since 5m tei-enc | grep -c Success  ->  4
+           (3 from my parity check + 1 from that /chat request)
+```
+
+`SEARCH_ENCODER=nsr`, `NSR_ENCODER_URL` and `NSR_SERVE_KEY` were all created in Vercel
+Production at ~19:5xZ — **after** the report line was written. So from the moment my weight
+swap completed (~02:32Z) until the deploy went live (~02:39Z), production was running the
+`main` build, whose `vectorTable("nsr")` is `preprint_embeddings_cshl` — the **CITE** table —
+against a box now serving **qpairs** vectors. One model's query vector searching another
+model's space. HTTP 200, plausible titles, no error anywhere.
+
+It is visible in the numbers, which is the only reason it is not a guess. Same question,
+same production URL, before and after the deploy:
+
+```
+BEFORE (box=qpairs, table=CITE)        AFTER (box=qpairs, table=qpairs)
+ 0.4120  ASSESSMENT AND CHARACTERIZATION  0.5843  COVCOG 2: Cognitive and Memory Deficits
+ 0.4061  COVCOG 2: Cognitive and Memory   0.5807  ASSESSMENT AND CHARACTERIZATION
+ 0.3975  Clearing the Fog: A Systematic   0.5769  COVCOG 1: Factors predicting Cognitive
+ 0.3950  The impact of a home-based       0.5602  AI-based decoding of long covid ...
+```
+
+Degraded, not broken — which is exactly why nothing would have caught it. The "after" list is
+also the list the previous lane's verified kNN produced (COVCOG 2 / COVCOG 1 / AI-based
+decoding), which is an independent check that the matched configuration is the right one.
+
+**What I actually did wrong:** I trusted a document over a measurement, on the one question
+the document was least likely to still be current about. The probe that settled it took
+thirty seconds and I ran it *after* the swap instead of before. Either ordering of
+swap-then-deploy leaves a window; knowing the flip was live, the correct sequence was
+`SEARCH_ENCODER=bge` → reweight → deploy → `SEARCH_ENCODER=nsr`, which has no mismatched
+state at any point.
+
+**Blast radius, measured rather than estimated:** the box served 21 requests in the preceding
+24 hours, all of them from lanes verifying things, and **zero** in the hour before the swap.
+The only request inside the 7-minute window was my own probe. No user query is known to have
+hit the mismatch — but "no user was watching" is luck, not a control.
+
+### 2026-08-20T02:39Z — deployed, and the env vars needed no change
+
+`lane/rxiv-load` differs from `main` only in `docs/` and `scripts/` — **no `api/` or `src/`
+changes** — so deploying this branch ships main's app code plus this lane's one-line table
+change, and nothing else rides along.
+
+```
+npx tsc -b        -> 0     (exit code read directly, no pipe)
+npm run build     -> 0
+commit a1eb752
+vercel deploy --prod --yes
+  Production  https://cshl-1j2t9v51h-nys-gpt.vercel.app   READY
+  Aliased     https://cshl.nysgpt.com
+```
+
+**No Vercel environment variable was changed tonight.** All three were already set and all
+three are now verified *empirically* rather than by reading them — `vercel env pull` and the
+REST API both return `''` for production values because they are marked sensitive, so the
+only honest verification is behavioural:
+
+- `SEARCH_ENCODER` is `nsr` — because the dense arm called the box at all.
+- `NSR_ENCODER_URL` points at **this** box (`i-08d4dfab74ff44054`) and not at the NSR
+  nuclear-physics box the report warned about — because `cshl-serve-cshl` logged the request.
+- `NSR_SERVE_KEY` is right — because TEI is `--api-key` gated and returned 200 rather than 401.
+
+### 2026-08-20T02:41Z — /chat verified end to end
+
+Real question, production alias, after the deploy:
+
+```
+POST https://cshl.nysgpt.com/api/chat  {"userMessage":"What do preprints say about long
+                                        COVID cognitive impairment?","messages":[]}
+http=200  12.7 s  SSE stream, 373 data frames
+sources.nsr: 8 populated (4 dense @ 0.560-0.584 interleaved with 4 FTS)
+answer: 3,336 characters, grounded
+```
+
+The answer cites `2020.10.20.20215863` (Hampshire, n=84,285), `2023.12.03.23299331` (Zhao,
+cognitive slowing, n=270), both COVCOG preprints by key number, `2025.05.14.654036` and
+`2023.11.06.23298101` — i.e. it is answering **from the retrieved sources**, with the
+preprint caveat stated, not from the model's own memory.
+
+**Rollback is `SEARCH_ENCODER=bge` plus a redeploy.** That is correct under *any* version of
+`api/_lib/embed.ts`, old or new, because `vectorTable("bge")` is `preprint_embeddings` in
+both — which is the property that makes it a safe rollback rather than a second flip. A
+box-level rollback also exists: the CITE weights are still on the box at `/models/enc.cite`
+(md5 `ec06108315187750f9cdbf07813c2de0`); swap the directories back and restart `tei-enc`.
+
+**`preprint_embeddings_cshl` (CITE) is populated, untouched, and staying.** It is the better
+document→document encoder and the right arm for "more like this" / reviewer matching. It has
+no query-side route today, and anything that adds one must serve the CITE weights, not these.
+
+### 2026-08-20T02:42Z — a hazard the flip creates, flagged rather than fixed
+
+**Production is deployed from `main` by GitHub integration; tonight's fix is a CLI deploy from
+`lane/rxiv-load`.** The last three production deploys were: `main` via git (3h ago), then two
+CLI deploys from this branch. Whichever is newest wins.
+
+So if anyone pushes `main` before this branch merges, production reverts to a build whose
+`vectorTable("nsr")` is `preprint_embeddings_cshl` — while `SEARCH_ENCODER=nsr` stays set and
+the box keeps serving qpairs weights. **That is the exact mismatch above, restored silently by
+a routine push, with nobody having touched serving.**
+
+This is not mine to resolve — merging `lane/rxiv-load` into `main` is a cross-lane call. It is
+the single most likely way tonight's work gets quietly undone, so it is stated here in the
+terms someone can act on:
+
+- **Fix:** merge `lane/rxiv-load` (or at minimum commit `a1eb752`) into `main`. The branch
+  contains no other `api/` or `src/` change, so the app-code risk of that merge is one line.
+- **Detection, if it happens:** `/chat` dense similarities drop from ~0.58 to ~0.41 on the
+  long-COVID probe above. Nothing else changes and nothing errors.
+- **Immediate mitigation if it happens before the merge:** `SEARCH_ENCODER=bge` + redeploy.
+
+### 2026-08-20T02:42Z — serve box conditions found, not caused, and not fixed tonight
+
+- **`tei-rr` (the reranker on :8081) has restarted 458 times** and is still looping. Cause:
+  the box was launched without `RR_RUN`, so `/models/rr` is empty and TEI exits with
+  `` `config.json` not found `` on every start. `SEARCH_RERANK` is unset so nothing depends on
+  it, and it is not stealing meaningful CPU — but it is a container failing in a loop forever
+  on the box that serves the dense arm. Left as found: stopping it would be a second variable
+  in a flip that was supposed to have one, and it changes nothing the app can observe.
+- TEI logs `Backend does not support a batch size > 4 / forcing max_batch_requests=4` on every
+  boot, overriding the rig's `--max-client-batch-size 32`. The flag is accepted and ignored.
+- `scripts/serve-nsr/launch.sh` hardcodes `models/<name>/<run>/final`, but this run's weights
+  are at `<run>/serve/` (the clean prefix, no optimizer state). A relaunch of that rig with
+  `ENC_RUN=20260819-192100-train` would sync an empty directory today.
+
+### 2026-08-20T02:43Z — the encoder-down fallback: tested, not reasoned about
+
+The brief requires that the fallback-binds-table-to-encoder logic keep working. Reading the
+code says it does; that is not the same as knowing. Tested on a throwaway preview with a
+deliberately dead encoder, so production was never involved:
+
+```
+vercel deploy --yes -e NSR_ENCODER_URL=http://127.0.0.1:9/embed
+POST <preview>/api/chat  <- same long-COVID question
+```
+
+Three things had to be true at once, and were:
+
+| | |
+|---|---|
+| the serve box was **not** called | `docker logs --since 3m tei-enc \| grep -c Success` → **0** |
+| the dense arm did **not** drop | 4 dense rows still returned, interleaved with FTS as usual |
+| the **table followed the encoder** | different neighbours at cos 0.63–0.64, i.e. stock bge-m3 space |
+
+Side by side on the identical question — the top dense hit changes from `COVCOG 2` (qpairs
+space, 0.5843) to `Cognitive deficits ... N=84,285` (stock space, 0.6386). Both are good
+answers; they are *different* answers, which is the point. A box failure costs retrieval
+quality and nothing else, and the vectors are never compared across spaces.
+
+Preview deleted after the test so nobody can promote a deployment pinned to a dead encoder.
+
+### 2026-08-20T02:47Z — the publish boxes are slow, and it is the Ubuntu mirror, not them
+
+The encoder publish box sat at `apt-get install -y -q python3-venv awscli` for ~20 minutes.
+Measured rather than guessed, from two different boxes in two different subnets and AZs:
+
+| from | to | throughput |
+|---|---|---:|
+| publish box (t3.small, us-east-1a) | `us-east-1.ec2.archive.ubuntu.com` | **56 kB/s** |
+| serve box (t3.large, us-east-1c) | `us-east-1.ec2.archive.ubuntu.com` | **34 kB/s** |
+| serve box | `huggingface.co` | **57.7 MB/s** |
+| serve box | S3 (`cshl-embed-rxiv`) | 17 MB in seconds |
+
+**A ~1,700× difference between the Ubuntu mirror and everything else.** The boxes are fine;
+the in-region Ubuntu mirror is degraded right now. `apt-get update` alone fetched 47.3 MB in
+9 min 17 s. The box is making progress — 48 debs, 31 MB cached — so it will finish; the S3
+pull and the 2.1 GB HF push that follow are on the fast paths.
+
+I did NOT swap the AMI mid-flight to fix this. Recommended follow-up instead, recorded rather
+than done: the publish rig needs apt only for `python3-venv` and `awscli`, both of which
+Amazon Linux 2023 ships preinstalled. Moving the publisher off Ubuntu removes the only slow
+dependency in the whole path. Doing it tonight, untested, on the night of the flip, is how a
+publish that would have worked ends up not working.
+
+**Consequence, acted on:** ran the second publish (`cshl-eval-v1`) on its own box **in
+parallel** rather than after, so the two boxes pay the apt cost concurrently instead of
+serially. `i-0521de00f1353300c`.
+
+### 2026-08-20T02:48Z — a regression I introduced, caught by dry-running
+
+The tightened placeholder guard I wrote earlier broke the **clean** case:
+
+```
+UNFILLED=$(grep -o '{{[A-Z_]\+}}' "$CARD" | sort -u)
+```
+
+`grep` exits 1 when it finds nothing, this file runs under `set -euo pipefail`, so a card with
+**no** placeholders aborted the script silently at that line — rc=1, no message. A guard that
+fails closed on the good input is worse than the bug it replaced. Fixed with `|| true` and a
+comment saying why it is load-bearing.
+
+It was caught because the eval publish was dry-run first and the dry run printed nothing
+instead of a plan. Both directions re-exercised after the fix: clean card plans and returns 0,
+`_CORPUS.md` refuses and names its 10 markers.
+
+### 2026-08-20T02:48Z — the new fusion arms say the flip picked the right arm
+
+Another lane wrote three new arms into `data/eval/cshl-eval-2k/results/` at 02:22–02:24Z
+while I was staging — fusions of **both** our encoders. Relevant to this lane because "serve
+both" was the obvious alternative to choosing:
+
+| arm | MeSH R@10 | AUTHORKW R@10 |
+|---|---:|---:|
+| RRF(qpairs + MedCPT + FTS) | **0.5197** | **0.8300** |
+| RRF(qpairs + CITE + MedCPT + FTS) | 0.4988 | 0.8182 |
+| **qpairs alone** | **0.4319** | 0.7497 |
+| RRF(qpairs + CITE + FTS) | 0.4230 | 0.7365 |
+| RRF(qpairs + CITE) | 0.4077 | 0.7273 |
+
+**Adding the CITE arm to the query path makes every configuration worse**, including against
+qpairs on its own. So serving qpairs alone for query→document is the right call, and CITE's
+value really is confined to the document→document task — which is what the card and the
+`vectorTable()` comment say. This is the other lane's result, not mine; recorded here because
+it independently supports tonight's serving decision and because the numbers came from files
+I was about to publish.
+
+**Staging note for auditability.** `data/eval` is being written by another lane concurrently,
+so what got pushed is a snapshot, not a stable state. Every staged file was re-copied,
+JSON-parsed and checked for a metrics block before upload (a truncated result file parses as
+nothing, but a half-written one can parse as an object with no metrics). 35 files, sha256
+prefixes recorded in this lane's staging output; `CSHL-CPT-REPORT.md` is the committed
+version at `53fc480`. If that lane lands more arms tonight, this repo needs another push.
