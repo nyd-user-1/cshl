@@ -288,6 +288,18 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
       metrics: aggregate(perQ, queries),
     }
     writeFileSync(join(RESULTS, `${arm.replace(/[^a-zA-Z0-9._+-]/g, '_')}.json`), JSON.stringify(out, null, 2))
+    // Per-query hit vectors, so two arms can be compared PAIRED rather than by
+    // eyeballing two aggregate numbers. score-docdoc.mjs has always written
+    // these; the query->doc side did not, which is why the report's headline
+    // comparison had no significance test attached to it. Keyed by qid and
+    // ordered by the benchmark, so scripts/eval/paired-test.mjs can assert the
+    // pairing instead of assuming it.
+    const ordered = queries.filter((qq) => res.perQuery.has(qq.qid))
+    writeFileSync(join(RESULTS, `${arm.replace(/[^a-zA-Z0-9._+-]/g, '_')}.perquery.json`),
+      JSON.stringify({ arm, version: VERSION,
+        keys: ordered.map((qq) => qq.qid),
+        family: ordered.map((qq) => qq.family),
+        hits10: ordered.map((qq) => perQ.get(qq.qid).r10) }))
     for (const [fam, segs] of Object.entries(out.metrics)) {
       console.log(`  ${fam} blended: R@1 ${segs.blended.r1} R@10 ${segs.blended.r10} nDCG@10 ${segs.blended.ndcg10} (n=${segs.blended.n})`)
     }

@@ -15,7 +15,9 @@ Budget: **hard cap $5.00 AWS**, approved by Brendan. Every box self-terminates o
 
 ## Status
 
-**PHASE: train — running.** Instance `i-09938e30bd1f42c3d`, `g6e.2xlarge`, `us-east-1c`,
+**COMPLETE — 2026-08-20T01:05Z. Results below. See "THE RESULT".**
+
+(historical) **PHASE: train — running.** Instance `i-09938e30bd1f42c3d`, `g6e.2xlarge`, `us-east-1c`,
 run id `20260819-192100-train`, launched 2026-08-19T23:21Z.
 **Training at batch 8 (NOT 16 — it OOMed, see 23:29Z). 4,999 steps at 1.52 it/s measured on
 the box = ~55 min, so training ends ~2026-08-20T00:25Z and the box should self-terminate
@@ -534,6 +536,130 @@ much smaller than the 1.8× I had priced, because the job is not purely GPU-boun
 built **after** the sweep per `indexes.sql`'s own rule. Watched through
 `pg_stat_progress_create_index` rather than by waiting on the psql session, so "still building"
 and "the session died" cannot look the same.
+
+---
+
+# THE RESULT
+
+**Query-shaped supervision closes 80% of the gap to MedCPT. The hypothesis the report staged
+is confirmed — with one confound, stated up front, and one real loss.**
+
+## Query→document — the task the product actually serves
+
+Scored on the frozen 2,000-query subsample of `cshl-eval-v1`
+(`sha256 32433e4d…`, MESH 1,241 · AUTHORKW 759), full-corpus retrieval against 433,449 papers,
+`hnsw.ef_search=100`, cosine for our arms, inner product over raw `[CLS]` for MedCPT.
+
+| arm | MeSH R@10 | MeSH nDCG@10 | AUTHORKW R@10 | AUTHORKW nDCG@10 |
+|---|---:|---:|---:|---:|
+| **RRF(qpairs + MedCPT + FTS)** | **0.5197** | **0.3879** | **0.8300** | **0.7197** |
+| RRF(ours + MedCPT + FTS) — *previous best* | 0.4722 | 0.3454 | 0.8235 | 0.6915 |
+| `ncbi/MedCPT` | 0.4569 | 0.3373 | 0.8076 | 0.6885 |
+| RRF(qpairs + FTS) | 0.4512 | 0.3333 | 0.7655 | 0.6540 |
+| **ours — qpairs (query→doc)** | **0.4319** | **0.3190** | **0.7497** | **0.6395** |
+| ours — CITE (doc→doc) *previous* | 0.3320 | 0.2367 | 0.6693 | 0.5625 |
+| Postgres FTS | 0.0806 | 0.0626 | 0.2398 | 0.2286 |
+
+R@1: qpairs 0.2224 (MeSH) / 0.5336 (AUTHORKW), against the CITE run's 0.1571 / 0.4611.
+
+**MeSH R@10 0.3320 → 0.4319, +30.1% relative.** The gap to MedCPT was 0.1249; it is now 0.0250.
+**80% of the deficit closed by changing what we trained on.** On author keywords, 0.6693 →
+0.7497 (+12.0%), gap 0.1383 → 0.0579.
+
+Paired McNemar against the CITE model, on the same queries in the same order (asserted, not
+assumed):
+
+| family | n | qpairs-only | CITE-only | ΔR@10 | exact p | bootstrap 95% CI |
+|---|---:|---:|---:|---:|---:|---|
+| MESH | 1,241 | 180 | 56 | **+0.0999** | **2.3e-16** | [+0.0766, +0.1225] |
+| AUTHORKW | 759 | 86 | 25 | **+0.0804** | **5.0e-9** | [+0.0540, +0.1080] |
+| both | 2,000 | 266 | 81 | **+0.0925** | **3.9e-24** | [+0.0745, +0.1105] |
+
+This is not a marginal result and it does not need a careful reading to survive.
+
+And against MedCPT itself, paired on the same queries:
+
+| family | n | qpairs-only | MedCPT-only | ΔR@10 | exact p | bootstrap 95% CI |
+|---|---:|---:|---:|---:|---:|---|
+| MESH | 1,241 | 123 | 154 | −0.0250 | **0.071** | **[−0.0516, +0.0016]** |
+| AUTHORKW | 759 | 48 | 92 | −0.0580 | 0.0003 | [−0.0883, −0.0277] |
+
+**On MeSH we can no longer distinguish our encoder from MedCPT** — p=0.071, and the confidence
+interval crosses zero. That is the headline underneath the headline: a general multilingual
+encoder, fine-tuned for one hour on mined query pairs from this corpus, has reached statistical
+parity on MeSH retrieval with a purpose-built biomedical retriever trained on PubMed
+query-click logs. **On author keywords MedCPT is still genuinely and significantly better**
+(p=0.0003) and that loss should not be rounded off.
+
+## Document→document — the regression, which was expected, with its number
+
+| arm | R@1 | R@10 | R@50 | MRR |
+|---|---:|---:|---:|---:|
+| ours — CITE | 0.0700 | **0.2120** | 0.3445 | 0.1167 |
+| **ours — qpairs** | 0.0630 | **0.1980** | 0.3145 | 0.1061 |
+| stock `BAAI/bge-m3` | 0.0620 | 0.1955 | 0.2900 | 0.1053 |
+| `ncbi/MedCPT` | 0.0580 | 0.1790 | 0.3020 | 0.0985 |
+
+| comparison | ΔR@10 | exact p | bootstrap 95% CI |
+|---|---:|---:|---|
+| qpairs vs CITE | **−0.0140** | 0.043 | [−0.0275, −0.0010] |
+| qpairs vs MedCPT | +0.0190 | 0.015 | [+0.0040, +0.0340] |
+| qpairs vs stock bge-m3 | +0.0025 | **0.78** | [−0.0110, +0.0165] |
+
+**The doc→doc drop is real and statistically significant** (p=0.043), and it was predicted before
+the run. But the third row is the one that matters and it is worse than "a small regression":
+
+> On document→document, the qpairs model is **statistically indistinguishable from the base
+> model it was fine-tuned from** (p=0.78). The citation training bought a genuine doc→doc
+> advantage; training on queries did not merely dent it, it **spent all of it**.
+
+So the honest framing is not "we improved and paid a little." It is **a trade**: the CITE model
+is still the better doc→doc encoder and remains the right one for "more like this", reviewer
+matching and systematic-review expansion. Both tables are populated, so both remain available —
+which is exactly why this run went into a third table rather than over the second.
+
+## The confound, stated before anyone asks
+
+**This run moved two levers at once.** The objective changed (doc→doc CITE → query→doc pairs)
+**and** the effective batch went 4 → 8, because the L40S fit `BATCH=8` where the A10G fit only 4.
+The report named both as candidate causes of the 0.332 and this run cannot separate them. Two
+clean runs would have cost about $6 against a $5.00 cap.
+
+What can be said is bounded and still strong: the CITE run's own report measured the batch-4
+model at 0.332 and stock bge-m3 at 0.286, so the entire fine-tune at batch 4 bought +0.046 on
+MeSH. This run bought **+0.0999** on top of that. A doubling of batch size plausibly explains
+some of it; it is not plausible that it explains all of it, because the doc→doc side moved in
+the *opposite* direction at the same batch size — which is what an objective change looks like
+and is not what a capacity change looks like.
+
+## Controls — the harness produced the old numbers before it produced a new one
+
+| arm | metric | this run | published | 
+|---|---|---:|---:|
+| `cshl` | MeSH R@10 / AUTHORKW R@10 | 0.3320 / 0.6693 | 0.3320 / 0.6693 |
+| `medcpt` | MeSH R@10 / AUTHORKW R@10 | 0.4569 / 0.8076 | 0.4569 / 0.8076 |
+| `fts` | MeSH R@10 / AUTHORKW R@10 | 0.0806 / 0.2398 | 0.0806 / 0.2398 |
+
+Every digit, re-derived after the registry edit, so the edit is inside the test. `cshl_qp` also
+reproduced itself exactly across two independent scoring runs (0.4319 / 0.7497 both times).
+
+## Coverage gate — re-derived at assertion time, nothing accepted from a pass report
+
+**PASSED at 2026-08-20 01:00Z against 433,449 papers.**
+
+```
+corpus 433,449 · embeddable 433,449 · excluded by the <20-char rule 0
+
+preprint_embeddings_cshl_qp   433,449   uncovered 0   dim 1024   zero-vectors 0
+text_hash vs canonical recipe: 0 mismatches of 433,449 checked
+HNSW idx_pp_emb_cshl_qp_hnsw  3,386 MB  vector_cosine_ops  indisvalid=t
+score.mjs reported "Index Scan CONFIRMED" for cshl_qp, cshl and medcpt
+
+untouched, as required:
+  preprint_embeddings_cshl     433,449   last write 2026-08-19 14:06Z
+  preprint_embeddings_medcpt   433,449   last write 2026-08-19 07:07Z
+  preprint_embeddings_cshl_qp  433,449   last write 2026-08-20 00:52Z
+```
 
 ---
 
