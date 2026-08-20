@@ -2,23 +2,33 @@
 //
 //   ?q=…&mode=keyword     weighted FTS (sql/02: title A, category+journal+institution B,
 //                         abstract C), newest first on ties.
-//   ?q=…&mode=semantic    ** DEGRADED — see below **
-//   ?q=#2026.07.31        key_number prefix, either mode.
+//   ?q=…&mode=semantic    dense kNN over the active encoder's vector table (HNSW, cosine).
+//   ?q=…&mode=hybrid      RRF(dense, FTS) — the configuration the benchmark scores best.
+//   ?q=#2026.07.31        key_number prefix, any mode.
 //   ?mode=structured      typed chip search: &categories=…&journals=…
 //   &limit=               1..200 (default 100)
 //
-// GRACEFUL DEGRADATION (LANE-RXIV-MAP.md, scope guard): this corpus has no
-// embeddings yet — no encoder, no reranker, no vector sidecar populated. Rather
-// than 500 or return nothing, `semantic` and `hybrid` fall through to the same FTS
-// path and say so in the payload (`degraded: true`, `requested_mode`). The UI's
-// Hybrid/Semantic/Keyword toggle therefore keeps working and keeps returning
-// results; the arms simply agree for now.
+// DENSE RETRIEVAL RESTORED 2026-08-20. The header this replaces said "this corpus has no
+// embeddings yet" and degraded semantic/hybrid into the FTS path. That was true when it
+// was written and became false at 2026-08-19 14:29Z, when the vector tables were gated at
+// 433,449 rows — but nobody re-wired this file, so the UI's Hybrid/Semantic toggle went on
+// silently serving keyword results for a day. A degradation notice that outlives its
+// cause is indistinguishable from a bug; the payload said `degraded: true` and the UI
+// never surfaced it. Measured cost of the gap, on the frozen benchmark: MeSH R@10 0.081
+// (FTS alone) against 0.53 for the fused arm this file now serves.
 //
-// Restoring dense retrieval is additive and needs no change here beyond a new arm:
-// populate preprint_embeddings (bge-m3, 1024-d, keyed by key_number), add the HNSW
-// index, then reinstate the RRF fusion that api/_lib/embed.ts still provides.
+// Degradation is KEPT, but it is now conditional and honest: if the vector sidecar is
+// empty or the encoder round trip fails, we fall back to FTS and say so in the payload.
+// The encoder itself has the same fallback ladder as /chat — if the fine-tuned serve box
+// is unreachable we retry on stock bge-m3, and **the vector table follows whichever
+// encoder actually answered**, because querying one model's space with another model's
+// vector returns confident nonsense with a 200.
 
 import { neon } from "@neondatabase/serverless";
+import {
+  activeEncoder, embedQueryCached, hasEmbeddings, rrf, toVectorLiteral, vectorTable,
+  type EncoderName,
+} from "./_lib/embed.js";
 
 export const config = { maxDuration: 30 };
 
@@ -75,24 +85,112 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ records: rows, count: rows.length, mode: "key", timings: { total_ms: Date.now() - t0 } });
     }
 
-    const rows = await q(
-      `SELECT ${SELECT},
-              least(ts_rank_cd(p.fts, websearch_to_tsquery('english', $1)) / 4.0, 0.99)::float AS similarity
-       FROM preprints p
-       WHERE p.fts @@ websearch_to_tsquery('english', $1)
-       ORDER BY ts_rank_cd(p.fts, websearch_to_tsquery('english', $1)) DESC,
-                p.pub_year DESC NULLS LAST
-       LIMIT $2`, [raw, limit]);
+    const wantsDense = requested === "semantic" || requested === "hybrid";
+    const wantsFts = requested !== "semantic";
 
+    /* ── dense arm ────────────────────────────────────────────────────────── */
+    let denseRows: Row[] = [];
+    let encoderUsed: EncoderName | null = null;
+    let denseNote: string | undefined;
+    const tDense0 = Date.now();
+    if (wantsDense) {
+      try {
+        if (!(await hasEmbeddings(sql as never))) {
+          denseNote = "vector sidecar empty — FTS only";
+        } else {
+          let enc = activeEncoder();
+          let vector: number[];
+          try {
+            ({ vector } = await embedQueryCached(sql as never, raw, enc));
+          } catch (err) {
+            // Fine-tuned arm depends on one serve box. If it is cold, throttled or gone,
+            // fall back to stock bge-m3 rather than dropping the dense arm entirely: a box
+            // failure should cost retrieval QUALITY, not the hybrid.
+            if (enc === "bge") throw err;
+            enc = "bge";
+            denseNote = "fine-tuned encoder unreachable — stock bge-m3 served this query";
+            ({ vector } = await embedQueryCached(sql as never, raw, "bge"));
+          }
+          encoderUsed = enc;
+          // ef_search must be set inside the same transaction as the probe, and the vector
+          // is BOUND, never interpolated — a join-sourced or inlined probe defeats HNSW.
+          const [, rows] = (await (sql as unknown as {
+            transaction: (qs: unknown[]) => Promise<unknown[]>;
+          }).transaction([
+            (sql as unknown as { query: (t: string, p?: unknown[]) => unknown }).query(`SET LOCAL hnsw.ef_search = 100`),
+            (sql as unknown as { query: (t: string, p?: unknown[]) => unknown }).query(
+              `SELECT ${SELECT}, (1 - (e.embedding <=> $1::vector))::float AS similarity
+               FROM ${vectorTable(enc)} e
+               JOIN preprints p USING (key_number)
+               ORDER BY e.embedding <=> $1::vector
+               LIMIT $2`,
+              [toVectorLiteral(vector), limit],
+            ),
+          ])) as [unknown, Row[]];
+          denseRows = rows ?? [];
+        }
+      } catch (err) {
+        denseNote = `dense arm failed — FTS only (${(err as Error).message.slice(0, 120)})`;
+      }
+    }
+    const denseMs = Date.now() - tDense0;
+
+    /* ── lexical arm ──────────────────────────────────────────────────────── */
+    const tFts0 = Date.now();
+    let ftsRows: Row[] = [];
+    if (wantsFts || !denseRows.length) {
+      ftsRows = await q(
+        `SELECT ${SELECT},
+                least(ts_rank_cd(p.fts, websearch_to_tsquery('english', $1)) / 4.0, 0.99)::float AS similarity
+         FROM preprints p
+         WHERE p.fts @@ websearch_to_tsquery('english', $1)
+         ORDER BY ts_rank_cd(p.fts, websearch_to_tsquery('english', $1)) DESC,
+                  p.pub_year DESC NULLS LAST
+         LIMIT $2`, [raw, limit]);
+    }
+    const ftsMs = Date.now() - tFts0;
+
+    /* ── fuse ─────────────────────────────────────────────────────────────── */
+    // Reciprocal rank fusion, the configuration the frozen benchmark scores best.
+    // `similarity` stays the dense cosine wherever the dense arm found the row, because
+    // that is the only number on this payload that means anything to a reader; rows that
+    // only FTS found keep their (much smaller) lexical score and are labelled `arm`.
+    const key = (r: Row) => String(r.key_number);
+    const byKey = new Map<string, Row>();
+    for (const r of ftsRows) byKey.set(key(r), { ...r, arm: "fts" });
+    for (const r of denseRows) {
+      const k = key(r);
+      byKey.set(k, { ...r, arm: byKey.has(k) ? "both" : "dense" });
+    }
+
+    let records: Row[];
+    let mode: string;
+    if (denseRows.length && wantsFts) {
+      const scores = rrf([denseRows.map(key), ftsRows.map(key)]);
+      records = [...byKey.values()]
+        .sort((a, b) => (scores.get(key(b)) ?? 0) - (scores.get(key(a)) ?? 0))
+        .slice(0, limit);
+      mode = "hybrid";
+    } else if (denseRows.length) {
+      records = denseRows.map((r) => ({ ...r, arm: "dense" })).slice(0, limit);
+      mode = "semantic";
+    } else {
+      records = ftsRows.slice(0, limit);
+      mode = "keyword";
+    }
+
+    const degraded = wantsDense && !denseRows.length;
     res.setHeader("Cache-Control", "public, s-maxage=3600, stale-while-revalidate=86400");
     return res.status(200).json({
-      records: rows,
-      count: rows.length,
-      mode: "keyword",
+      records,
+      count: records.length,
+      mode,
       requested_mode: requested,
-      degraded: requested !== "keyword",
-      note: requested !== "keyword" ? "no embeddings yet — served by full-text search" : undefined,
-      timings: { total_ms: Date.now() - t0 },
+      encoder: encoderUsed,
+      arms: { dense: denseRows.length, fts: ftsRows.length },
+      degraded,
+      note: denseNote,
+      timings: { total_ms: Date.now() - t0, dense_ms: denseMs, fts_ms: ftsMs },
     });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
