@@ -8,16 +8,20 @@
 //   2. jatsxml_url                    — structured JATS, cleanest to parse
 //   3. the article HTML full-text page (derived from doi + server + version)
 //   4. Europe PMC fullTextXML         — different origin, different rate limits
-//   5. r.jina.ai reader               — a fetch proxy whose crawler the origin
-//                                       does not block (the same reasoning as
-//                                       /api/pdf's Google-viewer route)
+//   5. Wayback Machine (id_ mode)     — an archive whose crawler the origin does
+//                                       not block (the same reasoning as
+//                                       /api/pdf's Google-viewer route); bioRxiv
+//                                       is heavily archived
+//   6. r.jina.ai reader               — works from residential IPs (local dev);
+//                                       Vercel's egress gets 403'd, so in
+//                                       production it is a long shot, kept last
 //
 // bioRxiv/medRxiv sit behind Cloudflare rate limiting that answers a busy
 // client with 429 (measured 2026-08-21: EVERY biorxiv.org fetch from Vercel's
 // egress 429s; medrxiv.org intermittently allows), so a miss on rungs 2–3 is
 // expected background noise, not an error. Rung 4 covers ~6% of preprints plus
-// published versions; rung 5 is the reliable path for blocked origins
-// (measured: 114 KB clean markdown in ~4.6 s for a paper rungs 2–4 all missed).
+// published versions; rung 5 measured ~5 s / 359 KB for a paper rungs 2–4 all
+// missed.
 //
 // TIMING CONTRACT. The caller gives a prompt budget (~3 s). Each fetch races
 // that budget for *inclusion in the prompt*, but keeps running afterwards (up
@@ -118,21 +122,33 @@ export function trimReaderMarkdown(md: string): string | null {
   return text.length >= 400 ? text : null;
 }
 
-/** bioRxiv/medRxiv .full HTML page → article text, capped. */
+/** bioRxiv/medRxiv .full HTML page → article text, capped. Section-aware for
+ *  the same reason as trimJats: taken in document order, abstract + intro fill
+ *  the cap before Results — the sections holding the quantities — arrive. */
 export function trimArticleHtml(html: string): string | null {
   const clean = html.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<style[\s\S]*?<\/style>/g, "");
   // The article body lives in <div class="article fulltext-view">…
   const artM = clean.match(/<div[^>]*class="[^"]*fulltext-view[^"]*"[^>]*>([\s\S]*?)<div[^>]*class="[^"]*(?:ref-list|fn-group|license)/);
   const scope = artM ? artM[1] : clean;
-  // Keep headings + paragraphs in document order.
-  const parts: string[] = [];
+  // Group paragraphs under their nearest preceding heading.
+  const secs: { title: string; parts: string[] }[] = [{ title: "abstract", parts: [] }];
   const re = /<(h[2-4]|p)[^>]*>([\s\S]*?)<\/\1>/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(scope)) && parts.join("\n").length < PER_PAPER_CHARS * 2) {
+  let total = 0;
+  while ((m = re.exec(scope)) && total < PER_PAPER_CHARS * 6) {
     const t = stripTags(m[2]);
-    if (t.length > 2) parts.push(m[1] === "p" ? t : `\n${t}:`);
+    if (t.length <= 2) continue;
+    if (m[1] === "p") { secs[secs.length - 1].parts.push(t); total += t.length; }
+    else secs.push({ title: t, parts: [] });
   }
-  const text = parts.join("\n").slice(0, PER_PAPER_CHARS).trim();
+  const wanted = /abstract|result|discussion|conclusion|finding/i;
+  let picked = secs.filter((s) => wanted.test(s.title) && s.parts.length);
+  if (!picked.length) picked = secs;
+  const text = picked
+    .map((s) => `${s.title}:\n${s.parts.join("\n")}`)
+    .join("\n\n")
+    .slice(0, PER_PAPER_CHARS)
+    .trim();
   return text.length >= 800 ? text : null; // shorter than this ⇒ we parsed chrome, not the article
 }
 
@@ -184,6 +200,17 @@ async function fetchEpmc(row: FulltextRow, signal: AbortSignal): Promise<string 
   return null;
 }
 
+async function fetchWayback(row: FulltextRow, signal: AbortSignal): Promise<string | null> {
+  if (!row.doi || !row.server) return null;
+  const v = row.version ? `v${row.version}` : "";
+  // "2" = latest snapshot, "id_" = the original bytes, no toolbar injection.
+  const html = await fetchText(
+    `https://web.archive.org/web/2id_/https://www.${row.server}.org/content/${row.doi}${v}.full`,
+    signal,
+  );
+  return html ? trimArticleHtml(html) : null;
+}
+
 async function fetchReader(row: FulltextRow, signal: AbortSignal): Promise<string | null> {
   if (!row.doi || !row.server) return null;
   const v = row.version ? `v${row.version}` : "";
@@ -201,6 +228,7 @@ async function fetchOne(row: FulltextRow, signal: AbortSignal): Promise<{ source
     ["jats", fetchJats],
     ["html", fetchHtml],
     ["epmc", fetchEpmc],
+    ["wayback", fetchWayback],
     ["reader", fetchReader],
   ] as const) {
     if (signal.aborted) return null;
