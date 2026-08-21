@@ -5,6 +5,10 @@
 // for the top few retrieved records, per row trying:
 //
 //   1. preprint_fulltext cache (Neon) — the second ask is free
+//   1b. PMC, via the resolved published version (api/_lib/dossier.ts) — the
+//       peer-reviewed version of record, from an origin that does not block
+//       datacenter clients. This rung is FIRST among the network rungs because
+//       it is both the best text and the only one that reliably answers us.
 //   2. jatsxml_url                    — structured JATS, cleanest to parse
 //   3. the article HTML full-text page (derived from doi + server + version)
 //   4. Europe PMC fullTextXML         — different origin, different rate limits
@@ -31,6 +35,8 @@
 // The stored text is section-trimmed (abstract + results + discussion when
 // the source is structured), never the raw 60k-char body.
 
+import { fetchPmcXml, resolvePublished } from "./dossier.js";
+
 interface SqlClient {
   query: (text: string, params?: unknown[]) => Promise<Record<string, unknown>[]>;
 }
@@ -41,19 +47,32 @@ export interface FulltextRow {
   server: string | null;
   version: number | null;
   jatsxml_url: string | null;
+  // Present when the caller resolved a published version (api/_lib/dossier.ts).
+  // The version of record beats the preprint on every axis that matters here —
+  // peer reviewed, revised numbers, and hosted somewhere that will actually
+  // answer our serverless egress.
+  title?: string | null;
+  authors?: string | null;
+  pub_year?: number | null;
+  published_doi?: string | null;
+  published_journal?: string | null;
 }
 
 export interface FulltextResult {
   key_number: string;
-  source: string; // 'cache:jats' | 'jats' | 'html' | 'epmc'
+  source: string; // 'cache:pmc' | 'pmc' | 'jats' | 'html' | 'wayback' | 'reader'
   text: string;
+  /** set when the text came from the published version, not the preprint */
+  published?: { doi: string; journal?: string; year?: number; title?: string };
 }
 
-// Enough for abstract + results + discussion on a normal paper. Measured on
-// the CRISPR PAM test paper: at 12k the cap landed mid-Results and Discussion
-// never made it. The prompt-side budget (FULLTEXT_PROMPT_BUDGET in chat.ts)
-// still governs how much of this reaches any one turn.
-const PER_PAPER_CHARS = 18_000;
+// STORAGE cap, not prompt cap. This is what we keep in preprint_fulltext; the
+// prompt-side budget in chat.ts decides how much of it any one turn reads.
+// Keep it comfortably larger than the prompt budget or storage silently
+// becomes the binding constraint — measured on the CRISPR paper, an 18k cap on
+// a 196k PMC article kept "two hundred" but cut the array-orientation result
+// (85% vs 33%), which is the paper's most useful practical finding.
+const PER_PAPER_CHARS = 60_000;
 const HARD_FETCH_MS = 20_000;
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 RxivGPT/1.0";
@@ -80,28 +99,57 @@ function stripTags(s: string): string {
     .trim();
 }
 
+/**
+ * Split a JATS body into its TOP-LEVEL <sec> blocks.
+ *
+ * This must track nesting depth. A non-greedy /<sec>([\s\S]*?)<\/sec>/ stops at
+ * the first *inner* closing tag, so on a real article — where Results contains
+ * half a dozen subsections — it returns only the first subsection and silently
+ * discards the rest. Measured on PMC8482600: that bug cost the array-orientation
+ * result (85% vs CRISPRCasdb's 33%), the paper's most useful practical finding,
+ * while still returning a plausible 15k of text.
+ */
+function topLevelSections(body: string): { title: string; xml: string }[] {
+  const out: { title: string; xml: string }[] = [];
+  const tag = /<(\/?)sec\b[^>]*>/g;
+  let depth = 0;
+  let start = -1;
+  let m: RegExpExecArray | null;
+  while ((m = tag.exec(body))) {
+    if (m[1] !== "/") {
+      if (depth === 0) start = m.index;
+      depth++;
+    } else if (depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        const xml = body.slice(start, m.index + m[0].length);
+        const t = xml.match(/<title[^>]*>([\s\S]*?)<\/title>/);
+        out.push({ title: t ? stripTags(t[1]) : "", xml });
+        start = -1;
+      }
+    }
+  }
+  return out;
+}
+
 /** JATS → "abstract + the sections a reader needs", capped. */
 export function trimJats(xml: string): string | null {
   const bodyM = xml.match(/<body[\s>][\s\S]*?<\/body>/);
   if (!bodyM) return null;
   const abstractM = xml.match(/<abstract[\s>][\s\S]*?<\/abstract>/);
 
-  // Top-level <sec> blocks with their titles.
-  const secs: { title: string; text: string }[] = [];
-  const secRe = /<sec[^>]*>([\s\S]*?)<\/sec>/g;
-  let m: RegExpExecArray | null;
-  while ((m = secRe.exec(bodyM[0]))) {
-    const titleM = m[1].match(/<title[^>]*>([\s\S]*?)<\/title>/);
-    secs.push({ title: titleM ? stripTags(titleM[1]) : "", text: stripTags(m[1]) });
-  }
+  const secs = topLevelSections(bodyM[0]);
+  // Drop the apparatus rather than select the good parts: a published article's
+  // section names vary ("Findings", "Main", "Background"), and guessing which
+  // are interesting loses more than skipping the ones that never are.
+  const skip = /method|material|supplementar|acknowledg|reference|availability|declaration|competing|abbreviation|funding|ethics/i;
+  let picked = secs.filter((s) => !skip.test(s.title));
+  if (!picked.length) picked = secs;
 
-  const wanted = /result|discussion|conclusion|finding/i;
-  let picked = secs.filter((s) => wanted.test(s.title));
-  if (!picked.length) picked = secs; // unstructured body — take it in order
   let out = abstractM ? `Abstract: ${stripTags(abstractM[0])}\n\n` : "";
   for (const s of picked) {
     if (out.length >= PER_PAPER_CHARS) break;
-    out += (s.title ? `${s.title}: ` : "") + s.text + "\n\n";
+    out += (s.title ? `${s.title}: ` : "") + stripTags(s.xml) + "\n\n";
   }
   // Fallback when <sec> parsing found nothing at all
   if (out.trim().length < 400) out = stripTags(bodyM[0]);
@@ -246,7 +294,34 @@ async function fetchReader(row: FulltextRow, signal: AbortSignal): Promise<strin
 
 /* ── the ladder, cache-aware ─────────────────────────────────────────────── */
 
-async function fetchOne(row: FulltextRow, signal: AbortSignal): Promise<{ source: string; text: string } | null> {
+async function fetchOne(
+  sql: SqlClient,
+  row: FulltextRow,
+  signal: AbortSignal,
+): Promise<{ source: string; text: string; published?: FulltextResult["published"] } | null> {
+  // Rung 1b: the published version, read from PMC.
+  try {
+    const m = await resolvePublished(sql as never, row, signal);
+    if (m.status === "matched" && m.pmcid) {
+      const xml = await fetchPmcXml(m.pmcid, signal);
+      const text = xml ? trimJats(xml) : null;
+      if (text) {
+        return {
+          source: "pmc",
+          text,
+          published: {
+            doi: m.published_doi!,
+            journal: m.published_journal,
+            year: m.published_year,
+            title: m.published_title,
+          },
+        };
+      }
+    }
+  } catch (e) {
+    console.log(`fulltext rung error: pmc ${row.key_number} ${(e as Error).message.slice(0, 80)}`);
+  }
+
   for (const [source, fn] of [
     ["jats", fetchJats],
     ["html", fetchHtml],
@@ -275,7 +350,11 @@ async function fetchOne(row: FulltextRow, signal: AbortSignal): Promise<{ source
 export async function getFulltext(
   sql: SqlClient,
   rows: FulltextRow[],
-  promptBudgetMs = 2800,
+  // The PMC rung costs ~1 s end to end (OpenAlex resolve → esearch → efetch)
+  // and is the rung that actually succeeds in production, so the budget has to
+  // be wide enough to let it land rather than timing it out into the blocked
+  // origins below it.
+  promptBudgetMs = 4000,
 ): Promise<FulltextResult[]> {
   if (!rows.length) return [];
   const results: FulltextResult[] = [];
@@ -301,7 +380,7 @@ export async function getFulltext(
   const hardTimer = setTimeout(() => controller.abort(), HARD_FETCH_MS);
 
   const fetches = misses.map((row) =>
-    fetchOne(row, controller.signal).then((got) => {
+    fetchOne(sql, row, controller.signal).then((got) => {
       if (!got) return null;
       // Fire-and-forget cache write — the turn never waits on it.
       sql
@@ -336,5 +415,39 @@ export async function getFulltext(
     // Bedrock generation holds open anyway.
     Promise.allSettled(fetches).finally(() => clearTimeout(hardTimer));
   }
+  return attachPublished(sql, results);
+}
+
+/**
+ * Attach the resolved publication status to every result, including cache hits.
+ *
+ * This is separate from fetching on purpose: publication status matters to the
+ * answer even when the body came from the preprint or from cache, because the
+ * single worst thing this system can say is that a published paper is
+ * unreviewed. `preprints.published_journal` alone cannot tell us — it is null
+ * for half the corpus, including papers that are in fact published.
+ */
+async function attachPublished(sql: SqlClient, results: FulltextResult[]): Promise<FulltextResult[]> {
+  const need = results.filter((r) => !r.published).map((r) => r.key_number);
+  if (!need.length) return results;
+  try {
+    const rows = await sql.query(
+      `SELECT key_number, published_doi, published_journal, published_year, published_title
+       FROM preprint_published_match WHERE status = 'matched' AND key_number = ANY($1)`,
+      [need],
+    );
+    const byKey = new Map(rows.map((r) => [String(r.key_number), r]));
+    for (const r of results) {
+      const m = byKey.get(r.key_number);
+      if (m && !r.published) {
+        r.published = {
+          doi: String(m.published_doi),
+          journal: m.published_journal ? String(m.published_journal) : undefined,
+          year: m.published_year ? Number(m.published_year) : undefined,
+          title: m.published_title ? String(m.published_title) : undefined,
+        };
+      }
+    }
+  } catch { /* match table absent — status simply stays unknown */ }
   return results;
 }

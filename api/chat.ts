@@ -52,7 +52,7 @@ INSTRUCTIONS:
 - Write plain prose paragraphs only. Never use markdown headings (#, ##), a title line, or a bold phrase standing in for a heading — start the answer directly with a sentence and let paragraph breaks do the work. Do not add a "Significance" section or any other scaffold the user did not ask for.
 - Ground every claim in the retrieved records below. Never describe a finding, method, or number that is not present in the supplied text. When the retrieved text does not answer part of the question, say plainly that the retrieved text does not say — never fill the gap with a plausible completion.
 - Records marked "Full text" include body sections beyond the abstract; prefer their specifics (quantities, comparisons, named results) when reporting what a paper found.
-- These are preprints. State that a paper has been peer reviewed or published ONLY when its record shows a publishing journal. A record without one means the status is UNKNOWN — do not assert it either way. When a record's status says withdrawn, never present its findings as standing.
+- Each record carries a PUBLICATION STATUS line. Follow it exactly. When it says peer reviewed, say so and cite the published journal and DOI; when it was retitled on publication, use the published title. When it says UNKNOWN, say nothing about publication status — never call a paper unpublished, "still a preprint", or not peer reviewed, and never frame your answer around its being preliminary. When a record's status says withdrawn, never present its findings as standing.
 - Even when no record is an exact match, discuss what the retrieved preprints reveal about the topic — the same subject category, adjacent clinical or biological questions, and later versions of the same work are all relevant.
 - Cite corpus records by key number (e.g., 2021.05.04.442622). Cite Semantic Scholar papers by title and author with their URL.
 - Only say "no relevant records" if the retrieved list is truly empty or entirely unrelated.
@@ -104,17 +104,23 @@ interface Rec {
   key_number: string; title: string | null; authors: string | null;
   pub_year: number; doi: string | null; abstract: string | null;
   categories: string[] | null; status_tags: string[] | null;
-  server: string | null; published_journal: string | null;
+  server: string | null; published_journal: string | null; published_doi: string | null;
   version: number | null; jatsxml_url: string | null; similarity: number;
 }
 
 // Total full-text budget across the prompt: generous enough for real body
-// sections, bounded so a turn can never dump 60k chars into the context.
-const FULLTEXT_PROMPT_BUDGET = 36_000;
+// sections, bounded so a turn can never dump the whole corpus into context.
+const FULLTEXT_PROMPT_BUDGET = 40_000;
 
 function formatCorpusContext(records: Rec[], fulltext: Map<string, FulltextResult>): string {
   if (records.length === 0) return "\n## Retrieved Records\nNo relevant records found.";
   let ftBudget = FULLTEXT_PROMPT_BUDGET;
+  // Share the budget across however many papers actually have full text, so a
+  // question about ONE paper spends the whole allowance on it rather than
+  // reserving space for three papers nobody asked about. Floor at 6k so a
+  // four-paper answer still gets real body text for each.
+  const ftCount = records.filter((r) => fulltext.has(r.key_number)).length || 1;
+  const perPaper = Math.max(6_000, Math.floor(FULLTEXT_PROMPT_BUDGET / ftCount));
   const lines = records.map((r, i) => {
     const parts = [
       `[${i + 1}] ${r.key_number} (${r.server ?? "preprint"}) — "${r.title ?? "Untitled"}"`,
@@ -128,10 +134,30 @@ function formatCorpusContext(records: Rec[], fulltext: Map<string, FulltextResul
     if (r.categories?.length) parts.push(`    Category: ${r.categories.join(", ")}`);
     if (r.status_tags?.length) parts.push(`    Status: ${r.status_tags.join(", ")}`);
     const ft = fulltext.get(r.key_number);
+    // Publication status, resolved rather than assumed. published_journal is
+    // null for half the corpus INCLUDING papers that are published, so the
+    // resolver (api/_lib/dossier.ts) is the authority when the column is empty.
+    if (ft?.published) {
+      const p = ft.published;
+      parts.push(
+        `    PUBLICATION STATUS: peer reviewed — published${p.journal ? ` in ${p.journal}` : ""}` +
+        `${p.year ? ` (${p.year})` : ""}, DOI ${p.doi}.` +
+        (p.title && p.title.toLowerCase() !== (r.title ?? "").toLowerCase()
+          ? ` NOTE: retitled on publication to "${p.title}" — cite the published title.`
+          : ""),
+      );
+    } else if (r.published_journal) {
+      parts.push(`    PUBLICATION STATUS: published in ${r.published_journal}.`);
+    } else {
+      parts.push(`    PUBLICATION STATUS: UNKNOWN — we could not determine whether this has been published. Do not describe it as unpublished or as not peer reviewed.`);
+    }
     if (ft && ftBudget > 2000) {
-      const body = ft.text.slice(0, ftBudget);
+      const body = ft.text.slice(0, Math.min(perPaper, ftBudget));
       ftBudget -= body.length;
-      parts.push(`    Full text (section-trimmed, fetched from source): ${body}`);
+      const label = ft.published
+        ? `Full text of the PUBLISHED version (section-trimmed). Where it differs from the preprint abstract above, the published text is authoritative`
+        : `Full text of the preprint (section-trimmed, fetched from source)`;
+      parts.push(`    ${label}: ${body}`);
     } else if (r.abstract) {
       // Full abstract, capped only as a runaway guard. The old 500-char cut is
       // what lost the Vink comparison to AWS's managed KB — its generator read
@@ -163,7 +189,7 @@ function formatS2Context(papers: S2Paper[]): string {
 /* ── handler ───────────────────────────────────────────────────────────── */
 
 const SELECT = `key_number, title, authors, pub_year, doi, abstract,
-  categories, status_tags, server, published_journal, version, jatsxml_url`;
+  categories, status_tags, server, published_journal, published_doi, version, jatsxml_url`;
 
 const ROOM_SERVERS = new Set(["biorxiv", "medrxiv"]);
 
@@ -402,6 +428,9 @@ export default async function handler(req: any, res: any) {
     const ftTargets = records.slice(0, 4).map((r) => ({
       key_number: r.key_number, doi: r.doi, server: r.server,
       version: r.version, jatsxml_url: r.jatsxml_url,
+      // the resolver matches on content, so it needs these
+      title: r.title, authors: r.authors, pub_year: r.pub_year,
+      published_doi: r.published_doi, published_journal: r.published_journal,
     }));
     const fulltextResults = await getFulltext(sql as never, ftTargets).catch(() => [] as FulltextResult[]);
     const fulltextByKey = new Map(fulltextResults.map((f) => [f.key_number, f]));
