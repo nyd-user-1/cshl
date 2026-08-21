@@ -92,10 +92,18 @@ function RelatedFooter({ sourceKey }: { sourceKey: string }) {
   );
 }
 
-/** Bedrock's contextual-grounding check, run on the finished answer against the
- *  preprints it was given (see api/grounding.ts). Displayed, not enforced: the
- *  reader gets a number instead of a promise. */
-function GroundingBadge({
+/** Bedrock's contextual-grounding check (api/grounding.ts).
+ *
+ *  NOT RENDERED right now, and the reason is worth keeping. The score is well
+ *  behaved on factual claims — 0.96 for a claim drawn from a paper, 0.88 for a
+ *  multi-sentence factual answer, 0.00 for one with invented FDA approval — but
+ *  it measures VERBATIM support, and our commonest question ("what is the
+ *  significance of this research?") asks for interpretive synthesis that is by
+ *  definition not verbatim in any source. That answer scored 0.04 while being
+ *  perfectly sound, and "4% grounded" on a good answer is a worse lie than no
+ *  badge at all. Re-enable it when it is either (a) restricted to factual
+ *  questions, or (b) calibrated against human judgement on a real sample. */
+export function GroundingBadge({
   content,
   sources,
   query,
@@ -158,7 +166,8 @@ export function ChatResponseFooter({
   isStreaming = false,
   sources,
   pdfUrl,
-  query,
+  // `query` stays on the props (callers pass it) but is unread while the
+  // grounding badge is withheld — see GroundingBadge above.
 }: ChatResponseFooterProps) {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<"good" | "bad" | null>(null);
@@ -297,7 +306,6 @@ export function ChatResponseFooter({
 
         {/* Thumbs Up / Down */}
         <div className="flex items-center gap-1 ml-auto">
-          <GroundingBadge content={content} sources={sources} query={query} />
           <button
             onClick={() => setFeedback(feedback === "good" ? null : "good")}
             className={`inline-flex items-center justify-center h-7 w-7 rounded-[3px] transition-colors ${
