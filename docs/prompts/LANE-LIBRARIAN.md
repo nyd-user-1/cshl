@@ -342,3 +342,64 @@ rate against ground truth — a large share of those "errors" are papers that co
 sit in either category. That is a ceiling imposed by the label, not by the model, and it is
 direct evidence for the cross-category rooms in the stretch: the model is rediscovering which
 category boundaries are fictions.
+
+## 2026-08-21 — cshl-MESH-tagger: trained, scored, and it DOES NOT clear the bar
+
+Trained 3 epochs, batch 32, max_len 1024, 4,920-way BCE head. Weights uploaded (614 MB).
+
+### First, a calibration fix — worth +8.8 pp and it cost nothing
+
+At the default threshold 0.5 the tagger emitted **2.81 labels/paper against 9.10 observed** —
+badly under-predicting, and micro-F1 read 36.81%. The threshold was never tuned. Swept it on
+**val** (never test), and dumped val/test/eval probability vectors from the box while the model
+was still resident so the sweep was possible at all:
+
+| threshold | micro F1 | precision | recall | labels/doc |
+|---|---|---|---|---|
+| 0.50 (default) | 36.81 | 78.38 | 24.06 | 2.79 |
+| 0.30 | 43.84 | 64.94 | 33.09 | 4.63 |
+| **0.20 (chosen)** | **45.62** | 54.61 | 39.17 | 6.51 |
+| 0.15 | 45.28 | 47.53 | 43.23 | 8.26 |
+| 0.10 | 42.90 | 38.44 | 48.52 | 11.46 |
+
+This is why the mid-flight patch mattered: `infer` originally wrote only labels above the
+threshold, so a bad threshold could only be undone by re-running the box. It now keeps the full
+top-20 vector, and the threshold became a free local decision.
+
+### The verdict, on identical 5,000-document subsamples
+
+The kNN arm scored a deterministic 5,000-row subsample; the model scored the full split. Not
+comparable as-is, so I re-scored the model on **the exact same 5,000 rows**:
+
+**held-out test**
+
+| arm | micro F1 | P@5 | P@10 | R@10 | R@15 | labels/doc |
+|---|---|---|---|---|---|---|
+| prior (reads no text) | 11.34 | 30.83 | 19.44 | 20.25 | 22.71 | 1.00 |
+| **kNN over stock bge-m3** | 39.67 | **61.68** | **45.28** | **52.32** | **60.24** | 3.35 |
+| cshl-MESH-tagger @0.20 | **44.50** | 56.99 | 40.27 | 45.20 | 51.68 | 6.80 |
+| delta (model − kNN) | **+4.83** | **−4.69** | **−5.01** | **−7.12** | **−8.57** | |
+
+**frozen `cshl-eval-v1`** reproduces it: micro F1 +4.00, P@5 −5.42, R@15 −8.88.
+
+**Read it honestly.** The model's only win is micro-F1, and that comparison is confounded —
+the two arms sit at different label budgets (6.80 vs 3.35 labels/doc) and only the model's
+threshold was tuned. The **threshold-free ranking metrics are the fair comparison**, and kNN
+wins every one of them by 5–9 pp, consistently across two independent held-out sets.
+
+> **Verdict: cshl-MESH-tagger does not beat kNN over embeddings we already store and index.
+> By the brief's own criterion it is not worth serving.** The right MeSH labeller for this
+> corpus is a kNN lookup over `preprint_embeddings`, which needs no new model, no new weights,
+> and no inference box.
+
+That is a real result and it is reported with the same prominence as the category win, per
+RIG-DOCTRINE. Likely causes, not investigated tonight: macro-F1 on occurring labels is **1.86%**,
+so the head has collapsed onto frequent descriptors and never learns the tail; 3 epochs over
+103k examples is thin for a 4,920-way multi-label head; and MeSH labels are strongly predicted
+by document similarity, which is precisely what a retrieval-trained embedding already encodes —
+so the baseline was always going to be strong here.
+
+**Consequence, acted on rather than noted:** the room map is built from the **kNN** labels, not
+the model's. Using the arm I had just measured as worse would have been incoherent. kNN
+propagation over all 261,768 unlabelled papers was launched on the box already paid for, at
+$0 marginal cost, while the GPU sat at 34% during inference.
