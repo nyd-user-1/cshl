@@ -45,7 +45,7 @@ function plainProse(md: string): string {
     .replace(/^\s*[-*+]\s+/gm, "")       // bullets
     .replace(/^\s*\d+\.\s+/gm, "")       // numbered items
     .replace(/^\s*(?:-{3,}|\*{3,})\s*$/gm, "") // rules
-    .replace(/\[(\d+)\]/g, "")           // [1] markers
+    .replace(/\[[\d.\s,;v-]+\]/g, "")     // [1] and [2026.08.17.26360592] markers
     .replace(/\[(.+?)\]\(.+?\)/g, "$1")  // links → their text
     .replace(/\n{2,}/g, "\n")
     .trim();
@@ -56,7 +56,10 @@ export default async function handler(req: any, res: any) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
     const { answer, query, keys } = req.body ?? {};
-    const text = plainProse(String(answer ?? "")).slice(0, MAX_ANSWER_CHARS);
+    // Citations are detected on the RAW answer — plainProse() removes the very
+    // markers that name the papers the answer leans on.
+    const raw = String(answer ?? "");
+    const text = plainProse(raw).slice(0, MAX_ANSWER_CHARS);
     const q = String(query ?? "").trim().slice(0, 2000);
     const keyList = (Array.isArray(keys) ? keys : [])
       .map((k) => String(k ?? "").trim())
@@ -83,15 +86,24 @@ export default async function handler(req: any, res: any) {
     // ("McMahon et al. found…") and cite by key, and a source of bare abstracts
     // scores those true attributions as unsupported. Measured: the same claim
     // went 0.17 → 0.96 once the byline was part of the grounding source.
-    // Budget the source across the cited papers rather than letting the first
-    // full text eat the whole allowance.
-    const perPaper = Math.max(1500, Math.floor(MAX_SOURCE_CHARS / Math.max(1, rows.length)));
-    const source = rows
+    // Spend the budget on the papers the answer actually cites. An answer that
+    // leans on two of ten retrieved papers should be checked against those two
+    // in depth, not against ten shallow slices — the passage that supports a
+    // claim is usually past the first few thousand characters of a body.
+    const cited = new Set(rows.filter((r) => raw.includes(r.key_number)).map((r) => r.key_number));
+    const ordered = cited.size
+      ? [...rows].sort((a, b) => Number(cited.has(b.key_number)) - Number(cited.has(a.key_number)))
+      : rows;
+    const budgetFor = (key: string) =>
+      cited.size && cited.has(key)
+        ? Math.floor((MAX_SOURCE_CHARS * 0.8) / cited.size)
+        : Math.max(1200, Math.floor((MAX_SOURCE_CHARS * 0.2) / Math.max(1, rows.length - cited.size)));
+    const source = ordered
       .map((r) =>
         [
           `${r.key_number} — ${r.title ?? ""}`,
           r.authors ? `Authors: ${r.authors}` : "",
-          (r.fulltext ?? r.abstract ?? "").slice(0, perPaper),
+          (r.fulltext ?? r.abstract ?? "").slice(0, budgetFor(r.key_number)),
         ]
           .filter(Boolean)
           .join("\n"),
@@ -130,10 +142,9 @@ export default async function handler(req: any, res: any) {
     return res.status(200).json({
       grounding,
       relevance,
-      // GROUNDING only. Relevance is returned for observation but deliberately
-      // kept out of the verdict: measured on answers that plainly addressed the
-      // question asked, it came back at 0.03–0.53 — not a signal to show a
-      // reader. Grounding separated cleanly (0.96 supported, 0.00 invented).
+      // GROUNDING only. Relevance is returned and worth watching — it reads 1.0
+      // on real answers now that the question is passed with them — but the
+      // verdict a reader sees is about evidence, not aboutness.
       ok: (grounding ?? 0) >= 0.6,
     });
   } catch (err) {
