@@ -403,3 +403,75 @@ so the baseline was always going to be strong here.
 the model's. Using the arm I had just measured as worse would have been incoherent. kNN
 propagation over all 261,768 unlabelled papers was launched on the box already paid for, at
 $0 marginal cost, while the GPU sat at 34% during inference.
+
+## 2026-08-21 09:13Z — box terminated cleanly, all artifacts uploaded
+
+`i-0421ce7340212d127` launched 08:02:40Z, terminated ~09:13Z. **~70 min on a g6e.2xlarge.**
+No orphan: verified by `describe-instances` (the three other running boxes in the account
+predate this lane by days and belong to other work — untouched).
+
+### The kNN propagation is verified, not assumed
+
+Before building the room map on kNN labels I validated the **exact** scheme used
+(similarity-weighted, K=15, pool = train split only, queries = the full held-out test split,
+n=13,127 — no subsample, no leakage):
+
+| arm, FULL held-out test (n=13,127) | P@5 | P@10 | R@10 | R@15 |
+|---|---|---|---|---|
+| prior (reads no text) | 30.83 | 19.44 | 20.25 | 22.71 |
+| cshl-MESH-tagger @0.20 | 58.68 | 41.00 | 46.40 | 52.66 |
+| **kNN propagation over stock bge-m3** | **63.39** | **46.36** | **53.72** | **61.82** |
+| delta (kNN − tagger) | **+4.71** | **+5.36** | **+7.32** | **+9.16** |
+
+Frozen `cshl-eval-v1` reproduces it (kNN P@5 63.23, R@15 61.50). The verdict does not depend
+on which held-out set you pick, or on the 5,000-row subsample the box's own baseline used.
+
+### The label table — `preprint_mesh_predicted`, both arms, distinguishable
+
+Created new. Touches nothing else: no writes to `preprints`, no `preprint_embeddings*` table,
+no table the frozen benchmark reads. No UPDATE, no DELETE against anything pre-existing.
+
+| model | documents | label rows | mean/doc |
+|---|---|---|---|
+| `cshl-MESH-tagger` (t=0.20, val-tuned) | 259,752 | 1,651,920 | 6.36 |
+| `knn-bge-m3-k15` (t=0.25) | 261,607 | 2,208,643 | 8.44 |
+
+Both loaded deliberately. The tagger's predictions are the deliverable the brief asked for; the
+kNN's are the ones the room map actually uses. Keeping both makes the decision auditable and
+reversible instead of a choice buried in a script.
+
+### Coverage, re-derived from the database at 09:16:39Z against 433,449 rows
+
+| | papers | share |
+|---|---|---|
+| observed MeSH (NLM, ground truth) | 171,681 | 39.61% |
+| **observed + predicted** | **433,288** | **99.96%** |
+| still untagged | 161 | 0.04% |
+
+The 161 are papers where even kNN produced nothing above 0.25. They still receive a room via
+the fallback axes, which is why unplaced stays at zero.
+
+**Calibration, stated where it cannot be missed:** the table is named `_predicted`, every row
+carries `p`, `model` and `run_id`, and `mesh_provenance` separates *observed_empty* (PubMed was
+asked, had none) from *never_observed* (no published DOI). Observed MeSH is never written here
+and never overwritten. Any downstream count can tell a prediction from an NLM assignment.
+
+## The room map — `docs/ROOM-MAP.md`
+
+**252 rooms · every one of 433,449 papers placed · zero over the 10,000 ceiling · zero
+without a room.** Ceiling is **provisional**: D9/LANE-CURVE has not run, so 10,000 is the
+brief's placeholder, not a measured number. The script takes `--max-room N`; re-run it when
+`HAYSTACK-CURVE.md` exists.
+
+What the predicted labels actually bought — not "papers placed" (zero unplaced either way,
+so that number says nothing) but **which axis** each paper is placed on:
+
+| axis | observed MeSH only | + predicted | change |
+|---|---|---|---|
+| `mesh` (the preferred axis) | 140,664 | **282,801** | **+142,137** |
+| `year` (fallback) | 94,930 | 47,287 | −47,643 |
+| `no-mesh-facet` | 102,205 | **7,711** | **−94,494** |
+| `category` (already fit) | 95,142 | 95,142 | 0 |
+
+Rooms rose 170 → 252. A room split by MeSH subtree is a topic a researcher can choose; a room
+split by year is a filing cabinet. That swap, for 142k papers, is the deliverable.
