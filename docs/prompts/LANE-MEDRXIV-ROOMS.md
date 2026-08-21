@@ -177,3 +177,168 @@ alone, and write `## BLOCKED` with exactly what failed.
 ceiling, so all Task 1 work goes into existing handlers + `api/_lib/`. Order of
 work: Task 1 (generation fixes b, c; verify a not regressed) → Task 2 (rooms
 UI) → deploy preview → acceptance tests → promote.
+
+---
+
+**2026-08-21 09:32 UTC — lane complete, promoted to production.**
+
+Production: `https://cshl-lc7bi87g1-nys-gpt.vercel.app` at **cshl.nysgpt.com**.
+**Rollback target (previous production): `cshl-5g0z7qx8u-nys-gpt.vercel.app`**
+— one command: `vercel promote https://cshl-5g0z7qx8u-nys-gpt.vercel.app`.
+9 commits on `lane/rooms`, pushed to origin, rebased onto `main` (c875471).
+`api/` still 12 files — no new Vercel function.
+
+### Task 1 — generation
+
+**(a) not regressed.** `grep -rn "not yet published" api/ src/` returns exactly
+one line — `api/chat.ts:123`, inside the comment explaining why the string must
+never come back. No code path emits it, and the prompt now also forbids
+asserting publication status without a `published_journal`.
+
+**(b) full text now reaches the prompt.** New `api/_lib/fulltext.ts` runs a
+cache-first ladder — `preprint_fulltext` (new table, `sql/21`) → JATS →
+article HTML → Europe PMC → Wayback → reader proxy — for the top 4 records,
+with a ~2.8 s prompt budget and a 20 s hard cap; stragglers still populate the
+cache. Nothing writes to `preprints`, `preprint_embeddings*`, or anything the
+benchmark reads.
+
+Three things the measurements changed, none of which were guessable up front:
+
+1. **bioRxiv 429s Vercel's egress on every request.** So do the Wayback
+   Machine and `r.jina.ai` from those IPs. medRxiv JATS succeeds — the four
+   in-room neurology papers below were all fetched live and cached. For
+   bioRxiv, `scripts/fulltext-backfill.mts` runs the *same ladder* from a
+   residential IP and writes the same cache, so the deployed chat serves it
+   from rung 1. This is the standing workaround, not a one-off.
+2. **The OR-retry was the real latency bug.** "please read <DOI> and report
+   what it says" OR'd its stopwords across 433,449 documents: **42,661 ms**
+   inside the handler. `/api/search` already solved this with `fts_high_df`
+   pruning; `/api/chat` had never had it copied over. Now ~100 ms.
+3. **`<h2>Results</h2>` carries no paragraphs on the bioRxiv template** — they
+   all hang off `<h3>` findings ("43% of Type III repeat clusters contain a
+   PAM"), so a flat section filter dropped the entire results section *while
+   reporting success*. The trim is level-aware now.
+
+Also added: an explicit key/DOI retrieval lane (FTS tokenizes DOIs into noise,
+so a named paper could miss its own prompt), and an 8 s timeout on the encoder
+fetch — a cold serve box had been holding a turn for ~50 s.
+
+**(c) structure removed.** System prompt rewritten for plain prose. First
+deploy still emitted `# Comprehensive PAM Prediction…`; second still emitted
+`**Physiotherapy and Physical Activity**` — the model routed around
+"no headings" by rebuilding the same slots in bold. Both are now explicitly
+forbidden and the final answers carry neither (asserted in the browser check).
+
+### Acceptance test (§3) — PASS
+
+Asked the deployed preview to read `10.1101/2021.05.04.442622`. Payload
+confirms the body reached the prompt:
+`fulltext: [{key_number: 2021.05.04.442622, source: cache:jats, chars: 13564}, …]`.
+Verbatim answer:
+
+> This preprint describes a large-scale computational study of CRISPR-Cas systems and their targets (2021.05.04.442622). The authors mapped CRISPR spacers—sequences that bacteria and archaea store from viral invaders—to their actual targets in sequence databases, revealing fundamental biology of how these immune systems work.
+>
+> The researchers analyzed over 200,000 unique CRISPR spacers from bacterial and archaeal genomes, achieving matches for approximately 70,000 spacers (32% of the total) by searching metagenomic and NCBI databases with optimized filtering. This represented a major improvement over prior work, which had found matches for only 7% of spacers. The improvement came from both their more sensitive filtering approach and the expansion of available metagenomic databases over time. They found that well-sampled genera like Streptococcus, Pseudomonas, and Staphylococcus had higher match rates (77%, 69%, and 64% respectively), whereas poorly sampled environmental genera showed very low rates (3–4%).
+>
+> From analyzing the genomic sequences flanking the matched targets, the authors generated a comprehensive catalog of over one hundred unique PAM (protospacer adjacent motif) sequences—the short DNA patterns that CRISPR systems recognize—and linked these PAMs to specific CRISPR subtypes. They discovered that repeat sequences themselves predict which PAM a system will recognize, and this relationship was more informative than clustering by genus or subtype. The nucleotide identity at repeat-spacer junctures showed clear patterns with PAM nucleotides, which the authors suggest could help experimentally determine unknown PAMs by narrowing the possible sequences.
+>
+> Analyzing strand targeting preferences, the authors found that DNA-targeting systems like Type I-E and Type II prefer the template strand (possibly to avoid targeting mRNA), while RNA-targeting systems like Type III and some DNA-targeting systems (Type I-A, I-B) prefer the coding strand, making them capable of base-pairing with transcribed RNA. The paper also documents extensive evidence of CRISPR array sharing between different CRISPR-Cas subtypes, particularly between DNA-targeting and RNA-targeting systems in the same genome. These compatible multi-effector systems could provide coordinated defense: different subtypes have different mismatch tolerances, so targeting the same invader sequence with multiple systems reduces escape mutation probability. The authors propose this could reflect selection pressure for cooperative defense strategies.
+
+- **(i) no peer-review claim** — the answer never mentions publication status.
+- **(ii) body-only quantities** — the abstract says only "one third
+  ([~]70,000) of more than 200,000". **32%**, **7%**, **77/69/64%** and
+  **3–4%** appear nowhere in it. Each was then checked against the cached
+  text: *"this optimized filtering approach resulted in 72,099 spacers (32% of
+  total)"*, *"A previous study … found matches for 7% of spacers, using a more
+  stringent 95% sequence identity"*, *"(77%, 69% and 64% respectively) … (4%,
+  4% and 3% respectively)"*.
+- **(iii) nothing absent from the fetched text** — every specific claim above
+  traced to the cached body; author names come from the record metadata line.
+
+This is not an abstract paraphrase: the 7%-vs-32% comparison exists only in
+the results section.
+
+### Task 2 — rooms UI
+
+`/medrxiv`, `/medrxiv/cards` (51 data-generated cards), `/medrxiv/agents`,
+`/medrxiv/rooms/:category` (the scoped chat — the same `Chat` page with scope
+from the route). `/preprints*` redirect, never 404. `/biorxiv` deliberately
+absent; the routing shape leaves room. No card claims to be a separately
+trained model (asserted in the browser check), and card copy reads
+"Searches 12,697 infectious diseases preprints" from real per-server counts.
+
+Scope is a parameter on the existing endpoints, never a widget: `room` on the
+`/api/chat` body, `?server=&category=` on `/api/search`.
+
+**Query plan, as §4 asked.** In-room dense retrieval does **not** use HNSW —
+it filters first and scans exactly. An ANN probe cannot honor a selective
+filter without over-fetching past the room, and at ≤12.7k vectors the exact
+scan is affordable: measured **446 ms** warm in-room hybrid on production
+(`dense_ms` 416, `fts_ms` 30) against 1,136 ms corpus-wide. Cold, when the
+`nsr` serve box has to spin up, the first query costs ~8.7 s — that is the
+encoder, not the scan.
+
+**Room-first, corpus-second, never room-only.** Weakness could not be a row
+count: an exact kNN always fills its limit, so a 30-paper room answers any
+question with its ten nearest strangers and looks confident. The trigger is
+evidence — no in-room lexical match and no in-room dense hit ≥0.45 cosine
+(measured: relevant in-room hits ≥0.60, filler ≤0.26). Verified on production,
+asking a vaccine question inside `forensic medicine`:
+
+> The search was widened beyond the forensic medicine room to capture relevant results across the whole corpus.
+
+with `room: {…, widened: true}` on the payload and a line in the UI footer.
+
+Follow-ups ride `/api/similar` (cshl-CITE, zero inference) in the response
+footer; a medRxiv category chip is a live link into that room, so one click
+re-scopes without the user ever seeing a filter. bioRxiv chips render inert,
+because those rooms do not exist tonight.
+
+### Constraints (§5)
+
+1. **Page loads, production, measured:** `/` 161 ms, `/medrxiv` 160 ms
+   (455 ms cold in Chromium), `/medrxiv/cards` 199 ms, card data 304 ms. All
+   under 1 s. This needed a fix: the per-server counts were a live
+   `unnest + GROUP BY` over 87,567 rows at **3.11 s cold**, hidden behind the
+   edge cache from everyone except the first visitor after each expiry. Now
+   materialized (`sql/22`, `category_server_counts`) → **0.32 s cold**.
+2. **No new Vercel functions** — `ls api/*.ts | wc -l` → **12**, unchanged.
+3. `npx tsc -b` clean; `npm run build` clean. `tsconfig.api.check.json` shows
+   the same 8 pre-existing errors and no new ones (delta zero). Every endpoint
+   exercised on the deploy via `scripts/endpoint-smoke.mjs` — all healthy. One
+   transient `502 {"error":"s2 429"}` from `/api/paper` (Semantic Scholar
+   throttling, a file this lane did not touch); returned 200 on retry 20 s
+   later. Worth a follow-up: it reports an upstream 429 as our 502.
+4. Untouched: `GraphPage.tsx`, training scripts, eval data, embedding tables.
+5. **No AWS spend beyond normal generation.** The $10 authorization was not
+   needed and was not used — the failures were ours, exactly as §3 predicted.
+
+### Browser spot-check (§6) — 13/13 on production
+
+`scripts/rooms-browser-check.mjs` drives real Chromium through
+/medrxiv → /medrxiv/cards → click neurology → ask → read one full answer,
+asserting honest counts, the room chip, the scoped placeholder, plain prose
+and no publication-status claim. Screenshots in `/tmp/rooms-shots`.
+
+Preview deployments sit behind Vercel auth with no automation-bypass secret,
+and `vercel dev` 58.x fails on this project, so `scripts/local-serve.mts`
+serves the real built bundle and the real `api/` handlers on one port for
+pre-deploy runs. It is a harness only — nothing in `api/` or `src/` imports it.
+
+**A real bug it caught, which the API tests could not.** The `/api/similar`
+follow-ups arrive ~300 ms after the answer finishes streaming, i.e. after the
+last auto-scroll — so the row was clipped behind the composer, leaving the one
+control that re-scopes a user unreachable. The page now re-pins to the bottom
+when they render, and only for a reader who is still at the bottom. My first
+geometry assertion passed on the clipped layout because it only checked the
+block's top edge; it now checks that every row's bottom clears the composer.
+
+### One thing worth Brendan's attention
+
+Another lane promoted to production while this lane was verifying. Rather than
+promote blind, I compared the live bundle against a build of `origin/main`:
+identical size, and the only differing bytes were chunk-hash references the
+chunks make to each other (`CN13X3Lv` vs `ByINDgX1`), seeded by env-inlined
+values. Production was code-identical to `main`, so this promotion reverted
+nothing — but two lanes holding production without coordination is luck, not
+design. `lane/rooms` is pushed and rebased on `main`; it has not been merged.
