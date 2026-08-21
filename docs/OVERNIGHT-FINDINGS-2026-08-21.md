@@ -47,10 +47,10 @@ as a **gitlink, mode 160000**, pointing at commit `e0d5f45` — which exists onl
 on a local branch. Merged to `main` as-is, fresh clones break: git will try to
 resolve a submodule that has no `.gitmodules` entry and no reachable commit.
 
-Done: `.claude/worktrees/` is now ignored on `main` (`33f5a65`), so it stops
-recurring. **Still needed:** drop the path when `lane/librarian` merges —
-`git rm --cached .claude/worktrees/rooms`. I did not reach into a running lane's
-branch to do it.
+**RESOLVED.** Ignored on `main` (`33f5a65`), and the librarian lane untracked the
+gitlink itself on its own branch (`5d5232a`) before finishing — verified: no
+entry under `.claude/worktrees/` remains in that tree, and the ignore rule is
+present on both branches. Nothing to do at merge.
 
 ## 3. The real risk to the full-text plan is egress, not design
 
