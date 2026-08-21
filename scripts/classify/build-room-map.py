@@ -27,7 +27,9 @@ MINE = f"{ROOT}/data/mine"
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--max-room", type=int, default=10000)
-ap.add_argument("--predictions", default="")     # mesh.predictions.jsonl(.gz) from the box
+ap.add_argument("--predictions", default="")     # mesh.knnprop.jsonl.gz or mesh.predictions.jsonl.gz
+ap.add_argument("--pred-field", default="top")   # 'top' = full ranked vector; 'predicted' = pre-thresholded
+ap.add_argument("--pred-threshold", type=float, default=0.25)
 ap.add_argument("--out", default=f"{ROOT}/data/classify/room-map.json")
 ap.add_argument("--min-room", type=int, default=150)  # below this, merge back into the parent
 A = ap.parse_args()
@@ -99,7 +101,10 @@ if A.predictions:
     for line in op(A.predictions, "rt"):
         d = json.loads(line)
         if d["slug"] in observed: continue      # never overwrite ground truth
-        labels[d["slug"]] = [x["ui"] for x in d.get("predicted", [])]
+        cand = d.get(A.pred_field) or d.get("predicted") or []
+        keep = [x["ui"] for x in cand if x.get("p", 1.0) >= A.pred_threshold]
+        if not keep and cand: keep = [cand[0]["ui"]]   # never leave a paper label-less if we have any signal
+        labels[d["slug"]] = keep
         n_pred += 1
 log(f"papers {len(cat)}  observed-mesh {len(observed)}  predicted-mesh {n_pred}")
 
@@ -266,7 +271,7 @@ out = {"max_room": A.max_room, "min_room": A.min_room,
                   "facet": r["facet"], "years": r.get("years"), "n": len(r["papers"]),
                   "n_predicted_labels": sum(1 for p in r["papers"] if p not in observed)}
                  for r in sorted(all_rooms, key=lambda r: (r["category"], -len(r["papers"])))],
-       "unplaced": [{k: v for k, v in u.items() if k != "papers"} for u in all_unplaced]}
+       "unplaced_groups": [{k: v for k, v in u.items() if k != "papers"} for u in all_unplaced]}
 json.dump(out, open(A.out, "w"), indent=1)
 with open(A.out.replace(".json", ".members.jsonl"), "w") as w:
     for r in all_rooms:

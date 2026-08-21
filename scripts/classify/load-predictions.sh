@@ -19,18 +19,20 @@ trap 'rm -f "$TSV"' EXIT
 
 [ -f "$PRED" ] || { echo "no predictions at $PRED"; exit 1; }
 echo "flattening $PRED -> TSV"
-python3 - "$PRED" "$TSV" "$MODEL" "$RUN_ID" <<'PY'
+python3 - "$PRED" "$TSV" "$MODEL" "$RUN_ID" "${FIELD:-predicted}" "${THRESHOLD:-0.5}" <<'PY'
 import gzip, json, sys
-src, dst, model, run = sys.argv[1:5]
+src, dst, model, run, field, thr = sys.argv[1:7]
+thr = float(thr)
 op = gzip.open if src.endswith(".gz") else open
 rows = docs = 0
 with op(src, "rt") as f, open(dst, "w") as w:
     for line in f:
         d = json.loads(line); docs += 1
-        for lab in d.get("predicted", []):
+        for lab in (d.get(field) or d.get("predicted") or []):
+            if lab.get("p", 1.0) < thr: continue
             w.write(f"{d['slug']}\t{lab['ui']}\t{lab['descriptor']}\t{lab['p']}\t{model}\t{run}\t{d.get('mesh_provenance','')}\n")
             rows += 1
-print(f"  {docs} documents -> {rows} predicted (document,label) rows")
+print(f"  {docs} documents -> {rows} predicted (document,label) rows at {field}>={thr}")
 PY
 
 $ROOT/scripts/psql-cshl.sh <<SQL
