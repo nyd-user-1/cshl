@@ -187,3 +187,26 @@ bash scripts/kb/teardown.sh                # deletes everything, idempotent
 **Spend: ≈$1.00** against a $10 ceiling — Cohere reranking 300 queries $0.60, Titan embeddings ~$0.11, 40k S3 PUTs ~$0.20, generation and agent tokens ~$0.05, S3 Vectors storage and queries a rounding error. The only
 ongoing charge is the S3 Vectors index (~82 MB) and 21.6 MB of S3, together well under
 $0.02/month. `teardown.sh` removes both.
+
+## Auth wiring for serving the KB from Vercel (read this on the next domain flip)
+
+This section exists because the repo will be re-skinned again (chemrxiv, tariffs, …)
+and the KB-as-a-service attempt will be repeated. None of it is domain-specific.
+
+- **Two credentials live in the Vercel env, and they are not interchangeable.**
+  `AWS_BEARER_TOKEN_BEDROCK` (a Bedrock API key) works only for `bedrock-runtime`
+  (Converse/InvokeModel — what `/api/chat` uses). `bedrock-agent-runtime` — Retrieve,
+  RetrieveAndGenerate, i.e. everything Knowledge Base — **never reads the bearer token**;
+  the SDK throws `CredentialsProviderError` if SigV4 keys are absent. This is a client
+  limitation, not a policy gap. Any KB-serving function must sign with the IAM user keys.
+- **The IAM user outlives domain flips.** Today it is `nsr-vercel-api` (name inherited
+  from the NSR era), inline policy `nsr-vercel-scope`. RetrieveAndGenerate with an
+  inference-profile model ARN needs `bedrock:Retrieve` + `bedrock:RetrieveAndGenerate`
+  on the KB, `bedrock:Rerank` (if reranking), `bedrock:InvokeModel`, **and
+  `bedrock:GetInferenceProfile`** — the last one is the one everybody forgets, and its
+  absence presents as `Not authorized to call GetInferenceProfile` at request time.
+- **Local testing lies.** A laptop with `~/.aws` config silently falls back to the
+  CLI identity, so "works locally with the bearer token" proves nothing. Test with
+  `HOME` pointed at an empty dir before believing an auth result.
+- **The composer's lightning toggle** calls `/api/kb-rag` (KB RetrieveAndGenerate,
+  rerank on by default); the compare page it replaced is gone.

@@ -39,10 +39,13 @@ export default async function handler(req: any, res: any) {
   const rerank = String(req.query?.rerank ?? "1") !== "0";
   if (question.length < 3) return res.status(400).json({ error: "q is required" });
 
-  // Unlike /api/chat, this function signs with the nsr-vercel-api SigV4 keys:
+  // Unlike /api/chat, this function signs with the Vercel deploy's SigV4 keys:
   // bedrock-agent-runtime does not accept the bearer token at all (verified —
   // it isn't a policy gap, the client never reads AWS_BEARER_TOKEN_BEDROCK).
-  // The KB statements live in that user's nsr-vercel-scope inline policy.
+  // The IAM user behind those keys (today: nsr-vercel-api, a name inherited
+  // from the NSR era — the user itself outlives domain flips) needs Retrieve,
+  // RetrieveAndGenerate, Rerank AND GetInferenceProfile. Auth wiring is
+  // documented for the next flip in docs/BEDROCK-KB-BAKEOFF.md.
 
   const t0 = Date.now();
   try {
