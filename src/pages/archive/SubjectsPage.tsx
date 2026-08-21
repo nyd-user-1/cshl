@@ -34,7 +34,7 @@ function SubjectCard({
   return (
     <div
       onClick={onOpen}
-      className="group relative rounded-lg border border-border/40 bg-muted/40 p-4 pb-14 md:p-6 md:pb-16 min-h-[240px] transition-all hover:shadow-lg hover:border-border cursor-pointer"
+      className="group relative rounded-lg border border-border/40 bg-muted/40 p-4 pb-14 md:p-6 md:pb-16 min-h-[280px] transition-all hover:shadow-lg hover:border-border cursor-pointer"
     >
       <div className="flex items-center gap-2 mb-3">
         <span className="text-base font-bold">{title}</span>
@@ -152,8 +152,7 @@ export default function SubjectsPage({ server }: { server: ArchiveServer }) {
             <ArrowUpDown className="h-3.5 w-3.5" />
           </button>
           <span className="ml-auto text-xs text-muted-foreground">
-            Pick a subject and ask — every question there searches only that subject&apos;s
-            preprints.
+            Pick a subject and ask.
           </span>
         </div>
       </div>

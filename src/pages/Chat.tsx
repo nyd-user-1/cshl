@@ -243,10 +243,6 @@ export default function Chat() {
           {room && (
             <div className="mb-3 w-full max-w-[720px] text-center">
               <AgentChip room={room} onExit={() => navigate(`/${room.server}/agents`)} />
-              <p className="mt-1 text-xs text-muted-foreground">
-                Every question here searches only {ARCHIVE_LABEL[room.server]}&apos;s{" "}
-                {room.category} preprints.
-              </p>
             </div>
           )}
           <ChatInput

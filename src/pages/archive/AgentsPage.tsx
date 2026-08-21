@@ -55,7 +55,7 @@ export default function AgentsPage({ server }: { server: ArchiveServer }) {
             <ArrowUpDown className="h-3.5 w-3.5" />
           </button>
           <span className="ml-auto text-xs text-muted-foreground">
-            One assistant per subject — the same retrieval stack, scoped to one subject each.
+            One assistant per subject.
           </span>
         </div>
       </div>
@@ -88,7 +88,7 @@ export default function AgentsPage({ server }: { server: ArchiveServer }) {
                   <div
                     key={c.value}
                     onClick={() => openAgent(c.value)}
-                    className="group relative rounded-lg border border-border/40 bg-muted/40 p-4 pb-14 md:p-6 md:pb-16 min-h-[240px] transition-all hover:shadow-lg hover:border-border cursor-pointer"
+                    className="group relative rounded-lg border border-border/40 bg-muted/40 p-4 pb-14 md:p-6 md:pb-16 min-h-[280px] transition-all hover:shadow-lg hover:border-border cursor-pointer"
                   >
                     <div className="flex items-center gap-2 mb-3">
                       <span className="text-base font-bold">{title} Agent</span>
@@ -96,9 +96,7 @@ export default function AgentsPage({ server }: { server: ArchiveServer }) {
                     </div>
 
                     <p className="text-sm text-foreground leading-snug mb-3">
-                      Answers from {label}&apos;s {title.toLowerCase()} preprints — the same
-                      fine-tuned retrieval stack, confined to this subject. Retrieval never
-                      leaves it without telling you.
+                      Answers from {label}&apos;s {title.toLowerCase()} preprints.
                     </p>
 
                     <div className="grid grid-cols-1 gap-y-2 text-xs">

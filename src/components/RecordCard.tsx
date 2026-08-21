@@ -1,7 +1,7 @@
 import { memo, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { ArrowUp, Copy, Check } from "lucide-react";
+import { ArrowUp, Copy, Check, FileText } from "lucide-react";
 import type { CorpusRecord } from "@/types/record";
 import type { SearchMode } from "@/hooks/useRecordSearch";
 import { useFeedEmitter } from "@/hooks/useFeedEmitter";
@@ -91,16 +91,25 @@ export const RecordCard = memo(function RecordCard({ record, searchQuery, search
   return (
     <div
       onClick={onClick}
-      className="group relative rounded-lg border border-border/40 bg-muted/40 p-4 pb-14 md:p-6 md:pb-16 min-h-[240px] md:min-h-[280px] transition-all hover:shadow-lg hover:border-border active:shadow-lg active:border-border cursor-pointer"
+      className="group relative rounded-lg border border-border/40 bg-muted/40 p-4 pb-14 md:p-6 md:pb-16 min-h-[280px] transition-all hover:shadow-lg hover:border-border active:shadow-lg active:border-border cursor-pointer"
     >
       {/* Title leads the card; the key number lives in the footer link. */}
       {/* Match-percentage badge removed 2026-08-20 — see the note in Search.tsx: the
           hybrid list mixes cosine and lexical scores on one visual scale. */}
-      <p className="text-base font-bold text-foreground leading-snug mb-3 line-clamp-2">
-        {searchMode === "keyword" && searchQuery
-          ? highlightText(record.title, searchQuery)
-          : record.title}
-      </p>
+      <div className="flex items-start gap-2 mb-3">
+        <p className="text-base font-bold text-foreground leading-snug line-clamp-2">
+          {searchMode === "keyword" && searchQuery
+            ? highlightText(record.title, searchQuery)
+            : record.title}
+        </p>
+        <FileText className="ml-auto h-5 w-5 shrink-0 text-muted-foreground" />
+      </div>
+
+      {record.abstract && (
+        <p className="text-sm text-foreground leading-snug mb-3 line-clamp-3">
+          {record.abstract}
+        </p>
+      )}
 
       {/* Metadata grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-2 text-xs">
