@@ -84,7 +84,12 @@ function formatNsrContext(records: Rec[]): string {
   const lines = records.map((r, i) => {
     const parts = [
       `[${i + 1}] ${r.key_number} (${r.server ?? "preprint"}) — "${r.title ?? "Untitled"}"`,
-      `    Authors: ${r.authors ?? "N/A"} | Year: ${r.pub_year}${r.doi ? ` | DOI: ${r.doi}` : ""}${r.published_journal ? ` | published in ${r.published_journal}` : " | not yet published"}`,
+      // NEVER assert unpublished status. published_journal is null for 50.3% of
+      // the corpus, including papers that ARE published (the record just wasn't
+      // backfilled), so " | not yet published" made the generator state a
+      // falsehood in our own voice — it wasn't hallucinating, it was obeying.
+      // Silence when unknown; the system prompt tells it not to speculate.
+      `    Authors: ${r.authors ?? "N/A"} | Year: ${r.pub_year}${r.doi ? ` | DOI: ${r.doi}` : ""}${r.published_journal ? ` | published in ${r.published_journal}` : ""}`,
     ];
     if (r.categories?.length) parts.push(`    Category: ${r.categories.join(", ")}`);
     if (r.status_tags?.length) parts.push(`    Status: ${r.status_tags.join(", ")}`);
