@@ -60,26 +60,29 @@ export function ChatMessage({
                 {children}
               </strong>
             ),
+            // Headings carry top margin so sections separate visually — the
+            // difference between the NSR answer and a wall of text.
             h1: ({ children }) => (
-              <h1 className="text-xl font-semibold mb-3 text-foreground">
+              <h1 className="text-xl font-semibold mb-3 mt-6 first:mt-0 text-foreground">
                 {children}
               </h1>
             ),
             h2: ({ children }) => (
-              <h2 className="text-lg font-semibold mb-2 text-foreground">
+              <h2 className="text-lg font-semibold mb-2 mt-6 first:mt-0 text-foreground">
                 {children}
               </h2>
             ),
             h3: ({ children }) => (
-              <h3 className="text-base font-semibold mb-2 text-foreground">
+              <h3 className="text-base font-semibold mb-2 mt-5 first:mt-0 text-foreground">
                 {children}
               </h3>
             ),
             h4: ({ children }) => (
-              <h4 className="text-sm font-semibold mb-1 text-foreground">
+              <h4 className="text-sm font-semibold mb-1 mt-4 first:mt-0 text-foreground">
                 {children}
               </h4>
             ),
+            hr: () => <hr className="my-5 border-border" />,
             ul: ({ children }) => (
               <ul className="list-disc pl-5 mb-3 space-y-1">{children}</ul>
             ),
@@ -87,7 +90,7 @@ export function ChatMessage({
               <ol className="list-decimal pl-6 space-y-1 my-2">{children}</ol>
             ),
             li: ({ children }) => (
-              <li className="text-foreground text-sm">{children}</li>
+              <li className="text-foreground text-base leading-relaxed">{children}</li>
             ),
             a: ({ href, children }) => {
               if (href?.startsWith("#cite:")) {

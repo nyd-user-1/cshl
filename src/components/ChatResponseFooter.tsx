@@ -20,7 +20,7 @@ interface SimilarRecord {
 }
 
 /** Related preprints from /api/similar (cshl-CITE, zero inference): the footer
- *  suggests the next papers and rooms, so one click re-scopes the user without
+ *  suggests the next papers and subjects, so one click re-scopes the user without
  *  them ever seeing a filter. */
 function RelatedFooter({ sourceKey }: { sourceKey: string }) {
   const navigate = useNavigate();

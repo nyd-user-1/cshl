@@ -7,10 +7,10 @@
 //   ?q=#2026.07.31        key_number prefix, any mode.
 //   ?mode=structured      typed chip search: &categories=…&journals=…
 //   &limit=               1..200 (default 100)
-//   &server=…&category=…  the ROOM (LANE-MEDRXIV-ROOMS): both arms are confined
-//                         to that server+category slice. Inside a room the dense
+//   &server=…&category=…  the ROOM (LANE-MEDRXIV-SUBJECTS): both arms are confined
+//                         to that server+category slice. Inside a subject the dense
 //                         arm switches from HNSW to an EXACT filter-first scan —
-//                         rooms are ≤12.7k vectors, where exact is affordable and
+//                         subjects are ≤12.7k vectors, where exact is affordable and
 //                         an ANN over-fetch would miss most of a small room.
 //
 // DENSE RETRIEVAL RESTORED 2026-08-20. The header this replaces said "this corpus has no
@@ -134,8 +134,8 @@ export default async function handler(req: any, res: any) {
           if (room) {
             // In-room: EXACT search, filter first, no index gymnastics. The
             // HNSW index cannot honor a selective filter without over-fetching
-            // past the room, so at room scale we pay the exact scan and get
-            // perfect in-room recall. Latency rides `timings.dense_ms`.
+            // past the subject, so at room scale we pay the exact scan and get
+            // perfect in-subject recall. Latency rides `timings.dense_ms`.
             denseRows = await q(
               `SELECT ${SELECT}, (1 - (e.embedding <=> $1::vector))::float AS similarity
                FROM preprints p JOIN ${vectorTable(enc)} e USING (key_number)
@@ -253,14 +253,14 @@ export default async function handler(req: any, res: any) {
       mode = "keyword";
     }
 
-    // Room-first, corpus-second, never room-only: a scoped search with weak
+    // Subject-first, corpus-second, never subject-only: a scoped search with weak
     // results widens to the whole corpus and SAYS SO — a filter that hides the
     // answer behind a confident-but-irrelevant list is the worst failure we
-    // have. Weakness cannot be a row count: the in-room dense arm is an EXACT
+    // have. Weakness cannot be a row count: the in-subject dense arm is an EXACT
     // kNN, so it always fills the limit even when nothing is relevant (a
     // 30-paper room answers any query with its 10 nearest strangers). The
-    // signal is evidence: no in-room lexical match AND no in-room dense hit
-    // above WEAK_SIM. Measured on the nsr encoder: relevant in-room hits score
+    // signal is evidence: no in-subject lexical match AND no in-subject dense hit
+    // above WEAK_SIM. Measured on the nsr encoder: relevant in-subject hits score
     // ≥0.60, filler ≤0.26 — 0.45 splits them with margin on both sides.
     const WEAK_SIM = 0.45;
     const inRoomEvidence =

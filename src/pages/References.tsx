@@ -183,13 +183,19 @@ export default function References({ server }: { server?: "biorxiv" | "medrxiv" 
 
   const debouncedQuery = useDebouncedValue(query, 320);
   const search = useRecordSearch(debouncedQuery, searchMode, server);
+  // A category arriving from a subject/agent card browses that subject —
+  // paginated, with the real total. The structured path caps at 50 and would
+  // show 50 of 397 with no way to reach the rest.
   const browse = useRecords({
     year: yearFilter ? Number(yearFilter) : undefined,
     page,
     pageSize: CARDS_PER_PAGE,
     server,
+    category: categoryInput.trim() || undefined,
   });
-  const structured = useStructuredSearch(structuredParams ? { ...structuredParams, server } : null);
+  const structured = useStructuredSearch(
+    structuredParams?.journals?.length ? { ...structuredParams, server } : null,
+  );
 
   // Feed emitter
   const { emit } = useFeedEmitter();
@@ -278,7 +284,7 @@ export default function References({ server }: { server?: "biorxiv" | "medrxiv" 
   };
 
   const isSearching = debouncedQuery.length >= 3;
-  const isStructured = structuredParams !== null;
+  const isStructured = (structuredParams?.journals?.length ?? 0) > 0;
 
   // Determine which data source to show
   let rawRecords: CorpusRecord[] | null | undefined;

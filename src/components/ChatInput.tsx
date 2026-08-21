@@ -24,7 +24,7 @@ interface ChatInputProps {
   initialValue?: string;
   /** Show the magnifier next to "+" — switches to search mode (/search). Only the /chat page sets this. */
   searchToggle?: boolean;
-  /** Room-scoped chats name their room here ("Ask a neurology question…"). */
+  /** Subject-scoped chats name their room here ("Ask a neurology question…"). */
   placeholder?: string;
 }
 

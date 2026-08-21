@@ -1,4 +1,4 @@
-// /:archive/subjects — the subject catalog (formerly "rooms").
+// /:archive/subjects — the subject catalog (formerly "subjects").
 //
 // One card per archive category, in the References card-grid layout. Nearly all
 // of these categories are MeSH Subject Headings (or named after one), so each
@@ -6,13 +6,14 @@
 // a link into NLM's MeSH browser. Selecting a card lands in a chat already
 // scoped to that subject — the click IS the routing decision (SMALL-WORLDS:
 // every query is scoped before it is typed).
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { ArrowUp, ArrowUpDown, BookMarked } from "lucide-react";
+import { ArrowUp, ArrowUpDown, BookMarked, ChevronDown } from "lucide-react";
 import { ScopeSwitcher } from "@/components/ScopeSwitcher";
 import { SearchInput } from "@/components/SearchInput";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DictCombobox } from "@/components/DictCombobox";
 import { ARCHIVE_LABEL, useArchiveCategories, type ArchiveServer } from "@/hooks/useArchive";
 import { SUBJECTS, meshUrl, subjectTitle, type Subject } from "@/lib/subjects";
 
@@ -98,12 +99,77 @@ function SubjectCard({
   );
 }
 
+/** MeSH top-level trees, the ones this corpus actually lands in. */
+const TREES: { code: string; label: string }[] = [
+  { code: "C", label: "Diseases" },
+  { code: "E", label: "Techniques" },
+  { code: "F", label: "Psychiatry" },
+  { code: "G", label: "Phenomena" },
+  { code: "H", label: "Disciplines" },
+  { code: "I", label: "Social" },
+  { code: "L", label: "Information" },
+  { code: "N", label: "Health Care" },
+];
+
+function TreeFilter({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    if (open) document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+  const active = TREES.find((t) => t.code === value);
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${
+          value ? "bg-foreground text-background font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+        }`}
+      >
+        {active ? `Tree: ${active.label}` : "Tree"}
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 min-w-[180px] rounded-lg border bg-background shadow-md">
+          {value && (
+            <button
+              onClick={() => { onChange(""); setOpen(false); }}
+              className="flex w-full px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              Clear filter
+            </button>
+          )}
+          {TREES.map((t) => (
+            <button
+              key={t.code}
+              onClick={() => { onChange(t.code); setOpen(false); }}
+              className={`flex w-full px-3 py-2 text-sm transition-colors ${
+                value === t.code ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-muted"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SubjectsPage({ server }: { server: ArchiveServer }) {
   const navigate = useNavigate();
   const { data: live, isLoading } = useArchiveCategories(server);
   const [query, setQuery] = useState("");
   // a–z is the default; the Name toggle flips to z–a and back.
   const [nameSortAsc, setNameSortAsc] = useState(true);
+  const [sizeSortDesc, setSizeSortDesc] = useState<boolean | null>(null);
+  const [subjectFilter, setSubjectFilter] = useState("");
+  // MeSH tree letter — C is Diseases, E Techniques, H Disciplines, N Health Care.
+  const [tree, setTree] = useState("");
 
   // The static file is the row source (it carries the MeSH data); the live
   // dict supplies current counts.
@@ -119,12 +185,20 @@ export default function SubjectsPage({ server }: { server: ArchiveServer }) {
           subject.mesh?.label.toLowerCase().includes(q) ||
           subject.mesh?.id.toLowerCase().includes(q),
       );
+    const subj = subjectFilter.trim().toLowerCase();
+    if (subj) out = out.filter(({ subject }) => subject.category === subj);
+    if (tree)
+      out = out.filter(({ subject }) =>
+        (subject.mesh?.treeNumbers ?? []).some((t) => t.startsWith(tree)),
+      );
+    if (sizeSortDesc !== null)
+      return [...out].sort((a, b) => (sizeSortDesc ? b.papers - a.papers : a.papers - b.papers));
     return [...out].sort((a, b) =>
       nameSortAsc
         ? a.subject.category.localeCompare(b.subject.category)
         : b.subject.category.localeCompare(a.subject.category),
     );
-  }, [server, live, query, nameSortAsc]);
+  }, [server, live, query, nameSortAsc, sizeSortDesc, subjectFilter, tree]);
 
   return (
     <div className="h-full flex flex-col">
@@ -138,12 +212,40 @@ export default function SubjectsPage({ server }: { server: ArchiveServer }) {
         <div className="flex flex-wrap items-center gap-2">
           <ScopeSwitcher server={server} section="subjects" />
           <button
-            onClick={() => setNameSortAsc((p) => !p)}
-            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            onClick={() => { setNameSortAsc((p) => !p); setSizeSortDesc(null); }}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${
+              sizeSortDesc === null
+                ? "bg-foreground text-background font-medium"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            }`}
           >
             Name
             <ArrowUpDown className="h-3.5 w-3.5" />
           </button>
+          <button
+            onClick={() => setSizeSortDesc((p) => (p === null ? true : !p))}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${
+              sizeSortDesc !== null
+                ? "bg-foreground text-background font-medium"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            }`}
+          >
+            Papers
+            <ArrowUpDown className="h-3.5 w-3.5" />
+          </button>
+          <TreeFilter value={tree} onChange={setTree} />
+          <DictCombobox
+            label="Subject"
+            dictType="categories"
+            placeholder="e.g. neurology"
+            value={subjectFilter}
+            onChange={setSubjectFilter}
+            onSubmit={(v) => setSubjectFilter(v ?? "")}
+            server={server}
+          />
+          <span className="ml-auto text-xs text-muted-foreground">
+            {subjects.length} of {(SUBJECTS[server] ?? []).length} subjects
+          </span>
         </div>
       </div>
 
@@ -158,9 +260,6 @@ export default function SubjectsPage({ server }: { server: ArchiveServer }) {
 
         {subjects.length > 0 && (
           <>
-            <div className="mb-2 text-xs text-muted-foreground">
-              Showing {subjects.length} of {(SUBJECTS[server] ?? []).length} subjects
-            </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
               {subjects.map(({ subject, papers }) => (
                 <SubjectCard

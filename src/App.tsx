@@ -69,7 +69,7 @@ function App() {
                 <Route path="/biorxiv/papers" element={<References key="biorxiv-papers" server="biorxiv" />} />
                 {/* pre-subjects URLs — old routes redirect or stay scoped, never 404 */}
                 <Route path="/medrxiv/cards" element={<Navigate to="/medrxiv/subjects" replace />} />
-                <Route path="/medrxiv/rooms/:category" element={<Chat />} />
+                <Route path="/medrxiv/subjects/:category" element={<Chat />} />
                 <Route path="/preprints" element={<Navigate to="/references" replace />} />
                 <Route path="/preprints/cards" element={<Navigate to="/medrxiv/subjects" replace />} />
                 <Route path="/preprints/agents" element={<Navigate to="/medrxiv/agents" replace />} />

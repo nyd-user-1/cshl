@@ -21,7 +21,7 @@ export interface MessageSources {
   }>;
   /** which records the generator read in full, and from where */
   fulltext?: Array<{ key_number: string; source: string; chars: number }>;
-  /** the room this turn was scoped to, and whether retrieval widened past it */
+  /** the subject this turn was scoped to, and whether retrieval widened past it */
   room?: { server: string; category: string; widened: boolean };
 }
 

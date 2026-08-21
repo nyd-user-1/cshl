@@ -1,7 +1,7 @@
 // cshl-kb-subjectsearch — the subject agents' retrieval tool.
 //
 // Calls the LIVE site's /api/search (the fine-tuned encoder + FTS, RRF-fused,
-// room-scoped): the AgentCore harness rents the voice, this Lambda keeps the
+// subject-scoped): the AgentCore harness rents the voice, this Lambda keeps the
 // pipeline ours. No DB credential — the public API is the contract.
 //
 // Event shape (LEARNED THE HARD WAY, see docs/AGENTCORE-CSHL-AGENTS.md): an

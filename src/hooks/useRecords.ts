@@ -7,6 +7,8 @@ interface Filters {
   page?: number;
   pageSize?: number;
   server?: "biorxiv" | "medrxiv";
+  /** one subject category — browse, so it paginates and reports a real total */
+  category?: string;
 }
 
 interface PaginatedResult {
@@ -20,6 +22,7 @@ async function fetchRecords(filters: Filters): Promise<PaginatedResult> {
   if (filters.year) params.set("year", String(filters.year));
   if (filters.publishedOnly) params.set("published", "1");
   if (filters.server) params.set("server", filters.server);
+  if (filters.category) params.set("category", filters.category);
   const res = await fetch(`/api/records?${params}`);
   if (!res.ok) throw new Error(`records ${res.status}`);
   const data = (await res.json()) as { records: CorpusRecord[]; totalCount: number };
@@ -28,7 +31,7 @@ async function fetchRecords(filters: Filters): Promise<PaginatedResult> {
 
 export function useRecords(filters: Filters = {}) {
   return useQuery({
-    queryKey: ["preprints", filters.server ?? "all", filters.year ?? "all", filters.publishedOnly ?? false, filters.page ?? 1, filters.pageSize ?? 99],
+    queryKey: ["preprints", filters.server ?? "all", filters.category ?? "all", filters.year ?? "all", filters.publishedOnly ?? false, filters.page ?? 1, filters.pageSize ?? 99],
     queryFn: () => fetchRecords(filters),
     staleTime: 1000 * 60 * 10,
     placeholderData: (prev) => prev,

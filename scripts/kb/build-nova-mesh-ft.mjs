@@ -26,7 +26,7 @@ const SYSTEM =
   "the heading names only, comma-separated, most central first. No commentary.";
 
 // Long tails make a noisy target and a fat prompt; the head labels are what the
-// room map actually routes on.
+// subject map actually routes on.
 const MAX_LABELS = 12;
 const MAX_CHARS = 2400;
 

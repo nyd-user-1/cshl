@@ -1,7 +1,7 @@
 // /:archive/agents — one scoped assistant per subject, in the References
 // card-grid layout.
 //
-// Honest copy rule (LANE-MEDRXIV-ROOMS): an agent is the SAME retrieval stack
+// Honest copy rule (LANE-MEDRXIV-SUBJECTS): an agent is the SAME retrieval stack
 // confined to one subject's preprints. It is NEVER described as a separately
 // trained model. Selecting a card lands in that agent's chat.
 import { useMemo, useState } from "react";
@@ -11,6 +11,7 @@ import { ArrowUp, ArrowUpDown, Bot } from "lucide-react";
 import { ScopeSwitcher } from "@/components/ScopeSwitcher";
 import { SearchInput } from "@/components/SearchInput";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DictCombobox } from "@/components/DictCombobox";
 import { ARCHIVE_LABEL, useArchiveCategories, type ArchiveServer } from "@/hooks/useArchive";
 import { findSubject, meshUrl, subjectTitle } from "@/lib/subjects";
 
@@ -23,16 +24,24 @@ export default function AgentsPage({ server }: { server: ArchiveServer }) {
   const [query, setQuery] = useState("");
   // a–z is the default; the Name toggle flips to z–a and back.
   const [nameSortAsc, setNameSortAsc] = useState(true);
+  const [sizeSortDesc, setSizeSortDesc] = useState<boolean | null>(null);
+  const [subjectFilter, setSubjectFilter] = useState("");
 
   const agents = useMemo(() => {
     if (!categories) return null;
     const q = query.trim().toLowerCase();
+    const subj = subjectFilter.trim().toLowerCase();
     let out = categories;
     if (q) out = out.filter((c) => c.value.includes(q));
+    if (subj) out = out.filter((c) => c.value === subj);
+    if (sizeSortDesc !== null)
+      return [...out].sort((a, b) =>
+        sizeSortDesc ? b.record_count - a.record_count : a.record_count - b.record_count,
+      );
     return [...out].sort((a, b) =>
       nameSortAsc ? a.value.localeCompare(b.value) : b.value.localeCompare(a.value),
     );
-  }, [categories, query, nameSortAsc]);
+  }, [categories, query, nameSortAsc, sizeSortDesc, subjectFilter]);
 
   const openAgent = (category: string) =>
     navigate(`/${server}/agents/${encodeURIComponent(category)}`);
@@ -49,12 +58,41 @@ export default function AgentsPage({ server }: { server: ArchiveServer }) {
         <div className="flex flex-wrap items-center gap-2">
           <ScopeSwitcher server={server} section="agents" />
           <button
-            onClick={() => setNameSortAsc((p) => !p)}
-            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            onClick={() => { setNameSortAsc((p) => !p); setSizeSortDesc(null); }}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${
+              sizeSortDesc === null
+                ? "bg-foreground text-background font-medium"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            }`}
           >
             Name
             <ArrowUpDown className="h-3.5 w-3.5" />
           </button>
+          <button
+            onClick={() => setSizeSortDesc((p) => (p === null ? true : !p))}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${
+              sizeSortDesc !== null
+                ? "bg-foreground text-background font-medium"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            }`}
+          >
+            Papers
+            <ArrowUpDown className="h-3.5 w-3.5" />
+          </button>
+          <DictCombobox
+            label="Subject"
+            dictType="categories"
+            placeholder="e.g. epidemiology"
+            value={subjectFilter}
+            onChange={setSubjectFilter}
+            onSubmit={(v) => setSubjectFilter(v ?? "")}
+            server={server}
+          />
+          {agents && categories && (
+            <span className="ml-auto text-xs text-muted-foreground">
+              {agents.length} of {categories.length} agents
+            </span>
+          )}
         </div>
       </div>
 
@@ -75,9 +113,6 @@ export default function AgentsPage({ server }: { server: ArchiveServer }) {
 
         {agents && agents.length > 0 && (
           <>
-            <div className="mb-2 text-xs text-muted-foreground">
-              Showing {agents.length} of {categories!.length} agents
-            </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
               {agents.map((c) => {
                 const title = subjectTitle(c.value);

@@ -1,6 +1,6 @@
 // /api/dict — dictionaries for the filter comboboxes and the "+" menu, from Neon.
 //   ?type=categories|journals|institutions|authors [&q=prefix] [&limit=N]
-//   ?type=categories&server=medrxiv — per-server category counts, the room
+//   ?type=categories&server=medrxiv — per-server category counts, the subject
 //   cards' real numbers. Read from category_server_counts (sql/22), which is
 //   materialized because the live unnest+GROUP BY measured 3.1 s cold. The
 //   `categories` table's paper_count is cross-server and lies for any category

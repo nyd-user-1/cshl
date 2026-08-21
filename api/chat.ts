@@ -16,12 +16,13 @@
 //   4. dense       — kNN over the active encoder's vector table
 //   5. Semantic Scholar API (best-effort)
 //
-// ROOMS (LANE-MEDRXIV-ROOMS). The body may carry `room: {server, category}`;
-// arms 1–4 are then confined to that slice. Inside a room the dense arm runs
+// SUBJECT SCOPE. The body may carry `room: {server, category}` (the wire name
+// predates the rename and is kept for deployed clients);
+// arms 1–4 are then confined to that slice. Inside a subject the dense arm runs
 // an EXACT scan (filter first, then order by distance) instead of HNSW —
-// rooms are ≤12.7k vectors, where exact is both correct and affordable, and
-// an ANN over-fetch would miss most of a small room. Room-first is never
-// room-only: if scoped retrieval comes back sparse the corpus-wide arms run
+// subjects are ≤12.7k vectors, where exact is both correct and affordable, and
+// an ANN over-fetch would miss most of a small subject. Subject-first is never
+// subject-only: if scoped retrieval comes back sparse the corpus-wide arms run
 // too, and the payload + prompt both say the search was widened.
 //
 // FULL TEXT (Task 1b). The top few records that reach the prompt get their
@@ -41,15 +42,21 @@ import {
 
 export const config = { maxDuration: 120 };
 
-// Task 1c: structure creates slots, and slots get filled. Across five failed
-// test answers, the two that used headers and a "Significance"-style section
-// were the two that fabricated; the three that wrote plain paragraphs did
-// not. So: plain prose, no invented scaffolding, and an explicit licence to
-// say "the retrieved text does not say".
+// STRUCTURE, WITH A MEASUREMENT BEHIND IT.
+//
+// The earlier rule here banned headings outright: of five failed test answers,
+// the two that used headers fabricated, so scaffolding was treated as the
+// cause. That was a proxy. We now score every answer against the very text the
+// generator read (api/grounding.ts + Bedrock contextual grounding), so
+// fabrication is measured directly instead of being guessed at from shape —
+// and a wall of undifferentiated prose is its own failure, one a reader pays
+// for on every answer. Structure is allowed back; the grounding rules below,
+// and the score in the footer, are what hold the line.
 const SYSTEM_PROMPT_BASE = `You are RxivGPT, an AI research assistant grounded in the bioRxiv and medRxiv preprint corpora operated by Cold Spring Harbor Laboratory.
 
 INSTRUCTIONS:
-- Write plain prose paragraphs only. Never use markdown headings (#, ##), a title line, or a bold phrase standing in for a heading — start the answer directly with a sentence and let paragraph breaks do the work. Do not add a "Significance" section or any other scaffold the user did not ask for.
+- Organize the answer so it can be read: markdown headings (##, ###) for the two or three real divisions of your answer, bullet or numbered lists where items are genuinely parallel, and bold for the specific term or finding that carries a sentence. Lead with a sentence that answers the question, not with a heading.
+- Structure must follow the evidence, never generate it. Never open a section you cannot fill from the retrieved text — no empty "Limitations" or "Future Work" heading written because the shape expects one. Fewer, fuller sections beat a complete-looking outline.
 - Ground every claim in the retrieved records below. Never describe a finding, method, or number that is not present in the supplied text. When the retrieved text does not answer part of the question, say plainly that the retrieved text does not say — never fill the gap with a plausible completion.
 - Records marked "Full text" include body sections beyond the abstract; prefer their specifics (quantities, comparisons, named results) when reporting what a paper found.
 - Each record carries a PUBLICATION STATUS line. Follow it exactly. When it says peer reviewed, say so and cite the published journal and DOI; when it was retitled on publication, use the published title. When it says UNKNOWN, say nothing about publication status — never call a paper unpublished, "still a preprint", or not peer reviewed, and never frame your answer around its being preliminary. When a record's status says withdrawn, never present its findings as standing.
@@ -231,7 +238,7 @@ export default async function handler(req: any, res: any) {
 
     const q = (text: string, params: unknown[]) => (sql as unknown as { query: (t: string, p: unknown[]) => Promise<Rec[]> }).query(text, params);
 
-    // Room predicate, appended to each scoped arm. $n placeholders are offset
+    // Subject predicate, appended to each scoped arm. $n placeholders are offset
     // per query, so the clause is built where it is used.
     const roomCond = (n: number) => `server = $${n} AND categories && $${n + 1}::text[]`;
     const roomParams = room ? [room.server, [room.category]] : [];
@@ -323,7 +330,7 @@ export default async function handler(req: any, res: any) {
     const denseQuery = async (v: { enc: EncoderName; vector: number[] }, scoped: boolean): Promise<Rec[]> => {
       try {
         if (scoped && room) {
-          // Inside a room: EXACT search, filter first. Rooms are ≤12.7k
+          // Inside a subject: EXACT search, filter first. Subjects are ≤12.7k
           // vectors; HNSW over-fetch would miss most of a small room, and an
           // exact scan at this size is affordable. Correct-but-slow is a
           // measured trade — timings ride the payload log.
@@ -398,13 +405,13 @@ export default async function handler(req: any, res: any) {
     };
     let records = merge([keyRecs, structured, authorRecs, interleave(denseRecs, ftsRecs)], 14);
 
-    // Room-first, corpus-second, never room-only: a filter that hides the
+    // Subject-first, corpus-second, never subject-only: a filter that hides the
     // answer and produces a confident empty-handed response is the worst
-    // failure we have. Weak in-room retrieval widens to the corpus and the
+    // failure we have. Weak in-subject retrieval widens to the corpus and the
     // prompt + payload both say so. Weakness is evidence, not row count — the
     // scoped dense arm is an exact kNN that always fills its limit, so a tiny
     // room answers any query with its nearest strangers. Measured on the nsr
-    // encoder: relevant in-room hits ≥0.60 cosine, filler ≤0.26; 0.45 splits
+    // encoder: relevant in-subject hits ≥0.60 cosine, filler ≤0.26; 0.45 splits
     // them with margin. An explicit key match is evidence by itself.
     const WEAK_SIM = 0.45;
     const inRoomEvidence =
@@ -439,7 +446,7 @@ export default async function handler(req: any, res: any) {
     const roomContext = room
       ? `\n\nSCOPE: This conversation is scoped to the "${room.category}" room — ${room.server} preprints in that category. The retrieved records reflect that scope.${
           widened
-            ? " In-room retrieval was sparse, so the results below were widened to the whole corpus — tell the user the search was widened beyond the room."
+            ? " In-room retrieval was sparse, so the results below were widened to the whole corpus — tell the user the search was widened beyond the subject."
             : ""
         }`
       : "";

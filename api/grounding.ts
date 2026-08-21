@@ -25,7 +25,7 @@ const GUARDRAIL_VERSION = process.env.BEDROCK_GUARDRAIL_VERSION ?? "DRAFT";
 
 // A text unit is 1,000 characters and the check is billed per unit, so the
 // grounding source is capped rather than sent whole.
-const MAX_SOURCE_CHARS = 12000;
+const MAX_SOURCE_CHARS = 40000;
 const MAX_ANSWER_CHARS = 6000;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -42,17 +42,34 @@ export default async function handler(req: any, res: any) {
     if (!text || !keyList.length) return res.status(200).json({ skipped: true });
 
     const sql = neon(process.env.DATABASE_URL!);
+    // The generator reads FULL TEXT when we have it, so the grounding source
+    // must too. Scoring a body-grounded answer against abstracts alone was
+    // measured at 1% on an answer that was in fact faithful — the check has to
+    // see the same material the model did, or it is just noise in a badge.
     const rows = (await sql.query(
-      `SELECT key_number, title, authors, abstract FROM preprints WHERE key_number = ANY($1::text[])`,
+      `SELECT p.key_number, p.title, p.authors, p.abstract, f.text AS fulltext
+         FROM preprints p
+         LEFT JOIN preprint_fulltext f USING (key_number)
+        WHERE p.key_number = ANY($1::text[])`,
       [keyList],
-    )) as { key_number: string; title: string | null; authors: string | null; abstract: string | null }[];
+    )) as {
+      key_number: string; title: string | null; authors: string | null;
+      abstract: string | null; fulltext: string | null;
+    }[];
     // Authors and the key number belong in the source: our answers attribute
     // ("McMahon et al. found…") and cite by key, and a source of bare abstracts
     // scores those true attributions as unsupported. Measured: the same claim
     // went 0.17 → 0.96 once the byline was part of the grounding source.
+    // Budget the source across the cited papers rather than letting the first
+    // full text eat the whole allowance.
+    const perPaper = Math.max(1500, Math.floor(MAX_SOURCE_CHARS / Math.max(1, rows.length)));
     const source = rows
       .map((r) =>
-        [`${r.key_number} — ${r.title ?? ""}`, r.authors ? `Authors: ${r.authors}` : "", r.abstract ?? ""]
+        [
+          `${r.key_number} — ${r.title ?? ""}`,
+          r.authors ? `Authors: ${r.authors}` : "",
+          (r.fulltext ?? r.abstract ?? "").slice(0, perPaper),
+        ]
           .filter(Boolean)
           .join("\n"),
       )

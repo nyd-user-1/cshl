@@ -11,6 +11,13 @@
 // shape we declare, or the call fails. That is structured output: same models
 // we already pay for, a schema instead of a prompt-and-pray.
 //
+// THIS IS THE TEACHER, NOT THE PIPELINE. Renting a per-token call for all
+// 433,449 papers would cost ~$1,370 to do once, and again on every reload —
+// paying rent on a stage we are supposed to OWN. Use this to label a few
+// thousand papers (~$10), train our own extractor on the rig (~$3, the price
+// every other model here cost), and run inference over the whole corpus for
+// free, forever. Extraction is a pipeline stage; the pipeline is ours.
+//
 //   node scripts/extract/extract-fields.mjs 10 medrxiv "infectious diseases"
 import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 
@@ -109,7 +116,8 @@ async function main() {
     console.log();
   }
   const cost = (inTok / 1e6) * PRICE_IN + (outTok / 1e6) * PRICE_OUT;
-  console.log(`tokens in=${inTok} out=${outTok} cost=$${cost.toFixed(4)} → $${((cost / rows.length) * 433449).toFixed(0)} for the whole 433k corpus at this rate`);
+  console.log(`tokens in=${inTok} out=${outTok} cost=$${cost.toFixed(4)} ($${(cost / rows.length).toFixed(4)}/paper)`);
+  console.log(`teacher set of 3,000 ≈ $${((cost / rows.length) * 3000).toFixed(2)} — then train our own and run 433k for free`);
   return results;
 }
 

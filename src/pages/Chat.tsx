@@ -47,7 +47,7 @@ export default function Chat() {
   // The SCOPE. Set by navigation (an agent or subject card click landed here),
   // never by a widget: /:archive/agents/:category mounts this same page with
   // the scope pre-applied, and it rides every request the conversation makes.
-  // (/medrxiv/rooms/:category is the pre-subjects URL — still honored.)
+  // (/medrxiv/subjects/:category is the pre-subjects URL — still honored.)
   const room: ChatRoom | null = useMemo(() => {
     if (!routeCategory) return null;
     const m = location.pathname.match(/^\/(medrxiv|biorxiv)\/(?:agents|rooms)\//);
@@ -128,7 +128,7 @@ export default function Chat() {
   }, [routeSessionId, loadSession, clearMessages]);
 
   // Update URL when session is created (without remounting). Skipped inside a
-  // room: rewriting to /c/:id would drop the room from the URL and a refresh
+  // room: rewriting to /c/:id would drop the subject from the URL and a refresh
   // would silently land the user on an unscoped chat.
   useEffect(() => {
     if (sessionId && !routeSessionId && !room && messages.length > 0 && !isLoading) {
@@ -182,9 +182,11 @@ export default function Chat() {
       // here asked for "a thorough analysis of … significance" — an invitation
       // to scaffold sections and fabricate into them. Plain prose, grounded.
       systemContext +=
-        "\n\nWrite plain prose paragraphs — no section headings or scaffolding. " +
-        "Report what the supplied record and any retrieved full text actually say, " +
-        "and when they do not answer something, say so rather than completing plausibly.";
+        "\n\nOrganize the answer so it can be read: markdown headings for its two or " +
+        "three real divisions, lists where items are parallel, bold for the term that " +
+        "carries a sentence. Never open a section you cannot fill from the supplied " +
+        "record or its retrieved full text. Report what they actually say, and when " +
+        "they do not answer something, say so rather than completing plausibly.";
 
       // Point the PDF viewer at /api/pdf, which resolves the canonical URL and the
       // Google-viewer wrapper. Prefer an explicit ?key= from the caller; fall back to the
