@@ -6,9 +6,8 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import {
-  Hash,
   ExternalLink,
-  Download,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Loader2,
@@ -56,12 +55,9 @@ function RelatedPreprints({ recordKey, onOpen }: { recordKey: string; onOpen?: (
 
   return (
     <div className="pt-5">
-      <div className="flex items-baseline gap-2">
-        <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Related preprints
-        </h4>
-        <span className="text-[10px] text-muted-foreground/70">cshl-CITE</span>
-      </div>
+      <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Related preprints
+      </h4>
       {!rows ? (
         <p className="mt-2 text-xs text-muted-foreground">Finding related work…</p>
       ) : (
@@ -106,6 +102,7 @@ export function RecordDrawer({
   const s2Loading = !s2 && !isPlaceholderData;
   const queryClient = useQueryClient();
   const [abstractDraft, setAbstractDraft] = useState("");
+  const [abstractOpen, setAbstractOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -167,27 +164,9 @@ export function RecordDrawer({
             </button>
           </div>
 
-          {/* Key number */}
-          <div className="flex items-center gap-2">
-            <Hash className="h-4 w-4 text-muted-foreground" />
-            <SheetTitle className="text-base">
-              {record.key_number}
-            </SheetTitle>
-          </div>
-
-          {/* Open Access badge */}
-          {s2?.is_open_access && (
-            <span className="inline-flex items-center rounded-full bg-green-500/20 px-2.5 py-0.5 text-[11px] font-medium text-green-400 w-fit">
-              Open Access
-            </span>
-          )}
-
-          <div className="mt-1">
-            <span className="text-xs text-muted-foreground block mb-0.5">Title</span>
-            <SheetDescription className="text-foreground font-medium text-sm leading-snug">
-              {record.title}
-            </SheetDescription>
-          </div>
+          {/* The paper's title IS the header. */}
+          <SheetTitle className="text-base leading-snug">{record.title}</SheetTitle>
+          <SheetDescription className="sr-only">{record.key_number}</SheetDescription>
         </SheetHeader>
 
         <div className="overflow-y-auto px-4 pb-6 pt-2 flex-1 min-h-0 select-text">
@@ -198,11 +177,8 @@ export function RecordDrawer({
             </div>
           )}
 
-          {!s2Loading && (() => {
-            const s2Found = s2 && s2.s2_lookup_status === "found";
-
-            return (
-              <>
+          {!s2Loading && (
+            <>
                 {/* DOI */}
                 {record.doi && (
                   <div className="py-3 border-b border-border/80">
@@ -218,11 +194,25 @@ export function RecordDrawer({
                   </div>
                 )}
 
-                {/* Abstract — show from S2 data regardless of lookup status */}
+                {/* Abstract — ten lines, then the row expands it. */}
                 {s2?.abstract ? (
                   <div className="py-3">
-                    <span className="text-xs text-muted-foreground block mb-1">Abstract</span>
-                    <p className="text-sm font-medium text-foreground/80 leading-relaxed">{s2.abstract}</p>
+                    <button
+                      type="button"
+                      onClick={() => setAbstractOpen((v) => !v)}
+                      className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-muted"
+                      aria-expanded={abstractOpen}
+                    >
+                      <span className="text-xs text-muted-foreground">Abstract</span>
+                      <ChevronDown
+                        className={`ml-auto h-3.5 w-3.5 text-muted-foreground transition-transform ${abstractOpen ? "rotate-180" : ""}`}
+                      />
+                    </button>
+                    <p
+                      className={`mt-1 text-sm font-medium leading-relaxed text-foreground/80 ${abstractOpen ? "" : "line-clamp-[10]"}`}
+                    >
+                      {s2.abstract}
+                    </p>
                   </div>
                 ) : !s2Loading && (
                   <div className="py-3">
@@ -257,41 +247,10 @@ export function RecordDrawer({
                   </div>
                 )}
 
-                {/* Authors — prefer S2 authors (with h-index), fall back to base record */}
-                {s2Found && s2.s2_authors && s2.s2_authors.length > 0 ? (
-                  <div className="py-3">
-                    <span className="text-xs text-muted-foreground block mb-1.5">Authors</span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {s2.s2_authors.map((author) => {
-                        const hasExtra = (author.hIndex != null && author.hIndex > 0) || author.affiliations?.[0];
-                        return (
-                          <span
-                            key={author.name}
-                            className={`inline-flex items-center gap-1.5 rounded-full border border-border/80 bg-muted/40 text-xs ${hasExtra ? "px-2.5 py-1" : "px-2 py-0.5"}`}
-                          >
-                            <span className="font-medium">{author.name}</span>
-                            {author.hIndex != null && author.hIndex > 0 && (
-                              <span className="text-[10px] text-muted-foreground">
-                                h:{author.hIndex}
-                              </span>
-                            )}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : record.authors && (
+                {record.authors && (
                   <div className="py-3">
                     <span className="text-xs text-muted-foreground">Authors</span>
                     <p className="text-sm font-medium">{record.authors}</p>
-                  </div>
-                )}
-
-                {/* Venue/Journal */}
-                {s2?.venue && (
-                  <div className="py-3">
-                    <span className="text-xs text-muted-foreground">Journal</span>
-                    <p className="text-sm font-medium">{s2.venue}</p>
                   </div>
                 )}
 
@@ -301,102 +260,8 @@ export function RecordDrawer({
                   <p className="text-sm font-medium">{record.pub_year}</p>
                 </div>
 
-                {/* Citations / Influential / References (S2 only) */}
-                {s2Found && (
-                  <div className="py-3 text-xs">
-                    <div className="flex items-center gap-4">
-                      <div>
-                        <span className="text-muted-foreground">Citations</span>
-                        <p className="font-medium">{s2.citation_count ?? "—"}</p>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Influential</span>
-                        <p className="font-medium">{s2.influential_citation_count ?? "—"}</p>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">References</span>
-                        <p className="font-medium">{s2.reference_count ?? "—"}</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Reference (always from base record) */}
-                {record.reference && (
-                  <div className="py-3">
-                    <span className="text-xs text-muted-foreground">Reference</span>
-                    <p className="text-sm font-medium">{record.reference}</p>
-                  </div>
-                )}
-
-                {/* Category (with label, matching card pattern) */}
-                {record.categories && record.categories.length > 0 && (
-                  <div className="py-3">
-                    <span className="text-xs text-muted-foreground block mb-1">Category</span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {record.categories.map((cat: string) => (
-                        <span
-                          key={cat}
-                          className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-foreground/80"
-                        >
-                          {cat}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Status (with label, matching card pattern) */}
-                {record.status_tags && record.status_tags.length > 0 && (
-                  <div className="py-3">
-                    <span className="text-xs text-muted-foreground block mb-1">Status</span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {record.status_tags.map((tag: string) => (
-                        <span
-                          key={tag}
-                          className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-foreground/80"
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Fields of study (S2 only) */}
-                {s2Found && s2.fields_of_study && s2.fields_of_study.length > 0 && (
-                  <div className="py-3">
-                    <span className="text-xs text-muted-foreground block mb-1">Fields of Study</span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {s2.fields_of_study.map((field) => (
-                        <span
-                          key={field}
-                          className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-foreground/80"
-                        >
-                          {field}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Download PDF link */}
-                {s2Found && s2.is_open_access && s2.open_access_pdf_url && (
-                  <div className="pt-3">
-                    <a
-                      href={s2.open_access_pdf_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 text-xs text-green-400 hover:underline"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      Download PDF
-                    </a>
-                  </div>
-                )}
-              </>
-            );
-          })()}
+            </>
+          )}
 
           {record?.key_number && (
             <RelatedPreprints recordKey={String(record.key_number)} />
