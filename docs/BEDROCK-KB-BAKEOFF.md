@@ -65,9 +65,10 @@ using a slice at all: `cshl_qp2` - `bge-m3` is +0.2467 on the full corpus and
 
 | arm | MeSH R@10 | AUTHORKW R@10 | blended |
 |---|---:|---:|---:|
-| **`cshl_qp2`** — our best encoder, unserved | **0.9000** | 0.9733 | **0.9367** |
-| **`cshl_qp`** — what /chat serves today | **0.8267** | **0.9800** | 0.9033 |
-| **AWS managed KB** (Titan v2, semantic) | 0.7133 | 0.9467 | 0.8300 |
+| **`cshl_qp2`** — our best encoder, unserved, NO reranker | **0.9000** | 0.9733 | **0.9367** |
+| **`cshl_qp`** — what /chat serves today, NO reranker | **0.8267** | **0.9800** | 0.9033 |
+| **AWS managed KB + Cohere Rerank 3.5** — their full stack | 0.7800 | **0.9800** | 0.8800 |
+| **AWS managed KB** (Titan v2, semantic only) | 0.7133 | 0.9467 | 0.8300 |
 | stock `bge-m3` | 0.6733 | 0.9400 | 0.8067 |
 | `medcpt` | 0.6067 | 0.9000 | 0.7533 |
 | our FTS arm | 0.1067 | 0.2400 | 0.1733 |
@@ -76,9 +77,14 @@ Paired McNemar on the discordant queries (both arms answered the identical 300):
 
 | comparison | MeSH Δ | discordant | *p* |
 |---|---:|---:|---:|
+| **vs AWS out of the box (semantic only)** | | | |
 | `cshl_qp` (serving) vs AWS | **+0.1133** | 21/4 | **9.1e-4** |
 | `cshl_qp2` (best) vs AWS | **+0.1867** | 29/1 | **5.8e-8** |
 | stock `bge-m3` vs AWS | −0.0400 | 13/19 | 0.38 — **a tie** |
+| **vs AWS fully configured (+ Cohere Rerank 3.5)** | | | |
+| `cshl_qp` (serving) vs AWS+rerank | +0.0467 | 14/7 | 0.19 — **a tie** |
+| `cshl_qp2` (best) vs AWS+rerank | **+0.1200** | 19/1 | **4.0e-5** |
+| Cohere's own lift on the AWS stack | +0.0667 | 12/2 | 0.013 |
 
 **The finding: the managed service performs like a good stock open encoder, and our
 fine-tuning is the thing that beats it.** Titan v2 and `bge-m3` are statistically
@@ -120,19 +126,21 @@ preference — the specific detail an outside reviewer called the genuinely unex
 
 ## What was NOT measured, on both sides
 
-**Neither reranker ran, and the gap is symmetric.**
+**Theirs ran. Ours did not. The asymmetry now favours AWS.**
 
-- **Theirs**: Cohere Rerank 3.5 is the only rerank model available in this account, and it is
-  an AWS **Marketplace** model — it returns `AccessDenied` until someone accepts
-  `aws-marketplace:Subscribe`. That is an account-level commercial agreement, so it was left
-  for a human. One subscription and `MODE=rerank node scripts/kb/score-aws.mjs` completes it.
-- **Ours**: `cshl-RR` needs the TEI reranker box, which is not up, and standing one up would
-  have competed with a training lane that is mid-run.
+- **Theirs — measured.** Cohere Rerank 3.5 is an AWS Marketplace model; the account was
+  subscribed via `bedrock create-foundation-model-agreement` (free to subscribe, $0.002 per
+  search unit, ~90 s to propagate) and the arm scored on all 300 queries, 0 errors, $0.60.
+  It is worth **+0.0667 MeSH R@10** to the managed stack (*p* = 0.013) — a real lift, and
+  larger than the +0.0250 the report measures for `cshl-RR` on QP2.
+- **Ours — still not run.** `cshl-RR` needs the TEI reranker box, which is down, and standing
+  one up would compete with a training lane that is mid-run.
 
-So this is **encoder vs encoder**, cleanly. On the full corpus the report measures `cshl-RR`
-at +0.0250 MeSH on QP2; Cohere would presumably lift AWS similarly. Do not read the table as
-a system-vs-system verdict — the earlier `cshl-QP2`+`cshl-RR` vs MedCPT's full stack row is
-what a system comparison looks like, and it took its own run.
+**So the honest framing of the headline changed.** Against AWS *out of the box* both our arms
+win clearly. Against AWS *fully configured*, our serving arm's lead shrinks to +0.0467 and is
+**no longer statistically significant** (*p* = 0.19, discordant 14/7) — that comparison is a
+tie. `cshl_qp2` still beats their full stack by +0.1200 (*p* = 4.0e-5), and it does so
+**without a reranker of its own**, which is the strongest single number on this page.
 
 ## Other honest caveats
 
@@ -150,8 +158,12 @@ what a system comparison looks like, and it took its own run.
 
 ## What this says about what to do
 
-1. **Do not replace our retrieval with the managed service.** It loses to what we already
-   serve by 0.1133 MeSH R@10 (*p* = 9.1e-4) and to what we already own by 0.1867.
+1. **Do not replace our retrieval with the managed service** — but be precise about which
+   configuration you are refusing. Out of the box it loses to our serving arm by 0.1133
+   (*p* = 9.1e-4). Fully configured with Cohere reranking it draws level with our serving arm
+   (+0.0467, *p* = 0.19) and still loses to `cshl_qp2` by 0.1200 (*p* = 4.0e-5). A managed
+   stack with a bought reranker is competitive with what we ship today; it is not competitive
+   with what we already own.
 2. **The 500-character abstract truncation is the most expensive line in `api/chat.ts`.**
    The managed service beat us on every content check for that one reason, with a worse
    encoder. Fixing it needs no vendor.
@@ -172,7 +184,6 @@ node scripts/kb/rag-headtohead.mjs         # the Vink case, 3 arms
 bash scripts/kb/teardown.sh                # deletes everything, idempotent
 ```
 
-**Spend: ≈$0.40** against a $10 ceiling — Titan embeddings ~$0.11, 40k S3 PUTs ~$0.20,
-generation and agent tokens ~$0.05, S3 Vectors storage and queries a rounding error. The only
+**Spend: ≈$1.00** against a $10 ceiling — Cohere reranking 300 queries $0.60, Titan embeddings ~$0.11, 40k S3 PUTs ~$0.20, generation and agent tokens ~$0.05, S3 Vectors storage and queries a rounding error. The only
 ongoing charge is the S3 Vectors index (~82 MB) and 21.6 MB of S3, together well under
 $0.02/month. `teardown.sh` removes both.
