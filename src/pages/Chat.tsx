@@ -20,6 +20,8 @@ export default function Chat() {
     useChat();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [autoSubmitted, setAutoSubmitted] = useState(false);
+  // Lightning toggle — send turns through the managed RAG pipeline (Bedrock KB).
+  const [kbMode, setKbMode] = useState(false);
   const [entity, setEntity] = useState<{ type: EntityType; id: string } | null>(null);
   const [entityDetail, setEntityDetail] = useState<Record<string, unknown> | null>(null);
 
@@ -168,10 +170,12 @@ export default function Chat() {
           {/* Input pinned to bottom */}
           <div className="px-2 md:px-4 py-3 md:py-4 shrink-0 bg-background">
             <ChatInput
-              onSubmit={(text, modelId) => sendMessage(text, undefined, undefined, modelId)}
+              onSubmit={(text, modelId) => sendMessage(text, undefined, undefined, modelId, kbMode)}
               onStop={stopGeneration}
               isLoading={isLoading}
               searchToggle
+              kbActive={kbMode}
+              onKbToggle={() => setKbMode((v) => !v)}
             />
           </div>
         </>
@@ -179,9 +183,11 @@ export default function Chat() {
         /* Empty state — input vertically centered */
         <div className="flex flex-1 flex-col items-center justify-center px-4">
           <ChatInput
-            onSubmit={(text, modelId) => sendMessage(text, undefined, undefined, modelId)}
+            onSubmit={(text, modelId) => sendMessage(text, undefined, undefined, modelId, kbMode)}
             isLoading={isLoading}
             searchToggle
+            kbActive={kbMode}
+            onKbToggle={() => setKbMode((v) => !v)}
           />
         </div>
       )}

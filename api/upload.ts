@@ -36,7 +36,9 @@ export default async function handler(req: any, res: any) {
   const type = String(req.query?.type ?? "application/octet-stream").slice(0, 100);
   const key = `workspace/${Date.now().toString(36)}-${name}`;
   try {
-    // nsr-pdfs lives in us-east-1; BEDROCK_REGION is us-east-2 and must not leak here
+    // nsr-pdfs lives in us-east-1, and so does everything else now — BEDROCK_REGION
+    // was us-east-2 until 2026-08-20. Keep the S3 client's region explicit anyway:
+    // the bucket's region is a property of the bucket, not of whatever Bedrock does.
     const s3 = new S3Client({ region: "us-east-1" });
     const url = await getSignedUrl(
       s3,

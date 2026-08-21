@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, Square, ChevronDown, Search } from "lucide-react";
+import { ArrowUp, Square, ChevronDown, Search, Zap } from "lucide-react";
 import { PlusMenu } from "@/components/PlusMenu";
 import { useNavigate } from "react-router-dom";import { MODEL_OPTIONS, DEFAULT_MODEL_ID, modelById } from "@/lib/models";
 
@@ -24,9 +24,12 @@ interface ChatInputProps {
   initialValue?: string;
   /** Show the magnifier next to "+" — switches to search mode (/search). Only the /chat page sets this. */
   searchToggle?: boolean;
+  /** Lightning: route the turn through the managed RAG pipeline (Bedrock KB). Owned by the page so it survives the empty↔pinned layout swap. */
+  kbActive?: boolean;
+  onKbToggle?: () => void;
 }
 
-export function ChatInput({ onSubmit, onStop, isLoading, initialValue, searchToggle }: ChatInputProps) {
+export function ChatInput({ onSubmit, onStop, isLoading, initialValue, searchToggle, kbActive, onKbToggle }: ChatInputProps) {
   const navigate = useNavigate();
   const [value, setValue] = useState(initialValue ?? "");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -113,6 +116,22 @@ export function ChatInput({ onSubmit, onStop, isLoading, initialValue, searchTog
                 title="Search mode"
               >
                 <Search className="h-4 w-4" />
+              </button>
+            )}
+            {onKbToggle && (
+              <button
+                type="button"
+                onClick={onKbToggle}
+                className={`h-8 w-8 rounded-lg flex items-center justify-center transition-colors ${
+                  kbActive
+                    ? "text-amber-500 bg-amber-500/10 hover:bg-amber-500/20"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                }`}
+                aria-label="Managed RAG pipeline"
+                aria-pressed={kbActive}
+                title={kbActive ? "Managed RAG on — Bedrock KB retrieves and answers" : "Managed RAG off — using our own pipeline"}
+              >
+                <Zap className="h-4 w-4" {...(kbActive ? { fill: "currentColor" } : {})} />
               </button>
             )}
           </div>

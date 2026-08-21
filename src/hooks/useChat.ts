@@ -52,7 +52,7 @@ export function useChat() {
   const persistence = useChatPersistence();
 
   const sendMessage = useCallback(
-    async (userText: string, systemContext?: string, pdfUrl?: string, modelId?: string) => {
+    async (userText: string, systemContext?: string, pdfUrl?: string, modelId?: string, useKb?: boolean) => {
       const userMsg: Message = {
         id: makeId(),
         role: "user",
@@ -104,6 +104,39 @@ export function useChat() {
 
       try {
         abortRef.current = new AbortController();
+
+        // Lightning toggle: the whole turn goes through the managed pipeline —
+        // Bedrock KB retrieval + generation in one non-streaming call. The
+        // model picker is deliberately ignored here; the KB generates with the
+        // model it is configured for.
+        if (useKb) {
+          const res = await fetch(`/api/kb-rag?q=${encodeURIComponent(userText)}`, {
+            signal: abortRef.current.signal,
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || data.error) throw new Error(data.error || `KB error ${res.status}`);
+          const kbSources: MessageSources = {
+            nsr: (data.sources ?? []).map(
+              (s: { key_number: string; title: string | null; doi: string | null }) => ({
+                key_number: s.key_number,
+                title: s.title ?? s.key_number,
+                doi: s.doi,
+                similarity: 0,
+              }),
+            ),
+            s2: [],
+          };
+          setMessages((prev) => {
+            const updated = prev.map((m) =>
+              m.id === assistantMsg.id
+                ? { ...m, content: data.answer ?? "", isStreaming: false, sources: kbSources }
+                : m,
+            );
+            if (sessionId) persistence.updateMessages(sessionId, toPersistedMessages(updated));
+            return updated;
+          });
+          return;
+        }
 
         const res = await fetch(
           // Our own API route (Neon retrieval + Bedrock generation) — the

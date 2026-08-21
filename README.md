@@ -44,8 +44,12 @@ fine-tuned retrieval stack (**NSR-CPT**). Production: **https://nsr.nysgpt.com**
 - **Encoder switch:** `SEARCH_ENCODER=nsr` serves our encoder via the
   `nsr-serve` EC2 box; `=bge` falls back to stock bge-m3 on Cloudflare
   Workers AI (free). Reranker is opt-in (`&rerank=1`).
-- **Bedrock auth** is via `AWS_BEARER_TOKEN_BEDROCK` only. S3 bucket
-  `nsr-pdfs` is **us-east-1** (Bedrock is us-east-2 — don't mix them up).
+- **Bedrock auth** is via `AWS_BEARER_TOKEN_BEDROCK` only.
+  Everything is **us-east-1**: `nsr-pdfs`, Neon, Bedrock, the KB and its S3
+  Vectors index, AgentCore. `BEDROCK_REGION` was us-east-2 — inherited from the NSR
+  clone, pointing at a region holding no resource of ours — and was moved to us-east-1
+  on 2026-08-20. It also cost us a model: `qwen.qwen3-coder-next` is not offered in
+  us-east-2, so that picker entry could not have worked.
 - **Device rules:** nothing heavy runs on the laptop — GPU/bulk work goes to
   self-terminating EC2 boxes (rigs under `scripts/embed-nsr/`,
   `scripts/train-nsr/`, etc.). Spending AWS credits requires Brendan's
