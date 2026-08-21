@@ -95,17 +95,26 @@ function RelatedFooter({ sourceKey }: { sourceKey: string }) {
 /** Bedrock's contextual-grounding check, run on the finished answer against the
  *  preprints it was given (see api/grounding.ts). Displayed, not enforced: the
  *  reader gets a number instead of a promise. */
-function GroundingBadge({ content, sources }: { content: string; sources?: MessageSources }) {
+function GroundingBadge({
+  content,
+  sources,
+  query,
+}: {
+  content: string;
+  sources?: MessageSources;
+  query?: string;
+}) {
   const [score, setScore] = useState<{ grounding: number | null; ok: boolean } | null>(null);
   const keys = (sources?.nsr ?? []).map((r) => r.key_number).join(",");
 
   useEffect(() => {
-    if (!content || !keys) return;
+    // The guardrail requires all three parts — source, query, answer.
+    if (!content || !keys || !query) return;
     let cancelled = false;
     fetch("/api/grounding", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ answer: content, keys: keys.split(",") }),
+      body: JSON.stringify({ answer: content, keys: keys.split(","), query }),
     })
       .then((r) => r.json())
       .then((d) => {
@@ -115,7 +124,7 @@ function GroundingBadge({ content, sources }: { content: string; sources?: Messa
     return () => {
       cancelled = true;
     };
-  }, [content, keys]);
+  }, [content, keys, query]);
 
   if (!score) return null;
   const pct = Math.round(score.grounding! * 100);
@@ -141,6 +150,7 @@ interface ChatResponseFooterProps {
   isStreaming?: boolean;
   sources?: MessageSources;
   pdfUrl?: string;
+  query?: string;
 }
 
 export function ChatResponseFooter({
@@ -148,6 +158,7 @@ export function ChatResponseFooter({
   isStreaming = false,
   sources,
   pdfUrl,
+  query,
 }: ChatResponseFooterProps) {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<"good" | "bad" | null>(null);
@@ -286,7 +297,7 @@ export function ChatResponseFooter({
 
         {/* Thumbs Up / Down */}
         <div className="flex items-center gap-1 ml-auto">
-          <GroundingBadge content={content} sources={sources} />
+          <GroundingBadge content={content} sources={sources} query={query} />
           <button
             onClick={() => setFeedback(feedback === "good" ? null : "good")}
             className={`inline-flex items-center justify-center h-7 w-7 rounded-[3px] transition-colors ${

@@ -213,7 +213,7 @@ export default function Chat() {
           {/* Messages — scrollable */}
           <div ref={scrollPaneRef} className="flex-1 overflow-y-auto">
             <div className="mx-auto max-w-[720px] px-2 md:px-4 py-4 md:py-8">
-              {messages.map((msg) => (
+              {messages.map((msg, i) => (
                 <Suspense key={msg.id} fallback={<div className="mb-6 h-16 animate-pulse rounded-lg bg-muted/40" />}>
                 <ChatMessage
                   key={msg.id}
@@ -222,6 +222,13 @@ export default function Chat() {
                   isStreaming={msg.isStreaming}
                   sources={msg.sources}
                   pdfUrl={msg.pdfUrl}
+                  // the question this answer replies to — the grounding check
+                  // scores the answer against the papers FOR that question
+                  query={
+                    msg.role === "assistant"
+                      ? messages.slice(0, i).reverse().find((m) => m.role === "user")?.content
+                      : undefined
+                  }
                 />
                 </Suspense>
               ))}

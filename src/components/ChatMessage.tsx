@@ -23,6 +23,8 @@ interface ChatMessageProps {
   isStreaming?: boolean;
   sources?: MessageSources;
   pdfUrl?: string;
+  /** the question this answer replies to — the grounding check needs it */
+  query?: string;
 }
 
 export function ChatMessage({
@@ -30,6 +32,7 @@ export function ChatMessage({
   content,
   isStreaming,
   sources,
+  query,
   pdfUrl,
 }: ChatMessageProps) {
   if (role === "user") {
@@ -118,7 +121,7 @@ export function ChatMessage({
           <span className="inline-block w-1.5 h-4 bg-foreground animate-pulse" />
         )}
       </div>
-      <ChatResponseFooter content={content} isStreaming={isStreaming} sources={sources} pdfUrl={pdfUrl} />
+      <ChatResponseFooter content={content} isStreaming={isStreaming} sources={sources} pdfUrl={pdfUrl} query={query} />
     </div>
   );
 }
