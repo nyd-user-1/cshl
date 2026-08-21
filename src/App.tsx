@@ -21,6 +21,7 @@ const CodePage = lazy(() => import("@/pages/CodePage"));
 /** /ensdf/148 → mass chain · /ensdf/148Gd → nuclide datasets · /ensdf/Gd → element datasets (one param, three pages). */
 const Community = lazy(() => import("@/pages/Community"));
 const Announcing = lazy(() => import("@/pages/Announcing"));
+const Models = lazy(() => import("@/pages/Models"));
 
 const queryClient = new QueryClient();
 
@@ -54,6 +55,7 @@ function App() {
                 <Route path="/code" element={<CodePage />} />
                 <Route path="/community" element={<Community />} />
                 <Route path="/announcing" element={<Announcing />} />
+                <Route path="/models" element={<Models />} />
               </Route>
             </Routes>
           </Suspense>
