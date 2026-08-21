@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { ArrowUp, ArrowUpDown, BookMarked } from "lucide-react";
+import { ScopeSwitcher } from "@/components/ScopeSwitcher";
 import { SearchInput } from "@/components/SearchInput";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ARCHIVE_LABEL, useArchiveCategories, type ArchiveServer } from "@/hooks/useArchive";
@@ -135,9 +136,7 @@ export default function SubjectsPage({ server }: { server: ArchiveServer }) {
 
       <div className="sticky top-0 z-10 bg-background px-3 md:px-6 pt-3 pb-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium text-foreground">
-            {ARCHIVE_LABEL[server]} subjects
-          </span>
+          <ScopeSwitcher server={server} section="subjects" />
           <button
             onClick={() => setNameSortAsc((p) => !p)}
             className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"

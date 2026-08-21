@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router-dom";
 import { ArrowUpDown, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { MobileFilterDrawer } from "@/components/MobileFilterDrawer";
+import { ScopeSwitcher } from "@/components/ScopeSwitcher";
 import { SearchInput } from "@/components/SearchInput";
 import { RecordCard } from "@/components/RecordCard";
 import { DictCombobox } from "@/components/DictCombobox";
@@ -431,6 +432,8 @@ export default function References({ server }: { server?: "biorxiv" | "medrxiv" 
       {/* Desktop sticky filter bar — hidden on mobile */}
       <div className="hidden md:block sticky top-0 z-10 bg-background px-6 pt-3 pb-2">
         <div className="flex flex-wrap items-center gap-2">
+          {server && <ScopeSwitcher server={server} section="papers" />}
+
           {/* Authors sort toggle */}
           <button
             onClick={() => {
