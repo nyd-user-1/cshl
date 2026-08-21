@@ -1,7 +1,20 @@
 # LANE-MEDRXIV-ROOMS — the rooms product, medRxiv only, tonight
 
-Append-only, timestamped (UTC). You are LANE-MEDRXIV-ROOMS in
-`/Users/brendanstanton/Code/cshl`, branch `lane/rooms`, branched from `main`.
+Append-only, timestamped (UTC). You are LANE-MEDRXIV-ROOMS.
+
+**FIRST COMMAND, BEFORE ANYTHING ELSE — take your own worktree:**
+
+```sh
+git -C /Users/brendanstanton/Code/cshl worktree add \
+    /Users/brendanstanton/Code/cshl-rooms -b lane/rooms main
+cd /Users/brendanstanton/Code/cshl-rooms
+```
+
+Then work **only** in `/Users/brendanstanton/Code/cshl-rooms`. Do **not** run
+`git checkout` inside `/Users/brendanstanton/Code/cshl` — another session is live
+in that directory, and checking out a branch there moves its HEAD mid-run and
+makes its commits land on your branch. This has already happened twice tonight.
+
 Everything you need is measured below — do not re-derive it, and do not read the
 old session transcripts (they are large and off-task).
 
