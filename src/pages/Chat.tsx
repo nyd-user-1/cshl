@@ -1,10 +1,10 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { useSearchParams, useNavigate, useParams } from "react-router-dom";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams, useNavigate, useParams, useLocation } from "react-router-dom";
 import { ChatInput } from "@/components/ChatInput";
 import { DetailBody, type EntityType } from "@/components/EntityDetail";
 import { Badge } from "@/components/ui/badge";
 import { X } from "lucide-react";
-import { useChat } from "@/hooks/useChat";
+import { useChat, type ChatRoom } from "@/hooks/useChat";
 
 // ChatMessage drags in react-markdown + KaTeX (~200 KB gz). A fresh landing
 // renders zero messages, so that weight loads only once a conversation exists.
@@ -12,12 +12,37 @@ const ChatMessage = lazy(() =>
   import("@/components/ChatMessage").then((m) => ({ default: m.ChatMessage })),
 );
 
+/** The visible scope: the user always sees which room they are in. */
+function RoomChip({ category }: { category: string }) {
+  return (
+    <div className="mx-auto mb-2 flex max-w-[720px] justify-center md:justify-start">
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-brand">
+        {category}
+        <span className="font-normal normal-case tracking-normal text-muted-foreground">· medRxiv room</span>
+      </span>
+    </div>
+  );
+}
+
 export default function Chat() {
   const [searchParams] = useSearchParams();
-  const { sessionId: routeSessionId } = useParams();
+  const { sessionId: routeSessionId, category: routeCategory } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // The ROOM. Set by navigation (a card click landed here), never by a widget:
+  // /medrxiv/rooms/:category mounts this same page with the scope pre-applied,
+  // and the scope rides every request the conversation makes.
+  const room: ChatRoom | null = useMemo(
+    () =>
+      routeCategory && location.pathname.startsWith("/medrxiv/rooms/")
+        ? { server: "medrxiv", category: decodeURIComponent(routeCategory).toLowerCase() }
+        : null,
+    [routeCategory, location.pathname],
+  );
+
   const { messages, isLoading, sendMessage, stopGeneration, clearMessages, loadSession, sessionId } =
-    useChat();
+    useChat(room);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [autoSubmitted, setAutoSubmitted] = useState(false);
   const [entity, setEntity] = useState<{ type: EntityType; id: string } | null>(null);
@@ -69,12 +94,14 @@ export default function Chat() {
     }
   }, [routeSessionId, loadSession, clearMessages]);
 
-  // Update URL when session is created (without remounting)
+  // Update URL when session is created (without remounting). Skipped inside a
+  // room: rewriting to /c/:id would drop the room from the URL and a refresh
+  // would silently land the user on an unscoped chat.
   useEffect(() => {
-    if (sessionId && !routeSessionId && messages.length > 0 && !isLoading) {
+    if (sessionId && !routeSessionId && !room && messages.length > 0 && !isLoading) {
       window.history.replaceState(null, "", `/c/${sessionId}`);
     }
-  }, [sessionId, routeSessionId, messages.length, isLoading]);
+  }, [sessionId, routeSessionId, room, messages.length, isLoading]);
 
   // Listen for "new-chat" event from Sidebar (handles replaceState URL mismatch)
   useEffect(() => {
@@ -114,15 +141,17 @@ export default function Chat() {
 
       if (url) {
         systemContext +=
-          "\n\nThe paper is available at: " +
-          url +
-          "\nPlease reference this DOI link in your response and provide a thorough " +
-          "analysis of the paper's content, methodology, and significance.";
+          "\n\nThe paper is available at: " + url +
+          "\nReference this DOI link in your response.";
       }
 
+      // Task 1c: structure creates slots, and slots get filled. The old wording
+      // here asked for "a thorough analysis of … significance" — an invitation
+      // to scaffold sections and fabricate into them. Plain prose, grounded.
       systemContext +=
-        "\n\nProvide a detailed, expert-level analysis. Explain the significance of the " +
-        "research and its methodology, and highlight connections to related work in the field.";
+        "\n\nWrite plain prose paragraphs — no section headings or scaffolding. " +
+        "Report what the supplied record and any retrieved full text actually say, " +
+        "and when they do not answer something, say so rather than completing plausibly.";
 
       // Point the PDF viewer at /api/pdf, which resolves the canonical URL and the
       // Google-viewer wrapper. Prefer an explicit ?key= from the caller; fall back to the
@@ -167,21 +196,32 @@ export default function Chat() {
 
           {/* Input pinned to bottom */}
           <div className="px-2 md:px-4 py-3 md:py-4 shrink-0 bg-background">
+            {room && <RoomChip category={room.category} />}
             <ChatInput
               onSubmit={(text, modelId) => sendMessage(text, undefined, undefined, modelId)}
               onStop={stopGeneration}
               isLoading={isLoading}
               searchToggle
+              placeholder={room ? `Ask a ${room.category} question…` : undefined}
             />
           </div>
         </>
       ) : (
         /* Empty state — input vertically centered */
         <div className="flex flex-1 flex-col items-center justify-center px-4">
+          {room && (
+            <div className="mb-3 w-full max-w-[720px] text-center">
+              <RoomChip category={room.category} />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Every question here searches only medRxiv&apos;s {room.category} preprints.
+              </p>
+            </div>
+          )}
           <ChatInput
             onSubmit={(text, modelId) => sendMessage(text, undefined, undefined, modelId)}
             isLoading={isLoading}
             searchToggle
+            placeholder={room ? `Ask a ${room.category} question…` : undefined}
           />
         </div>
       )}

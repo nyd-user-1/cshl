@@ -1,10 +1,86 @@
 import { TexText } from "./TexText";
 import { useState, useRef, useEffect } from "react";
-import { ThumbsUp, ThumbsDown, Copy, Check, BookOpen, ExternalLink, GraduationCap, FileText } from "lucide-react";
+import { ThumbsUp, ThumbsDown, Copy, Check, BookOpen, ExternalLink, GraduationCap, FileText, ArrowRight } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import type { MessageSources } from "@/hooks/useChat";
 import { usePaperLookup } from "@/hooks/usePaperLookup";
 import { TextSearch } from "@/components/icons/TextSearch";
+
+/** MedRxiv's 51 category rooms exist tonight; bioRxiv's do not. A category chip
+ *  is a link only when the room it names is real. */
+const ROOMED_SERVERS = new Set(["medrxiv"]);
+
+interface SimilarRecord {
+  key_number: string;
+  title: string | null;
+  doi: string | null;
+  server: string | null;
+  categories: string[] | null;
+}
+
+/** Related preprints from /api/similar (cshl-CITE, zero inference): the footer
+ *  suggests the next papers and rooms, so one click re-scopes the user without
+ *  them ever seeing a filter. */
+function RelatedFooter({ sourceKey }: { sourceKey: string }) {
+  const navigate = useNavigate();
+  const [related, setRelated] = useState<SimilarRecord[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/similar?key=${encodeURIComponent(sourceKey)}&limit=4`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => {
+        if (!cancelled) setRelated((d?.records as SimilarRecord[]) ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setRelated([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceKey]);
+
+  if (!related?.length) return null;
+  return (
+    <div className="mt-3 border-t pt-2">
+      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        Keep reading
+      </p>
+      <div className="space-y-1">
+        {related.map((r) => (
+          <div key={r.key_number} className="flex items-center gap-2 text-xs">
+            <a
+              href={r.doi ? `https://doi.org/${r.doi}` : undefined}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="min-w-0 flex-1 truncate text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <TexText text={r.title ?? r.key_number} />
+            </a>
+            {(r.categories ?? []).slice(0, 1).map((cat) =>
+              r.server && ROOMED_SERVERS.has(r.server) ? (
+                <button
+                  key={cat}
+                  onClick={() => navigate(`/medrxiv/rooms/${encodeURIComponent(cat)}`)}
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded-full border px-2 py-0.5 text-[10px] font-medium text-brand transition-colors hover:bg-muted"
+                  title={`Open the ${cat} room`}
+                >
+                  {cat}
+                  <ArrowRight className="h-2.5 w-2.5" />
+                </button>
+              ) : (
+                <span key={cat} className="shrink-0 rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
+                  {cat}
+                </span>
+              ),
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 interface ChatResponseFooterProps {
   content: string;
@@ -181,6 +257,15 @@ export function ChatResponseFooter({
         </div>
       </div>
 
+      {/* Room honesty: when in-room retrieval was sparse the search widened to
+          the whole corpus — the UI says so, matching what the prompt told the
+          generator. A silent widen would make the room chip a lie. */}
+      {sources?.room?.widened && (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          Few matches inside the {sources.room.category} room — this answer also draws on the wider corpus.
+        </p>
+      )}
+
       {/* Sources dropdown */}
       {sourcesOpen && sources && (
         <div ref={sourcesRef} className="mt-2 border rounded-lg overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
@@ -191,6 +276,11 @@ export function ChatResponseFooter({
                 <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5 flex items-center gap-1">
                   <BookOpen className="h-3 w-3" />
                   Preprints
+                  {(sources.fulltext?.length ?? 0) > 0 && (
+                    <span className="normal-case font-normal tracking-normal">
+                      · full text read for {sources.fulltext!.length}
+                    </span>
+                  )}
                 </p>
                 <div className="space-y-1.5">
                   {sources.nsr.map((r) => {
@@ -216,6 +306,14 @@ export function ChatResponseFooter({
                         <span className="text-muted-foreground truncate flex-1">
                           <TexText text={r.title} />
                         </span>
+                        {r.fulltext && (
+                          <span
+                            className="shrink-0 rounded-full border border-brand/30 bg-brand/10 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-brand"
+                            title="The full text of this paper was fetched and read for this answer"
+                          >
+                            full text
+                          </span>
+                        )}
                         {href && (
                           <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground/70" />
                         )}
@@ -338,6 +436,11 @@ export function ChatResponseFooter({
             className="w-full h-[50vh] md:h-[600px] bg-background"
           />
         </div>
+      )}
+
+      {/* Follow-ups: the doc-similarity model suggests the next papers/rooms */}
+      {sources?.nsr?.[0]?.key_number && (
+        <RelatedFooter sourceKey={sources.nsr[0].key_number} />
       )}
     </div>
   );

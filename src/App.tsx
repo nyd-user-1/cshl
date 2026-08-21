@@ -23,6 +23,13 @@ const Community = lazy(() => import("@/pages/Community"));
 const Announcing = lazy(() => import("@/pages/Announcing"));
 const Models = lazy(() => import("@/pages/Models"));
 
+// The rooms product (LANE-MEDRXIV-ROOMS): /medrxiv is the bucket, cards the
+// front door, agents the list view, rooms/:category the scoped chat. /biorxiv
+// is deliberately not built yet — the shape leaves room for it.
+const MedrxivHome = lazy(() => import("@/pages/medrxiv/MedrxivHome"));
+const MedrxivCards = lazy(() => import("@/pages/medrxiv/MedrxivCards"));
+const MedrxivAgents = lazy(() => import("@/pages/medrxiv/MedrxivAgents"));
+
 const queryClient = new QueryClient();
 
 function PageFallback() {
@@ -49,6 +56,15 @@ function App() {
                 {/* /references is the corpus browser; /nsr redirects for NSR-era links */}
                 <Route path="/references" element={<References />} />
                 <Route path="/nsr" element={<Navigate to="/references" replace />} />
+                {/* the rooms product */}
+                <Route path="/medrxiv" element={<MedrxivHome />} />
+                <Route path="/medrxiv/cards" element={<MedrxivCards />} />
+                <Route path="/medrxiv/agents" element={<MedrxivAgents />} />
+                <Route path="/medrxiv/rooms/:category" element={<Chat />} />
+                {/* /preprints is retired — old routes redirect, never 404 */}
+                <Route path="/preprints" element={<Navigate to="/medrxiv" replace />} />
+                <Route path="/preprints/cards" element={<Navigate to="/medrxiv/cards" replace />} />
+                <Route path="/preprints/agents" element={<Navigate to="/medrxiv/agents" replace />} />
                 <Route path="/resources" element={<Resources />} />
                 <Route path="/search" element={<Search />} />
                 <Route path="/features" element={<Features />} />

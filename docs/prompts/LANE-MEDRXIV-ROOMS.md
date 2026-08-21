@@ -171,4 +171,9 @@ alone, and write `## BLOCKED` with exactly what failed.
 
 ## Log
 
-(append here)
+**2026-08-21 08:13 UTC — lane start.** Worktree taken at
+`.claude/worktrees/rooms`, branch `lane/rooms` off `main` (6c84f4d). Verified
+`api/` holds exactly 12 files (`ls api/*.ts | wc -l` → 12) — at the function
+ceiling, so all Task 1 work goes into existing handlers + `api/_lib/`. Order of
+work: Task 1 (generation fixes b, c; verify a not regressed) → Task 2 (rooms
+UI) → deploy preview → acceptance tests → promote.

@@ -10,6 +10,7 @@ import {
   Trash2,
   MessageSquare,
   Sparkles,
+  LayoutGrid,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { useChatSessions } from "@/hooks/useChatSessions";
@@ -265,6 +266,18 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
           >
             <Search className="h-4 w-4" />
             New Search
+          </button>
+
+          {/* medRxiv rooms — the rooms product's front door (LANE-MEDRXIV-ROOMS). */}
+          <button
+            onClick={() => { navigate("/medrxiv"); closeMobile(); }}
+            onMouseEnter={() => { import("@/pages/medrxiv/MedrxivHome"); import("@/pages/medrxiv/MedrxivCards"); }}
+            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+              location.pathname.startsWith("/medrxiv") ? "bg-muted" : "hover:bg-muted"
+            }`}
+          >
+            <LayoutGrid className="h-4 w-4" />
+            medRxiv Rooms
           </button>
 
           {/* Preprints — the References browser over bioRxiv + medRxiv. The NSR-era

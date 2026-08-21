@@ -8,6 +8,10 @@ export interface MessageSources {
     title: string;
     doi?: string | null;
     similarity: number;
+    categories?: string[] | null;
+    server?: string | null;
+    /** true when the body was fetched and read, not just the abstract */
+    fulltext?: boolean;
   }>;
   s2: Array<{
     title: string;
@@ -15,6 +19,16 @@ export interface MessageSources {
     authors: string;
     citations: number;
   }>;
+  /** which records the generator read in full, and from where */
+  fulltext?: Array<{ key_number: string; source: string; chars: number }>;
+  /** the room this turn was scoped to, and whether retrieval widened past it */
+  room?: { server: string; category: string; widened: boolean };
+}
+
+/** A room: the scope set by navigation. Rides every request when present. */
+export interface ChatRoom {
+  server: "biorxiv" | "medrxiv";
+  category: string;
 }
 
 export interface Message {
@@ -43,7 +57,7 @@ function toPersistedMessages(msgs: Message[]): PersistedMessage[] {
     }));
 }
 
-export function useChat() {
+export function useChat(room?: ChatRoom | null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -121,6 +135,8 @@ export function useChat() {
               // The picker's choice. Omitted → the function falls back to its
               // own default, so an older client keeps working.
               modelId: modelId || undefined,
+              // The room set by navigation — scope rides every request.
+              room: room ?? undefined,
             }),
             signal: abortRef.current.signal,
           }
@@ -221,7 +237,7 @@ export function useChat() {
         abortRef.current = null;
       }
     },
-    [persistence]
+    [persistence, room]
   );
 
   const loadSession = useCallback(

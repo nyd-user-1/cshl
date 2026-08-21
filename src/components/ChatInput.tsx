@@ -24,9 +24,11 @@ interface ChatInputProps {
   initialValue?: string;
   /** Show the magnifier next to "+" — switches to search mode (/search). Only the /chat page sets this. */
   searchToggle?: boolean;
+  /** Room-scoped chats name their room here ("Ask a neurology question…"). */
+  placeholder?: string;
 }
 
-export function ChatInput({ onSubmit, onStop, isLoading, initialValue, searchToggle }: ChatInputProps) {
+export function ChatInput({ onSubmit, onStop, isLoading, initialValue, searchToggle, placeholder }: ChatInputProps) {
   const navigate = useNavigate();
   const [value, setValue] = useState(initialValue ?? "");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -94,7 +96,7 @@ export function ChatInput({ onSubmit, onStop, isLoading, initialValue, searchTog
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Chat with RxivGPT"
+          placeholder={placeholder ?? "Chat with RxivGPT"}
           rows={1}
           className="flex-1 min-h-[40px] w-full resize-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 p-0 placeholder:text-muted-foreground/60 text-base text-foreground outline-none"
         />

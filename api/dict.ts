@@ -1,5 +1,9 @@
 // /api/dict — dictionaries for the filter comboboxes and the "+" menu, from Neon.
 //   ?type=categories|journals|institutions|authors [&q=prefix] [&limit=N]
+//   ?type=categories&server=medrxiv — per-server category counts, computed from
+//   preprints (the categories table's paper_count is cross-server, which lies for
+//   any category both servers use). These are the room cards' real numbers;
+//   edge-cached for a day.
 //
 // Returns [{ value, record_count }], the same shape the pickers already consume.
 // The NSR-era types (nuclides, reactions) map onto this corpus as categories and
@@ -23,7 +27,16 @@ export default async function handler(req: any, res: any) {
 
   try {
     let rows: Record<string, unknown>[];
-    if (type === "categories") {
+    const server = req.query?.server === "biorxiv" || req.query?.server === "medrxiv" ? String(req.query.server) : null;
+    if (type === "categories" && server) {
+      rows = await sql.query(
+        `SELECT c.category AS value, count(*)::int AS record_count
+         FROM preprints p, unnest(p.categories) c(category)
+         WHERE p.server = $1 ${q ? "AND c.category ILIKE $2" : ""}
+         GROUP BY 1 ORDER BY record_count DESC, value`,
+        q ? [server, like] : [server],
+      );
+    } else if (type === "categories") {
       rows = await sql.query(
         `SELECT category AS value, paper_count AS record_count FROM categories
          ${q ? "WHERE category ILIKE $2" : ""}

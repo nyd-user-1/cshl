@@ -7,6 +7,11 @@
 //   ?q=#2026.07.31        key_number prefix, any mode.
 //   ?mode=structured      typed chip search: &categories=…&journals=…
 //   &limit=               1..200 (default 100)
+//   &server=…&category=…  the ROOM (LANE-MEDRXIV-ROOMS): both arms are confined
+//                         to that server+category slice. Inside a room the dense
+//                         arm switches from HNSW to an EXACT filter-first scan —
+//                         rooms are ≤12.7k vectors, where exact is affordable and
+//                         an ANN over-fetch would miss most of a small room.
 //
 // DENSE RETRIEVAL RESTORED 2026-08-20. The header this replaces said "this corpus has no
 // embeddings yet" and degraded semantic/hybrid into the FTS path. That was true when it
@@ -71,6 +76,13 @@ export default async function handler(req: any, res: any) {
   const raw = String(req.query?.q ?? "").trim();
   const requested = String(req.query?.mode ?? "semantic");
   const limit = Math.min(200, Math.max(1, Number(req.query?.limit ?? 100) || 100));
+
+  // The room, when navigation set one. Scope rides the request as parameters —
+  // there is no filter widget and no guessing.
+  const roomServer = req.query?.server === "biorxiv" || req.query?.server === "medrxiv" ? String(req.query.server) : null;
+  const roomCategory = roomServer && req.query?.category ? String(req.query.category).trim().toLowerCase() : null;
+  const room = roomServer && roomCategory ? { server: roomServer, category: roomCategory } : null;
+
   if (raw.length < 2) return res.status(200).json({ records: [], count: 0, mode: requested });
 
   const t0 = Date.now();
@@ -112,6 +124,20 @@ export default async function handler(req: any, res: any) {
             ({ vector } = await embedQueryCached(sql as never, raw, "bge"));
           }
           encoderUsed = enc;
+          if (room) {
+            // In-room: EXACT search, filter first, no index gymnastics. The
+            // HNSW index cannot honor a selective filter without over-fetching
+            // past the room, so at room scale we pay the exact scan and get
+            // perfect in-room recall. Latency rides `timings.dense_ms`.
+            denseRows = await q(
+              `SELECT ${SELECT}, (1 - (e.embedding <=> $1::vector))::float AS similarity
+               FROM preprints p JOIN ${vectorTable(enc)} e USING (key_number)
+               WHERE p.server = $2 AND p.categories && $3::text[]
+               ORDER BY e.embedding <=> $1::vector
+               LIMIT $4`,
+              [toVectorLiteral(vector), room.server, [room.category], limit],
+            );
+          } else {
           // ef_search must be set inside the same transaction as the probe, and the vector
           // is BOUND, never interpolated — a join-sourced or inlined probe defeats HNSW.
           const [, rows] = (await (sql as unknown as {
@@ -128,6 +154,7 @@ export default async function handler(req: any, res: any) {
             ),
           ])) as [unknown, Row[]];
           denseRows = rows ?? [];
+          }
         }
       } catch (err) {
         denseNote = `dense arm failed — FTS only (${(err as Error).message.slice(0, 120)})`;
@@ -168,9 +195,9 @@ export default async function handler(req: any, res: any) {
          SELECT ${SELECT},
                 least(ts_rank_cd(p.fts, tq.q) / 4.0, 0.99)::float AS similarity
          FROM preprints p, tq
-         WHERE p.fts @@ tq.q
+         WHERE p.fts @@ tq.q${room ? ` AND p.server = $3 AND p.categories && $4::text[]` : ""}
          ORDER BY ts_rank_cd(p.fts, tq.q) DESC, p.pub_year DESC NULLS LAST
-         LIMIT $2`, [raw, limit]);
+         LIMIT $2`, room ? [raw, limit, room.server, [room.category]] : [raw, limit]);
     }
     const ftsMs = Date.now() - tFts0;
 
@@ -212,6 +239,28 @@ export default async function handler(req: any, res: any) {
       mode = "keyword";
     }
 
+    // Room-first, corpus-second, never room-only: a scoped search that comes
+    // back nearly empty widens to the whole corpus and SAYS SO — a filter that
+    // hides the answer behind a confident empty list is the worst failure we
+    // have. Widened rows are appended after the in-room rows and labelled.
+    let widened = false;
+    if (room && records.length < 5) {
+      const have = new Set(records.map((r) => String(r.key_number)));
+      const wide = await q(
+        `SELECT ${SELECT},
+                least(ts_rank_cd(p.fts, websearch_to_tsquery('english', $1)) / 4.0, 0.99)::float AS similarity
+         FROM preprints p
+         WHERE p.fts @@ websearch_to_tsquery('english', $1)
+         ORDER BY ts_rank_cd(p.fts, websearch_to_tsquery('english', $1)) DESC
+         LIMIT $2`, [raw, limit]).catch(() => [] as Row[]);
+      for (const r of wide) {
+        if (!have.has(String(r.key_number)) && records.length < limit) {
+          records.push({ ...r, arm: "fts", widened: true });
+          widened = true;
+        }
+      }
+    }
+
     const degraded = wantsDense && !denseRows.length;
     res.setHeader("Cache-Control", "public, s-maxage=3600, stale-while-revalidate=86400");
     return res.status(200).json({
@@ -223,6 +272,8 @@ export default async function handler(req: any, res: any) {
       arms: { dense: denseRows.length, fts: ftsRows.length },
       degraded,
       note: denseNote,
+      room: room ?? undefined,
+      widened: room ? widened : undefined,
       timings: { total_ms: Date.now() - t0, dense_ms: denseMs, fts_ms: ftsMs },
     });
   } catch (err) {

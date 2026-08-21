@@ -2,23 +2,38 @@
 //
 // Replaces the Supabase edge function (which died with "Not implemented:
 // Http2Session.settings" — the AWS SDK no longer runs in that runtime).
-// Vercel Node function: retrieval hits NEON (the full 303k corpus with
-// tonight's abstracts), generation streams from AWS Bedrock, and the SSE
-// shape is byte-compatible with what the client already parses.
+// Vercel Node function: retrieval hits NEON (the full 433k corpus),
+// generation streams from AWS Bedrock, and the SSE shape is byte-compatible
+// with what the client already parses.
 //
 // Retrieval lanes (parallel):
-//   1. structured  — typed nuclide/reaction arrays (from NSR selectors)
+//   0. key/DOI     — an explicit 10.1101/... or bare key_number in the message
+//                    fetches that record directly (it must reach the prompt;
+//                    FTS tokenizes DOIs into noise)
+//   1. structured  — category mentions matched against the live dictionary
 //   2. author      — ILIKE on the flattened author string
-//   3. full-text   — weighted tsvector over title/keywords/abstract (sql/19);
-//                    replaces the dead 46k-row OpenAI-embedding lane with an
-//                    indexed search over the ENTIRE corpus
-//   4. Semantic Scholar API (best-effort)
+//   3. full-text   — weighted tsvector over title/keywords/abstract
+//   4. dense       — kNN over the active encoder's vector table
+//   5. Semantic Scholar API (best-effort)
+//
+// ROOMS (LANE-MEDRXIV-ROOMS). The body may carry `room: {server, category}`;
+// arms 1–4 are then confined to that slice. Inside a room the dense arm runs
+// an EXACT scan (filter first, then order by distance) instead of HNSW —
+// rooms are ≤12.7k vectors, where exact is both correct and affordable, and
+// an ANN over-fetch would miss most of a small room. Room-first is never
+// room-only: if scoped retrieval comes back sparse the corpus-wide arms run
+// too, and the payload + prompt both say the search was widened.
+//
+// FULL TEXT (Task 1b). The top few records that reach the prompt get their
+// body fetched on demand (JATS → article HTML → Europe PMC, cached in
+// preprint_fulltext) — see api/_lib/fulltext.ts for the timing contract.
 //
 // Env: DATABASE_URL, BEDROCK_API_KEY (bearer), BEDROCK_REGION,
 //      SEMANTIC_SCHOLAR_API_KEY (optional).
 
 import { neon } from "@neondatabase/serverless";
-import { activeEncoder, embedQueryCached, hasEmbeddings, toVectorLiteral, vectorTable } from "./_lib/embed.js";
+import { activeEncoder, embedQueryCached, hasEmbeddings, toVectorLiteral, vectorTable, type EncoderName } from "./_lib/embed.js";
+import { getFulltext, type FulltextResult } from "./_lib/fulltext.js";
 import {
   BedrockRuntimeClient,
   ConverseStreamCommand,
@@ -26,22 +41,27 @@ import {
 
 export const config = { maxDuration: 120 };
 
-const SYSTEM_PROMPT_BASE = `You are RxivGPT, an AI research assistant grounded in the complete bioRxiv and medRxiv preprint corpora operated by Cold Spring Harbor Laboratory.
+// Task 1c: structure creates slots, and slots get filled. Across five failed
+// test answers, the two that used headers and a "Significance"-style section
+// were the two that fabricated; the three that wrote plain paragraphs did
+// not. So: plain prose, no invented scaffolding, and an explicit licence to
+// say "the retrieved text does not say".
+const SYSTEM_PROMPT_BASE = `You are RxivGPT, an AI research assistant grounded in the bioRxiv and medRxiv preprint corpora operated by Cold Spring Harbor Laboratory.
 
 INSTRUCTIONS:
-- Always use the retrieved preprints below to inform your answer. Even when no record is an exact match, discuss what the retrieved preprints reveal about the topic — the same subject category, adjacent clinical or biological questions, and later versions of the same work are all highly relevant.
-- These are PREPRINTS: most have not been peer reviewed. Say so when it matters. When a record shows a publishing journal it has since appeared in the peer-reviewed literature; when its status says withdrawn, never present its findings as standing.
-- Cite NSR records by key number (e.g., 2024SM01). Cite arXiv/OA additions by their identifier. Reference specific findings, and use the abstracts provided.
-- Cite Semantic Scholar papers by title/author with their URL.
+- Write plain prose paragraphs. Do not add section headings, a "Significance" section, or any other scaffold the user did not ask for.
+- Ground every claim in the retrieved records below. Never describe a finding, method, or number that is not present in the supplied text. When the retrieved text does not answer part of the question, say plainly that the retrieved text does not say — never fill the gap with a plausible completion.
+- Records marked "Full text" include body sections beyond the abstract; prefer their specifics (quantities, comparisons, named results) when reporting what a paper found.
+- These are preprints. State that a paper has been peer reviewed or published ONLY when its record shows a publishing journal. A record without one means the status is UNKNOWN — do not assert it either way. When a record's status says withdrawn, never present its findings as standing.
+- Even when no record is an exact match, discuss what the retrieved preprints reveal about the topic — the same subject category, adjacent clinical or biological questions, and later versions of the same work are all relevant.
+- Cite corpus records by key number (e.g., 2021.05.04.442622). Cite Semantic Scholar papers by title and author with their URL.
 - Only say "no relevant records" if the retrieved list is truly empty or entirely unrelated.
-- Combine retrieved evidence with your general nuclear physics knowledge to give a thorough answer.
-- Never fabricate key numbers, DOIs, or author names.`;
+- Never fabricate key numbers, DOIs, author names, or quantities.`;
 
 const DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
 
-/* ── entity extraction (ported from the edge function) ─────────────────── */
+/* ── entity extraction ─────────────────────────────────────────────────── */
 
-// canonical NSR reaction codes are uppercase with G/A for γ/α
 function extractAuthorQuery(text: string): string | null {
   const patterns = [
     /(?:papers?|publications?|work|research|articles?)\s+(?:by|from|of)\s+(.+?)(?:\?|$|\.|\bin\b|\bfrom\b|\babout\b)/i,
@@ -58,9 +78,17 @@ function extractAuthorQuery(text: string): string | null {
   return null;
 }
 
+/** An explicit identifier in the message is the strongest routing signal there
+ *  is: that exact record must reach the prompt. Accepts a 10.1101/… DOI (with
+ *  or without a vN suffix) or a bare key_number. */
+function extractKeyNumber(text: string): string | null {
+  const m = text.match(/(?:10\.1101\/)?(\d{4}\.\d{2}\.\d{2}\.\d{5,10})(?:v\d+)?/);
+  return m ? m[1] : null;
+}
+
 /** Which subject categories does this question mention? Matched against the live
- *  `categories` dictionary (76 values across both servers) rather than a regex, so
- *  the vocabulary can never drift from what the corpus actually holds. */
+ *  `categories` dictionary rather than a regex, so the vocabulary can never
+ *  drift from what the corpus actually holds. */
 let CATEGORY_CACHE: string[] | null = null;
 async function extractCategories(sql: { query: (t: string, p: unknown[]) => Promise<{ category: string }[]> }, text: string): Promise<string[]> {
   try {
@@ -76,11 +104,17 @@ interface Rec {
   key_number: string; title: string | null; authors: string | null;
   pub_year: number; doi: string | null; abstract: string | null;
   categories: string[] | null; status_tags: string[] | null;
-  server: string | null; published_journal: string | null; similarity: number;
+  server: string | null; published_journal: string | null;
+  version: number | null; jatsxml_url: string | null; similarity: number;
 }
 
-function formatNsrContext(records: Rec[]): string {
+// Total full-text budget across the prompt: generous enough for real body
+// sections, bounded so a turn can never dump 60k chars into the context.
+const FULLTEXT_PROMPT_BUDGET = 36_000;
+
+function formatCorpusContext(records: Rec[], fulltext: Map<string, FulltextResult>): string {
   if (records.length === 0) return "\n## Retrieved Records\nNo relevant records found.";
+  let ftBudget = FULLTEXT_PROMPT_BUDGET;
   const lines = records.map((r, i) => {
     const parts = [
       `[${i + 1}] ${r.key_number} (${r.server ?? "preprint"}) — "${r.title ?? "Untitled"}"`,
@@ -93,11 +127,18 @@ function formatNsrContext(records: Rec[]): string {
     ];
     if (r.categories?.length) parts.push(`    Category: ${r.categories.join(", ")}`);
     if (r.status_tags?.length) parts.push(`    Status: ${r.status_tags.join(", ")}`);
-    // Full abstract, capped only as a runaway guard. The old 500-char cut is
-    // what lost the Vink comparison to AWS's managed KB — its generator read
-    // whole chunks while ours read stubs; a worse retriever beat us on content
-    // because it was allowed to read. ≤10 records × ≤4k chars ≈ 10k tokens max.
-    if (r.abstract) parts.push(`    Abstract: ${r.abstract.slice(0, 4000)}`);
+    const ft = fulltext.get(r.key_number);
+    if (ft && ftBudget > 2000) {
+      const body = ft.text.slice(0, ftBudget);
+      ftBudget -= body.length;
+      parts.push(`    Full text (section-trimmed, fetched from source): ${body}`);
+    } else if (r.abstract) {
+      // Full abstract, capped only as a runaway guard. The old 500-char cut is
+      // what lost the Vink comparison to AWS's managed KB — its generator read
+      // whole chunks while ours read stubs; a worse retriever beat us on content
+      // because it was allowed to read.
+      parts.push(`    Abstract: ${r.abstract.slice(0, 4000)}`);
+    }
     return parts.join("\n");
   });
   return `\n## Retrieved Records\n${lines.join("\n\n")}`;
@@ -122,7 +163,9 @@ function formatS2Context(papers: S2Paper[]): string {
 /* ── handler ───────────────────────────────────────────────────────────── */
 
 const SELECT = `key_number, title, authors, pub_year, doi, abstract,
-  categories, status_tags, server, published_journal`;
+  categories, status_tags, server, published_journal, version, jatsxml_url`;
+
+const ROOM_SERVERS = new Set(["biorxiv", "medrxiv"]);
 
 // Classic Vercel Node signature — the Web-handler form hung in production
 // (the builder invoked (req, res) and ignored a returned Response).
@@ -132,10 +175,18 @@ export default async function handler(req: any, res: any) {
   if (req.method !== "POST") return res.status(405).send("POST only");
 
   try {
-    const { messages = [], userMessage, systemContext, modelId } = req.body ?? {};
+    const { messages = [], userMessage, systemContext, modelId, room: roomRaw } = req.body ?? {};
     if (!userMessage || typeof userMessage !== "string") {
       return res.status(400).json({ error: "userMessage is required" });
     }
+
+    // The room is set by navigation, not guessed: it arrives on the body.
+    const room =
+      roomRaw && typeof roomRaw === "object" &&
+      ROOM_SERVERS.has(String(roomRaw.server)) &&
+      typeof roomRaw.category === "string" && roomRaw.category.trim()
+        ? { server: String(roomRaw.server), category: String(roomRaw.category).trim().toLowerCase() }
+        : null;
 
     // Flush headers immediately: the client sees a live stream during
     // retrieval instead of 30s of dead air.
@@ -150,95 +201,113 @@ export default async function handler(req: any, res: any) {
     const sql = neon(process.env.DATABASE_URL!);
     const categories = await extractCategories(sql as never, userMessage);
     const authorQuery = extractAuthorQuery(userMessage);
+    const keyNumber = extractKeyNumber(userMessage);
 
     const q = (text: string, params: unknown[]) => (sql as unknown as { query: (t: string, p: unknown[]) => Promise<Rec[]> }).query(text, params);
+
+    // Room predicate, appended to each scoped arm. $n placeholders are offset
+    // per query, so the clause is built where it is used.
+    const roomCond = (n: number) => `server = $${n} AND categories && $${n + 1}::text[]`;
+    const roomParams = room ? [room.server, [room.category]] : [];
+
+    // Arm 0: explicit key/DOI — never room-filtered (an explicit identifier is
+    // an explicit scope of its own, and the user typed it).
+    const keyP: Promise<Rec[]> = keyNumber
+      ? q(`SELECT ${SELECT}, 1.0 AS similarity FROM preprints WHERE key_number = $1`, [keyNumber]).catch(() => [])
+      : Promise.resolve([]);
 
     const structuredP: Promise<Rec[]> = categories.length
       ? q(
           `SELECT ${SELECT}, 1.0 AS similarity FROM preprints
-           WHERE categories && $1::text[]
+           WHERE categories && $1::text[]${room ? ` AND ${roomCond(2)}` : ""}
            ORDER BY pub_year DESC, posted_date DESC LIMIT 10`,
-          [categories],
-        )
+          [categories, ...roomParams],
+        ).catch(() => [])
       : Promise.resolve([]);
     const authorP: Promise<Rec[]> = authorQuery
       ? q(
           `SELECT ${SELECT}, 1.0 AS similarity FROM preprints
-           WHERE authors ILIKE $1 ORDER BY pub_year DESC LIMIT 8`,
-          ["%" + authorQuery + "%"],
-        )
+           WHERE authors ILIKE $1${room ? ` AND ${roomCond(2)}` : ""} ORDER BY pub_year DESC LIMIT 8`,
+          ["%" + authorQuery + "%", ...roomParams],
+        ).catch(() => [])
       : Promise.resolve([]);
-    const ftsFor = (query: string) =>
+
+    const ftsFor = (query: string, scoped: boolean) =>
       q(
         `SELECT ${SELECT},
                 least(ts_rank_cd(fts, websearch_to_tsquery('english', $1)) / 4.0, 0.99)::float AS similarity
          FROM preprints
-         WHERE fts @@ websearch_to_tsquery('english', $1)
+         WHERE fts @@ websearch_to_tsquery('english', $1)${scoped && room ? ` AND ${roomCond(2)}` : ""}
          ORDER BY ts_rank_cd(fts, websearch_to_tsquery('english', $1)) DESC
          LIMIT 8`,
-        [query],
+        scoped && room ? [query, ...roomParams] : [query],
       );
     // websearch ANDs every term, which is too strict for conversational
     // queries — when the strict pass finds nothing, retry with terms OR'ed.
-    const ftsP: Promise<Rec[]> = ftsFor(userMessage)
-      .then((rows) =>
-        rows.length > 0
-          ? rows
-          : ftsFor(userMessage.split(/\s+/).filter((w) => w.length > 2).slice(0, 12).join(" or ")),
-      )
+    const orQuery = () => userMessage.split(/\s+/).filter((w) => w.length > 2).slice(0, 12).join(" or ");
+    const ftsP: Promise<Rec[]> = ftsFor(userMessage, true)
+      .then((rows) => (rows.length > 0 ? rows : ftsFor(orQuery(), true)))
       .catch(() => []);
 
-    // Dense arm — kNN over preprint_embeddings (bge-m3, 1024-d, cosine).
-    //
-    // Self-enabling: hasEmbeddings() is a cheap probe cached 60 s per process, so this
-    // arm switches on by itself as vectors land and switches off if the sidecar is
-    // absent or empty — no deploy, no flag. Any failure degrades to FTS-only and never
-    // errors, which is the same contract /api/search advertises.
-    //
-    // Two details that are not stylistic:
-    //   1. The probe vector is a BOUND $1::vector parameter. A *correlated* reference
-    //      (one that varies per row) defeats the HNSW index and turns this into an
-    //      exact scan over 433k vectors.
-    //   2. SET LOCAL hnsw.ef_search must share a transaction with the scan, or it is
-    //      set on one pooled connection and the scan runs on another with the default.
-    //
-    // Query side must match the corpus side: stock bge-m3 via the free Cloudflare path
-    // (SEARCH_ENCODER=bge), so /chat has no dependency on a serve box.
-    const denseP: Promise<Rec[]> = (async () => {
+    // Dense arm — the query vector is computed once and shared with the
+    // widening pass. Encoder fallback ladder as before: fine-tuned serve box
+    // first, stock bge-m3 (free Cloudflare) when it is cold or gone — box down
+    // costs retrieval QUALITY, not the hybrid. The vector table follows the
+    // encoder that actually answered, because querying one model's space with
+    // another model's vector returns confident nonsense.
+    const vecP: Promise<{ enc: EncoderName; vector: number[] } | null> = (async () => {
       try {
-        if (!(await hasEmbeddings(sql as never))) return [];
-        // Encoder selection with a fallback that matters once SEARCH_ENCODER=nsr: the
-        // fine-tuned arm depends on a single serve box, and if it is cold, throttled or
-        // gone we fall back to stock bge-m3 (free Cloudflare, always up) rather than
-        // dropping the dense arm entirely. Box down should cost retrieval QUALITY, not
-        // the whole hybrid. The vector table follows the encoder that actually answered,
-        // because querying one model's space with another model's vector returns
-        // confident nonsense.
+        if (!(await hasEmbeddings(sql as never))) return null;
         let enc = activeEncoder();
-        let vector: number[];
         try {
-          ({ vector } = await embedQueryCached(sql as never, userMessage, enc));
+          const { vector } = await embedQueryCached(sql as never, userMessage, enc);
+          return { enc, vector };
         } catch (err) {
           if (enc === "bge") throw err;
           enc = "bge";
-          ({ vector } = await embedQueryCached(sql as never, userMessage, "bge"));
+          const { vector } = await embedQueryCached(sql as never, userMessage, "bge");
+          return { enc, vector };
         }
+      } catch { return null; }
+    })();
+
+    const denseQuery = async (v: { enc: EncoderName; vector: number[] }, scoped: boolean): Promise<Rec[]> => {
+      try {
+        if (scoped && room) {
+          // Inside a room: EXACT search, filter first. Rooms are ≤12.7k
+          // vectors; HNSW over-fetch would miss most of a small room, and an
+          // exact scan at this size is affordable. Correct-but-slow is a
+          // measured trade — timings ride the payload log.
+          return await q(
+            `SELECT ${SELECT}, (1 - (e.embedding <=> $1::vector))::float AS similarity
+             FROM preprints JOIN ${vectorTable(v.enc)} e USING (key_number)
+             WHERE ${roomCond(2)}
+             ORDER BY e.embedding <=> $1::vector
+             LIMIT 8`,
+            [toVectorLiteral(v.vector), ...roomParams],
+          );
+        }
+        // Corpus-wide: HNSW. The probe vector is a BOUND $1::vector parameter —
+        // a correlated reference defeats the index. SET LOCAL must share the
+        // transaction with the scan or it lands on a different pooled connection.
         const [, rows] = (await sql.transaction([
           sql.query(`SET LOCAL hnsw.ef_search = 60`),
           sql.query(
             `SELECT ${SELECT}, (1 - (e.embedding <=> $1::vector))::float AS similarity
-             FROM ${vectorTable(enc)} e
+             FROM ${vectorTable(v.enc)} e
              JOIN preprints USING (key_number)
              ORDER BY e.embedding <=> $1::vector
              LIMIT 8`,
-            [toVectorLiteral(vector)],
+            [toVectorLiteral(v.vector)],
           ),
         ])) as [unknown, Rec[]];
         return rows;
       } catch { return []; }
-    })();
+    };
+    const denseP: Promise<Rec[]> = vecP.then((v) => (v ? denseQuery(v, true) : []));
 
-    const [structured, authorRecs, ftsRecs, denseRecs, s2Papers] = await Promise.all([
+    const [keyRecs, structured, authorRecs, ftsRecs, denseRecs, s2Papers] = await Promise.all([
+      keyP,
       structuredP,
       authorP,
       ftsP,
@@ -257,31 +326,79 @@ export default async function handler(req: any, res: any) {
       })(),
     ]);
 
-    // merge, structured first, dedupe by key_number
-    const seen = new Set<string>();
-    const records: Rec[] = [];
-    // interleave dense and FTS by rank (never merge raw scores across arms)
-    const interleaved: Rec[] = [];
-    for (let i = 0; i < Math.max(denseRecs.length, ftsRecs.length); i++) {
-      if (denseRecs[i]) interleaved.push(denseRecs[i]);
-      if (ftsRecs[i]) interleaved.push(ftsRecs[i]);
+    // merge: explicit key first, then structured, author, and the ranked arms
+    // interleaved by rank (never merge raw scores across arms)
+    const merge = (arms: Rec[][], cap: number): Rec[] => {
+      const seen = new Set<string>();
+      const out: Rec[] = [];
+      for (const arm of arms) {
+        for (const r of arm) {
+          if (!seen.has(r.key_number)) { seen.add(r.key_number); out.push(r); }
+          if (out.length >= cap) return out;
+        }
+      }
+      return out;
+    };
+    const interleave = (a: Rec[], b: Rec[]): Rec[] => {
+      const out: Rec[] = [];
+      for (let i = 0; i < Math.max(a.length, b.length); i++) {
+        if (a[i]) out.push(a[i]);
+        if (b[i]) out.push(b[i]);
+      }
+      return out;
+    };
+    let records = merge([keyRecs, structured, authorRecs, interleave(denseRecs, ftsRecs)], 14);
+
+    // Room-first, corpus-second, never room-only: a filter that hides the
+    // answer and produces a confident empty-handed response is the worst
+    // failure we have. Sparse in-room retrieval widens to the corpus and the
+    // prompt + payload both say so.
+    let widened = false;
+    if (room && records.length < 3) {
+      const [ftsWide, denseWide] = await Promise.all([
+        ftsFor(userMessage, false).then((r) => (r.length ? r : ftsFor(orQuery(), false))).catch(() => []),
+        vecP.then((v) => (v ? denseQuery(v, false) : [])),
+      ]);
+      const wide = merge([records, interleave(denseWide, ftsWide)], 14);
+      widened = wide.length > records.length;
+      records = wide;
     }
-    for (const r of [...structured, ...authorRecs, ...interleaved]) {
-      if (!seen.has(r.key_number)) { seen.add(r.key_number); records.push(r); }
-      if (records.length >= 14) break;
-    }
+
+    // Task 1b: the records that reach the prompt get their body fetched on
+    // demand (top 4). The prompt budget keeps a slow origin from hanging the
+    // turn; stragglers land in preprint_fulltext for the next ask.
+    const ftTargets = records.slice(0, 4).map((r) => ({
+      key_number: r.key_number, doi: r.doi, server: r.server,
+      version: r.version, jatsxml_url: r.jatsxml_url,
+    }));
+    const fulltextResults = await getFulltext(sql as never, ftTargets).catch(() => [] as FulltextResult[]);
+    const fulltextByKey = new Map(fulltextResults.map((f) => [f.key_number, f]));
+
+    const roomContext = room
+      ? `\n\nSCOPE: This conversation is scoped to the "${room.category}" room — ${room.server} preprints in that category. The retrieved records reflect that scope.${
+          widened
+            ? " In-room retrieval was sparse, so the results below were widened to the whole corpus — tell the user the search was widened beyond the room."
+            : ""
+        }`
+      : "";
 
     const systemPrompt =
-      `${SYSTEM_PROMPT_BASE}${systemContext ? `\n\n${systemContext}` : ""}\n` +
-      formatNsrContext(records) + formatS2Context(s2Papers);
+      `${SYSTEM_PROMPT_BASE}${systemContext ? `\n\n${systemContext}` : ""}${roomContext}\n` +
+      formatCorpusContext(records, fulltextByKey) + formatS2Context(s2Papers);
 
     const sources = {
-      nsr: records.map((r) => ({ key_number: r.key_number, title: r.title, doi: r.doi, similarity: r.similarity })),
+      nsr: records.map((r) => ({
+        key_number: r.key_number, title: r.title, doi: r.doi, similarity: r.similarity,
+        categories: r.categories, server: r.server,
+        fulltext: fulltextByKey.has(r.key_number) || undefined,
+      })),
       s2: s2Papers.map((p) => ({
         title: p.title, url: p.url ?? "",
         authors: p.authors?.map((a) => a.name).join(", ") ?? "Unknown",
         citations: p.citationCount ?? 0,
       })),
+      fulltext: fulltextResults.map((f) => ({ key_number: f.key_number, source: f.source, chars: f.text.length })),
+      room: room ? { ...room, widened } : undefined,
     };
 
     // Bedrock turn shape: first turn must be user, roles alternate, no empties
@@ -316,7 +433,11 @@ export default async function handler(req: any, res: any) {
     );
     if (!bedrockRes.stream) throw new Error(`Bedrock returned no stream for ${chosenModel}`);
 
-    console.log(`chat retrieval+bedrock-start: ${Date.now() - t0}ms, records=${records.length}`);
+    console.log(
+      `chat retrieval+bedrock-start: ${Date.now() - t0}ms, records=${records.length}` +
+      `, fulltext=${fulltextResults.map((f) => `${f.key_number}:${f.source}`).join("|") || "none"}` +
+      (room ? `, room=${room.server}/${room.category}${widened ? " (widened)" : ""}` : ""),
+    );
     res.write(`data: ${JSON.stringify({ sources })}\n\n`);
     try {
       for await (const event of bedrockRes.stream as AsyncIterable<Record<string, unknown>>) {
