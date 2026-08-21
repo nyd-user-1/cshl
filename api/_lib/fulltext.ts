@@ -118,7 +118,10 @@ export function trimArticleHtml(html: string): string | null {
 
 async function fetchText(url: string, signal: AbortSignal): Promise<string | null> {
   const r = await fetch(url, { headers: { "user-agent": UA }, signal, redirect: "follow" });
-  if (!r.ok) return null;
+  if (!r.ok) {
+    console.log(`fulltext fetch ${r.status}: ${url}`);
+    return null;
+  }
   return r.text();
 }
 
@@ -171,7 +174,11 @@ async function fetchOne(row: FulltextRow, signal: AbortSignal): Promise<{ source
     try {
       const text = await fn(row, signal);
       if (text) return { source, text };
-    } catch { /* rung failed — try the next */ }
+      console.log(`fulltext rung empty: ${source} ${row.key_number}`);
+    } catch (e) {
+      // rung failed — log and try the next
+      console.log(`fulltext rung error: ${source} ${row.key_number} ${(e as Error).message.slice(0, 80)}`);
+    }
   }
   return null;
 }

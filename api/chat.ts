@@ -49,7 +49,7 @@ export const config = { maxDuration: 120 };
 const SYSTEM_PROMPT_BASE = `You are RxivGPT, an AI research assistant grounded in the bioRxiv and medRxiv preprint corpora operated by Cold Spring Harbor Laboratory.
 
 INSTRUCTIONS:
-- Write plain prose paragraphs. Do not add section headings, a "Significance" section, or any other scaffold the user did not ask for.
+- Write plain prose paragraphs only. Never use markdown headings (#, ##) or a title line — start the answer directly with a sentence. Do not add a "Significance" section or any other scaffold the user did not ask for.
 - Ground every claim in the retrieved records below. Never describe a finding, method, or number that is not present in the supplied text. When the retrieved text does not answer part of the question, say plainly that the retrieved text does not say — never fill the gap with a plausible completion.
 - Records marked "Full text" include body sections beyond the abstract; prefer their specifics (quantities, comparisons, named results) when reporting what a paper found.
 - These are preprints. State that a paper has been peer reviewed or published ONLY when its record shows a publishing journal. A record without one means the status is UNKNOWN — do not assert it either way. When a record's status says withdrawn, never present its findings as standing.
@@ -351,10 +351,18 @@ export default async function handler(req: any, res: any) {
 
     // Room-first, corpus-second, never room-only: a filter that hides the
     // answer and produces a confident empty-handed response is the worst
-    // failure we have. Sparse in-room retrieval widens to the corpus and the
-    // prompt + payload both say so.
+    // failure we have. Weak in-room retrieval widens to the corpus and the
+    // prompt + payload both say so. Weakness is evidence, not row count — the
+    // scoped dense arm is an exact kNN that always fills its limit, so a tiny
+    // room answers any query with its nearest strangers. Measured on the nsr
+    // encoder: relevant in-room hits ≥0.60 cosine, filler ≤0.26; 0.45 splits
+    // them with margin. An explicit key match is evidence by itself.
+    const WEAK_SIM = 0.45;
+    const inRoomEvidence =
+      keyRecs.length > 0 || ftsRecs.length > 0 ||
+      denseRecs.some((r) => Number(r.similarity) >= WEAK_SIM);
     let widened = false;
-    if (room && records.length < 3) {
+    if (room && (!inRoomEvidence || records.length < 3)) {
       const [ftsWide, denseWide] = await Promise.all([
         ftsFor(userMessage, false).then((r) => (r.length ? r : ftsFor(orQuery(), false))).catch(() => []),
         vecP.then((v) => (v ? denseQuery(v, false) : [])),

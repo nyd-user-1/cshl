@@ -239,12 +239,20 @@ export default async function handler(req: any, res: any) {
       mode = "keyword";
     }
 
-    // Room-first, corpus-second, never room-only: a scoped search that comes
-    // back nearly empty widens to the whole corpus and SAYS SO — a filter that
-    // hides the answer behind a confident empty list is the worst failure we
-    // have. Widened rows are appended after the in-room rows and labelled.
+    // Room-first, corpus-second, never room-only: a scoped search with weak
+    // results widens to the whole corpus and SAYS SO — a filter that hides the
+    // answer behind a confident-but-irrelevant list is the worst failure we
+    // have. Weakness cannot be a row count: the in-room dense arm is an EXACT
+    // kNN, so it always fills the limit even when nothing is relevant (a
+    // 30-paper room answers any query with its 10 nearest strangers). The
+    // signal is evidence: no in-room lexical match AND no in-room dense hit
+    // above WEAK_SIM. Measured on the nsr encoder: relevant in-room hits score
+    // ≥0.60, filler ≤0.26 — 0.45 splits them with margin on both sides.
+    const WEAK_SIM = 0.45;
+    const inRoomEvidence =
+      ftsRows.length > 0 || denseRows.some((r) => Number(r.similarity) >= WEAK_SIM);
     let widened = false;
-    if (room && records.length < 5) {
+    if (room && (!inRoomEvidence || records.length < 5)) {
       const have = new Set(records.map((r) => String(r.key_number)));
       const wide = await q(
         `SELECT ${SELECT},
