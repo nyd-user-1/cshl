@@ -49,7 +49,11 @@ export interface FulltextResult {
   text: string;
 }
 
-const PER_PAPER_CHARS = 12_000;
+// Enough for abstract + results + discussion on a normal paper. Measured on
+// the CRISPR PAM test paper: at 12k the cap landed mid-Results and Discussion
+// never made it. The prompt-side budget (FULLTEXT_PROMPT_BUDGET in chat.ts)
+// still governs how much of this reaches any one turn.
+const PER_PAPER_CHARS = 18_000;
 const HARD_FETCH_MS = 20_000;
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 RxivGPT/1.0";
@@ -122,29 +126,48 @@ export function trimReaderMarkdown(md: string): string | null {
   return text.length >= 400 ? text : null;
 }
 
-/** bioRxiv/medRxiv .full HTML page → article text, capped. Section-aware for
- *  the same reason as trimJats: taken in document order, abstract + intro fill
- *  the cap before Results — the sections holding the quantities — arrive. */
+/** bioRxiv/medRxiv .full HTML page → article text, capped.
+ *
+ *  Section-aware for the same reason as trimJats: taken in document order,
+ *  abstract + introduction fill the cap before Results — where the quantities
+ *  live — arrives. And LEVEL-aware, which is not a detail: on this template
+ *  <h2>Results</h2> carries no paragraphs of its own, all of them hang off
+ *  <h3> subheadings whose titles are findings ("43% of Type III repeat
+ *  clusters contain a PAM"), so a flat title filter drops the entire results
+ *  section while reporting success. Keeping an <h2> keeps everything under it
+ *  until the next <h2>. */
 export function trimArticleHtml(html: string): string | null {
   const clean = html.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<style[\s\S]*?<\/style>/g, "");
   // The article body lives in <div class="article fulltext-view">…
   const artM = clean.match(/<div[^>]*class="[^"]*fulltext-view[^"]*"[^>]*>([\s\S]*?)<div[^>]*class="[^"]*(?:ref-list|fn-group|license)/);
   const scope = artM ? artM[1] : clean;
-  // Group paragraphs under their nearest preceding heading.
-  const secs: { title: string; parts: string[] }[] = [{ title: "abstract", parts: [] }];
+
+  const wanted = /abstract|result|discussion|conclusion|finding/i;
+  // Skip the apparatus: methods and everything after it are not what a reader
+  // asking "what does this paper say" needs, and they are large.
+  const stop = /method|acknowledg|reference|literature cited|author contribution|declaration|supplementary|footnote|data and material/i;
+
+  const secs: { title: string; parts: string[] }[] = [];
+  let keeping = true;              // content before the first heading = abstract-ish
+  let total = 0;
   const re = /<(h[2-4]|p)[^>]*>([\s\S]*?)<\/\1>/g;
   let m: RegExpExecArray | null;
-  let total = 0;
   while ((m = re.exec(scope)) && total < PER_PAPER_CHARS * 6) {
     const t = stripTags(m[2]);
     if (t.length <= 2) continue;
-    if (m[1] === "p") { secs[secs.length - 1].parts.push(t); total += t.length; }
-    else secs.push({ title: t, parts: [] });
+    if (m[1] === "h2") {
+      keeping = wanted.test(t) && !stop.test(t);
+      if (keeping) secs.push({ title: t, parts: [] });
+    } else if (m[1] === "p") {
+      if (keeping && secs.length) { secs[secs.length - 1].parts.push(t); total += t.length; }
+    } else if (keeping && secs.length) {
+      // an h3/h4 inside a kept section — the title is itself a finding
+      secs[secs.length - 1].parts.push(`\n${t}:`);
+    }
   }
-  const wanted = /abstract|result|discussion|conclusion|finding/i;
-  let picked = secs.filter((s) => wanted.test(s.title) && s.parts.length);
-  if (!picked.length) picked = secs;
-  const text = picked
+
+  const text = secs
+    .filter((s) => s.parts.length)
     .map((s) => `${s.title}:\n${s.parts.join("\n")}`)
     .join("\n\n")
     .slice(0, PER_PAPER_CHARS)
