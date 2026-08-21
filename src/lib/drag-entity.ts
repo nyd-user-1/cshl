@@ -1,10 +1,10 @@
 /**
  * One drag payload for the whole workspace: canvas cards, rail rows, search
- * hits and detail-panel headers all set `application/nsr-entity`; the canvas
+ * hits and detail-panel headers all set `application/x-corpus-entity`; the canvas
  * (add at drop point) and the chat dock (attach as context) both read it.
  */
 
-export const ENTITY_MIME = "application/nsr-entity";
+export const ENTITY_MIME = "application/x-corpus-entity";
 
 export interface DragEntity {
   type: "paper" | "author" | "nuclide" | "reaction" | "exfor" | "prompt" | "file" | "more";

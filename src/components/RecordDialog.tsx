@@ -1,17 +1,17 @@
 import { ExternalLink } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { TexText } from "@/components/TexText";
-import type { NsrRecord } from "@/types/nsr";
+import type { CorpusRecord } from "@/types/record";
 
 /** Record detail in a dialog — the stand-in until a /record/:key page exists. */
-export function RecordDialog({ record, open, onOpenChange }: { record: NsrRecord | null; open: boolean; onOpenChange: (o: boolean) => void }) {
+export function RecordDialog({ record, open, onOpenChange }: { record: CorpusRecord | null; open: boolean; onOpenChange: (o: boolean) => void }) {
   if (!record) return null;
   const rows: [string, React.ReactNode][] = [];
   if (record.authors) rows.push(["Authors", record.authors]);
   if (record.reference) rows.push(["Reference", record.reference]);
   if (record.pub_year) rows.push(["Year", String(record.pub_year)]);
   if (record.reference_type) rows.push(["Type", record.reference_type]);
-  if (record.doi) rows.push(["DOI", <a key="doi" href={`https://doi.org/${record.doi}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-nuclear hover:underline"><ExternalLink className="h-3 w-3" />{record.doi}</a>]);
+  if (record.doi) rows.push(["DOI", <a key="doi" href={`https://doi.org/${record.doi}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline"><ExternalLink className="h-3 w-3" />{record.doi}</a>]);
   if (record.categories?.length) rows.push(["Category", record.categories.join(", ")]);
   if (record.status_tags?.length) rows.push(["Status", record.status_tags.join(", ")]);
   if (record.published_journal) rows.push(["Published in", record.published_journal]);

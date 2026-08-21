@@ -52,7 +52,7 @@ export function DetailBody({ type, detail, navigate, onCanvas }: {
             Ask RxivGPT
           </Button>
           {node.doi != null && (
-            <a href={`https://doi.org/${node.doi}`} target="_blank" rel="noopener noreferrer" className="inline-flex h-7 items-center rounded-md border px-2 text-xs text-nuclear hover:bg-muted">
+            <a href={`https://doi.org/${node.doi}`} target="_blank" rel="noopener noreferrer" className="inline-flex h-7 items-center rounded-md border px-2 text-xs text-brand hover:bg-muted">
               DOI
             </a>
           )}

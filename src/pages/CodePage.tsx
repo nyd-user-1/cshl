@@ -93,7 +93,7 @@ export default function CodePage() {
             href="https://github.com/IAEA-NSDDNetwork"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-nuclear hover:underline"
+            className="text-brand hover:underline"
           >
             github.com/IAEA-NSDDNetwork
           </a>

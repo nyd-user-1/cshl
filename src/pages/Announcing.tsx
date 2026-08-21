@@ -414,7 +414,7 @@ function Claim({
       </div>
       <div className="md:pt-9">
         <div className="rounded-lg border bg-card p-5">
-          <div className="text-3xl font-bold tracking-tight tabular-nums text-nuclear">{stat}</div>
+          <div className="text-3xl font-bold tracking-tight tabular-nums text-brand">{stat}</div>
           <div className="mt-2 text-xs leading-relaxed text-muted-foreground">{statLabel}</div>
         </div>
       </div>
@@ -442,7 +442,7 @@ export default function Announcing() {
       <div className="mx-auto max-w-[1000px] px-5 py-10 md:px-8 md:py-16">
         {/* ---------------- Hero ---------------- */}
         <header>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-nuclear">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-brand">
             Model release · 20 August 2026
           </p>
           <h1 className="mt-5 text-5xl font-bold leading-[0.95] tracking-tight md:text-7xl">CSHL-CPT</h1>
@@ -451,7 +451,7 @@ export default function Announcing() {
             search, statistically tied with the National Library of Medicine's own biomedical model.
           </p>
           <p className="mt-5 flex flex-wrap items-center gap-2 text-sm">
-            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-nuclear" />
+            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-brand" />
             <span className="font-medium">Live now on cshl.nysgpt.com</span>
             <span className="text-muted-foreground">— every question you ask RxivGPT retrieves through it.</span>
           </p>

@@ -4,7 +4,7 @@ export interface S2Author {
   affiliations: string[];
 }
 
-export interface NsrRecord {
+export interface CorpusRecord {
   id: number;
   key_number: string;
   pub_year: number;

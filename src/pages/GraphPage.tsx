@@ -181,17 +181,17 @@ function edgeReceipt(x: GNode, y: GNode, meta?: EdgeMeta): { table?: string; tex
 
 function EntityNode({ data, selected }: NodeProps<Node<EntityData>>) {
   const d = data;
-  const accent = selected ? "border-nuclear ring-1 ring-nuclear" : "";
+  const accent = selected ? "border-brand ring-1 ring-brand" : "";
   const dim = d.dimmed ? "opacity-30" : "";
 
   if (d.type === "prompt") {
     const busy = d.running === keyOf(d);
     return (
       <div className={`${CARD} ${accent} ${dim} border-dashed transition-opacity`} style={{ width: NODE_W.prompt }}>
-        <Handle type="target" position={Position.Left} className="!h-2.5 !w-2.5 !border-0 !bg-nuclear" />
-        <Handle type="source" position={Position.Right} className="!h-2.5 !w-2.5 !border-0 !bg-nuclear" />
+        <Handle type="target" position={Position.Left} className="!h-2.5 !w-2.5 !border-0 !bg-brand" />
+        <Handle type="source" position={Position.Right} className="!h-2.5 !w-2.5 !border-0 !bg-brand" />
         <div className="flex items-center justify-between gap-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-nuclear">Prompt step</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-brand">Prompt step</p>
           <button
             onClick={(e) => { e.stopPropagation(); d.onRun(keyOf(d)); }}
             className="flex items-center gap-1 rounded border bg-muted/40 px-1.5 py-0.5 text-[9px] text-foreground transition-colors hover:bg-muted"
@@ -235,7 +235,7 @@ function EntityNode({ data, selected }: NodeProps<Node<EntityData>>) {
       <div className={`${CARD} ${accent} ${dim} transition-opacity`} style={{ width: NODE_W.file }}>
         <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-muted-foreground/50" />
         <p className="flex items-center gap-1.5 truncate font-mono text-[11px] font-semibold text-foreground">
-          <FileText className="h-3 w-3 shrink-0 text-nuclear" /> {d.label}
+          <FileText className="h-3 w-3 shrink-0 text-brand" /> {d.label}
         </p>
         {d.sub && <p className="mt-0.5 truncate text-[10px] text-muted-foreground">{d.sub}</p>}
         {d.fileText && <Badge variant="secondary" className="mt-1 text-[9px]">text wired</Badge>}
@@ -257,7 +257,7 @@ function EntityNode({ data, selected }: NodeProps<Node<EntityData>>) {
       >
         <GripVertical className="h-3 w-3" />
       </span>
-      <p className={`truncate pr-3 font-mono text-[11px] font-semibold ${d.type === "paper" ? "text-nuclear" : "text-foreground"}`}>
+      <p className={`truncate pr-3 font-mono text-[11px] font-semibold ${d.type === "paper" ? "text-brand" : "text-foreground"}`}>
         {d.type === "nuclide" ? <span dangerouslySetInnerHTML={{ __html: d.label.replace(/^(\d+)/, "<sup>$1</sup>") }} /> : d.label}
       </p>
       {d.title && (
@@ -1349,7 +1349,7 @@ function GraphPageInner() {
         animated: intoPrompt && running === e.target,
         // inference edges never look like record edges: dashed, muted, labeled
         style: {
-          stroke: sim ? "var(--color-muted-foreground)" : hot || intoPrompt ? "var(--color-nuclear)" : "var(--color-muted-foreground)",
+          stroke: sim ? "var(--color-muted-foreground)" : hot || intoPrompt ? "var(--color-brand)" : "var(--color-muted-foreground)",
           strokeWidth: hot ? 2 : 1,
           strokeDasharray: sim ? "6 3" : undefined,
           opacity: connected && !hot ? 0.15 : intoPrompt ? 0.8 : sim ? 0.7 : 0.6,
@@ -1614,7 +1614,7 @@ function GraphPageInner() {
                   {s.status === "running"
                     ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
                     : s.status === "done"
-                      ? <Check className="h-3.5 w-3.5 shrink-0 text-nuclear" />
+                      ? <Check className="h-3.5 w-3.5 shrink-0 text-brand" />
                       : <X className="h-3.5 w-3.5 shrink-0 text-red-500" />}
                   <span className="truncate text-foreground">{s.prompt || "(empty prompt)"}</span>
                   {s.ms != null && (
@@ -1659,7 +1659,7 @@ function GraphPageInner() {
                 <span className="text-muted-foreground">{role}</span>
                 <button
                   onClick={() => setSelectedKey(keyOf(g))}
-                  className="truncate font-mono font-medium text-nuclear hover:underline"
+                  className="truncate font-mono font-medium text-brand hover:underline"
                   title={`open ${g.label}`}
                 >
                   {g.label}
@@ -1694,7 +1694,7 @@ function GraphPageInner() {
           <h2
             draggable
             onDragStart={(e) => setDragEntity(e.dataTransfer, sel)}
-            className="cursor-grab font-mono text-sm font-semibold text-nuclear"
+            className="cursor-grab font-mono text-sm font-semibold text-brand"
             title="drag into the chat to attach as context"
           >
             {sel.label}

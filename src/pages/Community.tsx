@@ -45,7 +45,7 @@ const when = (s: string) => s.slice(0, 10);
 const STATUS_STYLE: Record<string, string> = {
   new: "bg-muted text-foreground",
   ack: "bg-muted text-foreground",
-  assigned: "bg-nuclear/15 text-nuclear",
+  assigned: "bg-brand/15 text-brand",
   resolved: "bg-muted text-muted-foreground line-through",
 };
 
@@ -116,7 +116,7 @@ export default function Community() {
                       <p className="text-sm font-medium text-foreground">{v.name}</p>
                       <span className="flex shrink-0 items-center gap-1.5">
                         {v.state?.nodes?.some((n) => n.type === "prompt") && (
-                          <Badge variant="nuclear" className="text-[9px]">recipe</Badge>
+                          <Badge variant="brand" className="text-[9px]">recipe</Badge>
                         )}
                         <Share2 className="h-3.5 w-3.5 text-muted-foreground" />
                       </span>
@@ -127,7 +127,7 @@ export default function Community() {
                 </Card>
               ))}
               {(views.data?.views ?? []).length === 0 && (
-                <p className="text-sm text-muted-foreground">No saved views yet — build one on the <button className="text-nuclear hover:underline" onClick={() => navigate("/graph")}>graph</button> and hit Save.</p>
+                <p className="text-sm text-muted-foreground">No saved views yet — build one on the <button className="text-brand hover:underline" onClick={() => navigate("/graph")}>graph</button> and hit Save.</p>
               )}
             </div>
           )}
@@ -220,7 +220,7 @@ export default function Community() {
                     <tr key={i.id} className="border-b last:border-0">
                       <td className="px-3 py-2">
                         <div className="flex items-start gap-1.5">
-                          <CircleDot className={`mt-0.5 h-3 w-3 shrink-0 ${i.status === "resolved" ? "text-muted-foreground" : "text-nuclear"}`} />
+                          <CircleDot className={`mt-0.5 h-3 w-3 shrink-0 ${i.status === "resolved" ? "text-muted-foreground" : "text-brand"}`} />
                           <div>
                             <p className="text-xs font-medium text-foreground">{i.title}</p>
                             {i.body && <p className="mt-0.5 line-clamp-1 text-[11px] text-muted-foreground">{i.body}</p>}
@@ -228,7 +228,7 @@ export default function Community() {
                         </div>
                       </td>
                       <td className="hidden px-3 py-2 sm:table-cell"><EntityChip entityRef={i.entity_ref} /></td>
-                      <td className="px-3 py-2"><Badge variant={i.severity <= 2 ? "nuclear" : "secondary"} className="text-[10px]">S{i.severity}</Badge></td>
+                      <td className="px-3 py-2"><Badge variant={i.severity <= 2 ? "brand" : "secondary"} className="text-[10px]">S{i.severity}</Badge></td>
                       <td className="px-3 py-2 text-xs text-muted-foreground">{i.assignee ?? "—"}</td>
                       <td className="px-3 py-2">
                         <select

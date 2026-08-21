@@ -278,11 +278,11 @@ function CategorySection({ category }: { category: FeatureCategory }) {
             </div>
 
             {/* RxivGPT column */}
-            <div className="px-5 py-4 border-l border-border bg-nuclear/[0.03]">
+            <div className="px-5 py-4 border-l border-border bg-brand/[0.03]">
               <ul className="space-y-1.5">
                 {row.nsrgpt.map((item, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm leading-relaxed">
-                    <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0 text-nuclear" />
+                    <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0 text-brand" />
                     <span className="text-foreground">{item}</span>
                   </li>
                 ))}
@@ -320,14 +320,14 @@ function CategorySection({ category }: { category: FeatureCategory }) {
             </div>
 
             {/* RxivGPT */}
-            <div className="px-4 py-3 bg-nuclear/[0.03]">
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-nuclear mb-2">
+            <div className="px-4 py-3 bg-brand/[0.03]">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-brand mb-2">
                 RxivGPT
               </p>
               <ul className="space-y-1">
                 {row.nsrgpt.map((item, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm leading-relaxed">
-                    <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0 text-nuclear" />
+                    <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0 text-brand" />
                     <span className="text-foreground">{item}</span>
                   </li>
                 ))}

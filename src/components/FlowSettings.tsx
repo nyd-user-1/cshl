@@ -261,7 +261,7 @@ export function FlowSettingsPanel({
                 <button
                   onClick={() => set(r.key, !value[r.key])}
                   className={`flex h-5 w-5 items-center justify-center rounded-md border transition-colors ${
-                    value[r.key] ? "border-nuclear bg-nuclear text-background" : "border-border bg-background"
+                    value[r.key] ? "border-brand bg-brand text-background" : "border-border bg-background"
                   }`}
                   aria-checked={Boolean(value[r.key])}
                   role="checkbox"

@@ -192,7 +192,7 @@ export default function Chat() {
           <Badge variant="secondary" className="text-[10px]">{entity.type}</Badge>
           <button onClick={() => setEntity(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
         </div>
-        <h2 className="font-mono text-sm font-semibold text-nuclear">{entity.id}</h2>
+        <h2 className="font-mono text-sm font-semibold text-brand">{entity.id}</h2>
         {!entityDetail && <p className="mt-3 text-xs text-muted-foreground">Loading…</p>}
         {entityDetail && !entityDetail.error && (
           <DetailBody type={entity.type} detail={entityDetail} navigate={navigate} />

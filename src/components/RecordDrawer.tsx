@@ -16,12 +16,12 @@ import {
   Check,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
-import type { NsrRecord } from "@/types/nsr";
+import type { CorpusRecord } from "@/types/record";
 import { useS2Enrichment } from "@/hooks/useS2Enrichment";
 import { useQueryClient } from "@tanstack/react-query";
 
 interface RecordDrawerProps {
-  records: NsrRecord[];
+  records: CorpusRecord[];
   currentIndex: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -210,7 +210,7 @@ export function RecordDrawer({
                       href={`https://doi.org/${record.doi}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 text-xs text-nuclear hover:underline"
+                      className="inline-flex items-center gap-1.5 text-xs text-brand hover:underline"
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
                       DOI: {record.doi}

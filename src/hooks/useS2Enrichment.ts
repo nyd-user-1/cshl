@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { S2Author } from "@/types/nsr";
+import type { S2Author } from "@/types/record";
 
 export interface S2Enrichment {
   s2_paper_id: string | null;
@@ -18,18 +18,18 @@ export interface S2Enrichment {
   s2_looked_up_at: string | null;
 }
 
-async function fetchRecord(nsrId: number): Promise<S2Enrichment> {
-  const res = await fetch(`/api/record?id=${nsrId}`);
+async function fetchRecord(recordId: number): Promise<S2Enrichment> {
+  const res = await fetch(`/api/record?id=${recordId}`);
   if (!res.ok) throw new Error(`record ${res.status}`);
   return (await res.json()) as S2Enrichment;
 }
 
 /** Enrichment for one record, from Neon via /api/record (was Supabase REST). */
-export function useS2Enrichment(nsrId: number | null, initialData?: Partial<S2Enrichment>) {
+export function useS2Enrichment(recordId: number | null, initialData?: Partial<S2Enrichment>) {
   return useQuery({
-    queryKey: ["s2-enrichment", nsrId],
-    queryFn: () => fetchRecord(nsrId!),
-    enabled: nsrId != null,
+    queryKey: ["s2-enrichment", recordId],
+    queryFn: () => fetchRecord(recordId!),
+    enabled: recordId != null,
     staleTime: 1000 * 60 * 30,
     // render immediately from whatever the caller already holds (a search hit
     // carries abstract/citations/…); the fetch only fills the S2-only fields.
@@ -40,6 +40,6 @@ export function useS2Enrichment(nsrId: number | null, initialData?: Partial<S2En
 /** Warm the cache before the click — call on row hover. */
 export function usePrefetchRecord() {
   const qc = useQueryClient();
-  return (nsrId: number) =>
-    qc.prefetchQuery({ queryKey: ["s2-enrichment", nsrId], queryFn: () => fetchRecord(nsrId), staleTime: 1000 * 60 * 30 });
+  return (recordId: number) =>
+    qc.prefetchQuery({ queryKey: ["s2-enrichment", recordId], queryFn: () => fetchRecord(recordId), staleTime: 1000 * 60 * 30 });
 }

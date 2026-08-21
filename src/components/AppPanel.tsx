@@ -8,7 +8,7 @@ import { X, Columns2, Columns3, ArrowUpRight, ArrowLeft, ArrowRight } from "luci
  * It portals into `#app-panel-root` in AppLayout, beside the page wrapper, so it
  * pushes the page content over and survives route changes. Open it from
  * anywhere with `useAppPanel().openPanel({...})` (see hooks/useAppPanel).
- * Design tokens swapped for nsr's (background / border / muted).
+ * Design tokens swapped for the app's (background / border / muted).
  */
 export function AppPanel({
   root,

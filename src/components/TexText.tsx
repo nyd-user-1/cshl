@@ -2,8 +2,8 @@ import katex from "katex";
 import "katex/dist/katex.min.css";
 
 /**
- * Renders a plain string that may contain inline TeX, NSR-style
- * (e.g. `Nuclear level density of $^{97}\mathrm{Zr}$`). Non-math text
+ * Renders a plain string that may contain inline TeX in titles
+ * (e.g. `$\alpha$-synuclein aggregation`). Non-math text
  * passes through untouched; malformed TeX falls back to raw text
  * rather than throwing mid-render.
  */

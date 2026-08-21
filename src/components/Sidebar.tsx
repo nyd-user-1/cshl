@@ -164,10 +164,6 @@ interface SidebarProps {
   onClose?: () => void;
 }
 
-/** ENSDF sub-nav — indented, one size down from the top-level items. */
-
-/** NSR sub-nav. */
-
 /** Workspace sub-nav — a–z. */
 const WORKSPACE_ITEMS: { label: string; path: string; prefetch: () => Promise<unknown> }[] = [
   { label: "Community", path: "/community", prefetch: () => import("@/pages/Community") },
@@ -271,11 +267,9 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             New Search
           </button>
 
-          {/* Preprints — the References browser over bioRxiv + medRxiv.
-              The NSR-era sections (ENDF, ENSDF, XUNDL, NSR archive) are removed from
-              the nav: they query nuclear tables that no longer exist in this database
-              and error when clicked. Their routes still exist in App.tsx — unreachable
-              dead code, harmless, and wanting a proper removal pass. */}
+          {/* Preprints — the References browser over bioRxiv + medRxiv. The NSR-era
+              sections (ENDF, ENSDF, XUNDL, NSR archive) are deleted; their card-page
+              design survives, content-agnostic, in src/pages/templates/CardPage.tsx. */}
           <button
             onClick={() => { navigate("/references"); closeMobile(); }}
             onMouseEnter={() => { import("@/pages/References"); }}

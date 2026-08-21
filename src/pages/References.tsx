@@ -4,16 +4,16 @@ import { useSearchParams } from "react-router-dom";
 import { ArrowUpDown, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { MobileFilterDrawer } from "@/components/MobileFilterDrawer";
 import { SearchInput } from "@/components/SearchInput";
-import { NsrRecordCard } from "@/components/NsrRecordCard";
+import { RecordCard } from "@/components/RecordCard";
 import { DictCombobox } from "@/components/DictCombobox";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useNsrSearch, type SearchMode } from "@/hooks/useNsrSearch";
+import { useRecordSearch, type SearchMode } from "@/hooks/useRecordSearch";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
-import { useNsrRecords } from "@/hooks/useNsrRecords";
-import { useNsrStructuredSearch } from "@/hooks/useNsrStructuredSearch";
+import { useRecords } from "@/hooks/useRecords";
+import { useStructuredSearch } from "@/hooks/useStructuredSearch";
 import { useFeedEmitter } from "@/hooks/useFeedEmitter";
 import { RecordDrawer } from "@/components/RecordDrawer";
-import type { NsrRecord } from "@/types/nsr";
+import type { CorpusRecord } from "@/types/record";
 
 const CARDS_PER_PAGE = 99;
 
@@ -178,13 +178,13 @@ export default function References() {
   }, [paramKey]);
 
   const debouncedQuery = useDebouncedValue(query, 320);
-  const search = useNsrSearch(debouncedQuery, searchMode);
-  const browse = useNsrRecords({
+  const search = useRecordSearch(debouncedQuery, searchMode);
+  const browse = useRecords({
     year: yearFilter ? Number(yearFilter) : undefined,
     page,
     pageSize: CARDS_PER_PAGE,
   });
-  const structured = useNsrStructuredSearch(structuredParams);
+  const structured = useStructuredSearch(structuredParams);
 
   // Feed emitter
   const { emit } = useFeedEmitter();
@@ -276,7 +276,7 @@ export default function References() {
   const isStructured = structuredParams !== null;
 
   // Determine which data source to show
-  let rawRecords: NsrRecord[] | null | undefined;
+  let rawRecords: CorpusRecord[] | null | undefined;
   let isLoading: boolean;
   let error: Error | null;
   let browseTotalCount = 0;
@@ -685,7 +685,7 @@ export default function References() {
             </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {pagedRecords.slice(0, visibleCount).map((record) => (
-              <NsrRecordCard
+              <RecordCard
                 key={record.id}
                 record={record}
                 searchQuery={isSearching ? debouncedQuery : undefined}

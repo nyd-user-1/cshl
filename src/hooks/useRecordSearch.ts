@@ -1,5 +1,5 @@
 import { useQuery, type QueryFunctionContext } from "@tanstack/react-query";
-import type { NsrRecord } from "@/types/nsr";
+import type { CorpusRecord } from "@/types/record";
 
 /**
  * /search backend: `/api/search` on Neon — bge-m3 kNN over nsr_embeddings
@@ -15,7 +15,7 @@ import type { NsrRecord } from "@/types/nsr";
 export type SearchMode = "hybrid" | "semantic" | "keyword";
 
 interface SearchResult {
-  records: NsrRecord[];
+  records: CorpusRecord[];
   count: number;
   mode: string;
   timings?: Record<string, number | string>;
@@ -58,7 +58,7 @@ async function searchNsr(query: string, mode: SearchMode, signal?: AbortSignal):
   return result;
 }
 
-export function useNsrSearch(query: string, mode: SearchMode = "hybrid") {
+export function useRecordSearch(query: string, mode: SearchMode = "hybrid") {
   return useQuery({
     queryKey: ["nsr-search", query, mode],
     queryFn: ({ signal }: QueryFunctionContext) => searchNsr(query, mode, signal),

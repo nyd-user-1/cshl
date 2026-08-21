@@ -46,9 +46,9 @@ function App() {
                 <Route path="/" element={<Chat />} />
                 <Route path="/new-chat" element={<Chat />} />
                 <Route path="/c/:sessionId" element={<Chat />} />
-                {/* /nsr is the NSR index (the References page); /references redirects for old links */}
-                <Route path="/nsr" element={<References />} />
-                <Route path="/references" element={<Navigate to="/nsr" replace />} />
+                {/* /references is the corpus browser; /nsr redirects for NSR-era links */}
+                <Route path="/references" element={<References />} />
+                <Route path="/nsr" element={<Navigate to="/references" replace />} />
                 <Route path="/resources" element={<Resources />} />
                 <Route path="/search" element={<Search />} />
                 <Route path="/features" element={<Features />} />

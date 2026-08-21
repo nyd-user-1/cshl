@@ -92,7 +92,7 @@ export function ChatMessage({
                 return (
                   <button
                     onClick={() => window.dispatchEvent(new CustomEvent("open-entity", { detail: { type, id } }))}
-                    className="mx-0.5 inline-flex items-center rounded border bg-muted/40 px-1 font-mono text-[0.85em] font-semibold text-nuclear transition-colors hover:bg-muted"
+                    className="mx-0.5 inline-flex items-center rounded border bg-muted/40 px-1 font-mono text-[0.85em] font-semibold text-brand transition-colors hover:bg-muted"
                     title={`Open ${id}`}
                   >
                     {children}

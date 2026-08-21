@@ -2,12 +2,12 @@ import { memo, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { ArrowUp, Copy, Check, Hash } from "lucide-react";
-import type { NsrRecord } from "@/types/nsr";
-import type { SearchMode } from "@/hooks/useNsrSearch";
+import type { CorpusRecord } from "@/types/record";
+import type { SearchMode } from "@/hooks/useRecordSearch";
 import { useFeedEmitter } from "@/hooks/useFeedEmitter";
 
-interface NsrRecordCardProps {
-  record: NsrRecord;
+interface RecordCardProps {
+  record: CorpusRecord;
   searchQuery?: string;
   searchMode?: SearchMode;
   onClick?: () => void;
@@ -20,7 +20,7 @@ function highlightText(text: string, query: string): ReactNode {
   const parts = text.split(regex);
   return parts.map((part, i) =>
     regex.test(part) ? (
-      <mark key={i} className="bg-nuclear/20 text-foreground rounded-sm px-0.5">
+      <mark key={i} className="bg-brand/20 text-foreground rounded-sm px-0.5">
         {part}
       </mark>
     ) : (
@@ -29,7 +29,7 @@ function highlightText(text: string, query: string): ReactNode {
   );
 }
 
-export const NsrRecordCard = memo(function NsrRecordCard({ record, searchQuery, searchMode, onClick }: NsrRecordCardProps) {
+export const RecordCard = memo(function RecordCard({ record, searchQuery, searchMode, onClick }: RecordCardProps) {
   const navigate = useNavigate();
   const [copied, setCopied] = useState(false);
   const { emit } = useFeedEmitter();
@@ -203,7 +203,7 @@ export const NsrRecordCard = memo(function NsrRecordCard({ record, searchQuery, 
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className="text-xs text-nuclear hover:underline truncate max-w-[60%]"
+            className="text-xs text-brand hover:underline truncate max-w-[60%]"
           >
             {record.doi}
           </a>

@@ -1,16 +1,16 @@
 import { lazy, Suspense, useRef, useState } from "react";
 import { Loader2, Paperclip } from "lucide-react";
 import { ChatInput } from "@/components/ChatInput";
-import type { NsrRecord } from "@/types/nsr";
+import type { CorpusRecord } from "@/types/record";
 
 const ChatMessage = lazy(() => import("./ChatMessage").then((m) => ({ default: m.ChatMessage })));
 
 interface Msg { role: "user" | "assistant"; content: string }
 
 /** The record, as system context for the model — same recipe as the graph's chat dock. */
-function describeRecord(r: NsrRecord): string {
+function describeRecord(r: CorpusRecord): string {
   const lines = [
-    `## Attached NSR record`,
+    `## Attached preprint record`,
     `key_number: ${r.key_number}`,
     r.title ? `title: ${r.title}` : "",
     r.authors ? `authors: ${r.authors}` : "",
@@ -30,7 +30,7 @@ function describeRecord(r: NsrRecord): string {
  * /api/chat with the record prepended as system context; the same citation
  * chips as /chat.
  */
-export function PanelChat({ record }: { record: NsrRecord }) {
+export function PanelChat({ record }: { record: CorpusRecord }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [busy, setBusy] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);

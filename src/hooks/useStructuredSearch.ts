@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { NsrRecord } from "@/types/nsr";
+import type { CorpusRecord } from "@/types/record";
 
 export interface StructuredSearchParams {
   categories?: string[];
@@ -8,17 +8,17 @@ export interface StructuredSearchParams {
 
 async function structuredSearch(
   params: StructuredSearchParams,
-): Promise<NsrRecord[]> {
+): Promise<CorpusRecord[]> {
   const q = new URLSearchParams({ mode: "structured", limit: "50" });
   if (params.categories?.length) q.set("categories", params.categories.join(","));
   if (params.journals?.length) q.set("journals", params.journals.join(","));
   const res = await fetch(`/api/search?${q}`);
   if (!res.ok) throw new Error(`structured ${res.status}`);
-  const data = (await res.json()) as { records: NsrRecord[] };
+  const data = (await res.json()) as { records: CorpusRecord[] };
   return data.records ?? [];
 }
 
-export function useNsrStructuredSearch(params: StructuredSearchParams | null) {
+export function useStructuredSearch(params: StructuredSearchParams | null) {
   const hasFilters =
     params !== null &&
     ((params.categories?.length ?? 0) > 0 || (params.journals?.length ?? 0) > 0);

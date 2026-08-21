@@ -12,7 +12,9 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 function getStoredTheme(): Theme {
   if (typeof window === "undefined") return "light";
-  return (localStorage.getItem("nsrgpt-theme") as Theme) ?? "light";
+  // "nsrgpt-theme" is the NSR-era key; keep reading it so an existing visitor's
+  // choice survives the rename, but write only the new key.
+  return ((localStorage.getItem("app-theme") ?? localStorage.getItem("nsrgpt-theme")) as Theme) ?? "light";
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -20,7 +22,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const setTheme = (t: Theme) => {
     setThemeState(t);
-    localStorage.setItem("nsrgpt-theme", t);
+    localStorage.setItem("app-theme", t);
   };
 
   const toggle = () => setTheme(theme === "light" ? "dark" : "light");

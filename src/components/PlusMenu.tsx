@@ -17,64 +17,64 @@ interface SamplePrompt {
 
 const SAMPLE_PROMPTS: SamplePrompt[] = [
   {
-    title: "Neutron Capture Cross Sections",
-    description: "Recent measurements for U-235, Pu-239, and Th-232",
-    prompt: "What are the most recent experimental measurements of neutron capture cross sections for U-235, Pu-239, and Th-232?",
-    searchTerm: "neutron capture cross sections U-235",
+    title: "CRISPR Base Editing Off-Targets",
+    description: "Off-target effects reported in primary human cells",
+    prompt: "What off-target effects of CRISPR base editing have been reported in primary human cells?",
+    searchTerm: "CRISPR base editing off-target",
   },
   {
-    title: "Half-Life Conflicts Near N=82",
-    description: "Conflicting measurements near the neutron shell closure",
-    prompt: "Are there any conflicting experimental measurements of half-lives for nuclei near the N=82 neutron shell closure?",
-    searchTerm: "half-lives N=82",
+    title: "Long COVID Cognitive Impairment",
+    description: "Evidence across recent preprints",
+    prompt: "What evidence do recent preprints report on cognitive impairment in long COVID?",
+    searchTerm: "long COVID cognitive impairment",
   },
   {
-    title: "Chiral EFT in Nuclear Matter",
-    description: "Applications of chiral effective field theory",
-    prompt: "How has chiral effective field theory been applied to nuclear matter calculations in recent literature?",
-    searchTerm: "chiral effective field theory nuclear matter",
+    title: "Ferroptosis in Cancer",
+    description: "Mechanisms and therapeutic angles",
+    prompt: "What mechanisms and therapeutic strategies involving ferroptosis in cancer appear in recent preprints?",
+    searchTerm: "ferroptosis cancer therapy",
   },
   {
-    title: "Structure of Pb-208",
-    description: "Key experimental and theoretical papers",
-    prompt: "What are the most important experimental and theoretical papers related to the structure of Pb-208?",
-    searchTerm: "208Pb structure",
+    title: "AlphaFold in Practice",
+    description: "How predicted structures are being used",
+    prompt: "How are AlphaFold-predicted structures being used in recent structural biology and drug discovery preprints?",
+    searchTerm: "AlphaFold structure prediction application",
   },
   {
-    title: "Ni-64(p,n) Reaction",
-    description: "Experimental techniques for cross section measurement",
-    prompt: "What experimental techniques have been used to measure the Ni-64(p,n) reaction cross section?",
-    searchTerm: "64Ni(p,n) cross section",
+    title: "Single-Cell Atlases",
+    description: "New tissue atlases and methods",
+    prompt: "What new single-cell RNA-seq tissue atlases have been posted recently, and what methods do they use?",
+    searchTerm: "single-cell RNA-seq atlas",
   },
   {
-    title: "R-Process Nucleosynthesis",
-    description: "Critical nuclear reactions in recent studies",
-    prompt: "What nuclear reactions are considered most critical to r-process nucleosynthesis according to recent studies?",
-    searchTerm: "r-process nucleosynthesis",
+    title: "Gut Microbiome & Neurodegeneration",
+    description: "The gut–brain axis in disease models",
+    prompt: "What do recent preprints say about the gut microbiome's role in neurodegenerative disease?",
+    searchTerm: "gut microbiome neurodegeneration",
   },
   {
-    title: "Neutron-Rich Calcium Isotopes",
-    description: "Leading authors and institutions",
-    prompt: "Which authors and institutions have published the most research on neutron-rich calcium isotopes?",
-    searchTerm: "neutron-rich calcium isotopes",
+    title: "Organoid Disease Models",
+    description: "Leading groups and protocols",
+    prompt: "Which groups have posted preprints on organoid models of human disease, and what protocols do they describe?",
+    searchTerm: "organoid disease model",
   },
   {
-    title: "Medical Isotope Cu-64",
-    description: "Production methods and yields",
-    prompt: "What recent studies exist on production methods and yields for the medical isotope Cu-64?",
-    searchTerm: "64Cu production medical isotope",
+    title: "mRNA Vaccine Platforms",
+    description: "Beyond COVID: new targets and delivery",
+    prompt: "What new applications of mRNA vaccine platforms beyond COVID-19 appear in recent preprints?",
+    searchTerm: "mRNA vaccine platform delivery",
   },
   {
-    title: "Direct vs. Compound Reactions",
-    description: "Experimental evidence in medium-mass nuclei",
-    prompt: "What experimental evidence supports direct reaction mechanisms versus compound nucleus formation in medium-mass nuclei?",
-    searchTerm: "direct reaction compound nucleus medium-mass",
+    title: "Spatial Transcriptomics Methods",
+    description: "Method comparisons and benchmarks",
+    prompt: "How do recent preprints compare spatial transcriptomics methods, and what benchmarks do they use?",
+    searchTerm: "spatial transcriptomics benchmark",
   },
   {
-    title: "Neutron Drip Line Discoveries",
-    description: "New experimental discoveries near the drip line",
-    prompt: "What new experimental discoveries have been reported for nuclei near the neutron drip line?",
-    searchTerm: "neutron drip line",
+    title: "Aging Clocks",
+    description: "Epigenetic clocks and biological age",
+    prompt: "What do recent preprints report about epigenetic aging clocks and interventions that shift biological age?",
+    searchTerm: "epigenetic clock biological age",
   },
 ];
 
@@ -82,7 +82,7 @@ const SAMPLE_PROMPTS: SamplePrompt[] = [
 /*  + menu category types                                              */
 /* ------------------------------------------------------------------ */
 
-type DrawerCategory = "prompts" | "nuclides" | "reactions" | "authors";
+type DrawerCategory = "prompts" | "categories" | "journals" | "authors";
 
 interface CategoryDef {
   key: DrawerCategory;
@@ -92,8 +92,8 @@ interface CategoryDef {
 
 const CATEGORIES: CategoryDef[] = [
   { key: "prompts", label: "Sample Questions", icon: <Lightbulb className="h-5 w-5" /> },
-  { key: "nuclides", label: "Nuclides", icon: <Atom className="h-5 w-5" /> },
-  { key: "reactions", label: "Reactions", icon: <Zap className="h-5 w-5" /> },
+  { key: "categories", label: "Categories", icon: <Atom className="h-5 w-5" /> },
+  { key: "journals", label: "Journals", icon: <Zap className="h-5 w-5" /> },
   { key: "authors", label: "Authors", icon: <Users className="h-5 w-5" /> },
 ];
 
@@ -136,13 +136,13 @@ export function PlusMenu({ onSelect, mode }: PlusMenuProps) {
   const btnRef = useRef<HTMLButtonElement>(null);
 
   // Per-category DB items
-  const [availableNuclides, setAvailableNuclides] = useState<DbItem[]>([]);
-  const [nuclidesLoading, setNuclidesLoading] = useState(false);
-  const [nuclidesHasMore, setNuclidesHasMore] = useState(true);
+  const [availableCategories, setAvailableCategories] = useState<DbItem[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+  const [categoriesHasMore, setCategoriesHasMore] = useState(true);
 
-  const [availableReactions, setAvailableReactions] = useState<DbItem[]>([]);
-  const [reactionsLoading, setReactionsLoading] = useState(false);
-  const [reactionsHasMore, setReactionsHasMore] = useState(true);
+  const [availableJournals, setAvailableJournals] = useState<DbItem[]>([]);
+  const [journalsLoading, setJournalsLoading] = useState(false);
+  const [journalsHasMore, setJournalsHasMore] = useState(true);
 
   const [availableAuthors, setAvailableAuthors] = useState<DbItem[]>([]);
   const [authorsLoading, setAuthorsLoading] = useState(false);
@@ -169,7 +169,7 @@ export function PlusMenu({ onSelect, mode }: PlusMenuProps) {
   // ---- fetch functions (Neon via /api/dict; the whole list is one cached call,
   //      paged client-side to keep the popover's infinite scroll) ----
   const dictCache = useRef<Record<string, DbItem[]>>({});
-  const loadDict = useCallback(async (type: "nuclides" | "reactions" | "authors"): Promise<DbItem[]> => {
+  const loadDict = useCallback(async (type: "categories" | "journals" | "authors"): Promise<DbItem[]> => {
     if (dictCache.current[type]) return dictCache.current[type];
     const res = await fetch(`/api/dict?type=${type}&limit=20000`);
     const rows = res.ok ? ((await res.json()) as DbItem[]) : [];
@@ -178,22 +178,22 @@ export function PlusMenu({ onSelect, mode }: PlusMenuProps) {
     return rows;
   }, []);
 
-  const fetchNuclidesForSelection = useCallback(async (offset: number) => {
-    setNuclidesLoading(true);
-    const all = await loadDict("nuclides");
+  const fetchCategoriesForSelection = useCallback(async (offset: number) => {
+    setCategoriesLoading(true);
+    const all = await loadDict("categories");
     const rows = all.slice(offset, offset + PAGE_SIZE);
-    setAvailableNuclides((prev) => (offset === 0 ? rows : [...prev, ...rows]));
-    setNuclidesHasMore(offset + PAGE_SIZE < all.length);
-    setNuclidesLoading(false);
+    setAvailableCategories((prev) => (offset === 0 ? rows : [...prev, ...rows]));
+    setCategoriesHasMore(offset + PAGE_SIZE < all.length);
+    setCategoriesLoading(false);
   }, [loadDict]);
 
-  const fetchReactionsForSelection = useCallback(async (offset: number) => {
-    setReactionsLoading(true);
-    const all = await loadDict("reactions");
+  const fetchJournalsForSelection = useCallback(async (offset: number) => {
+    setJournalsLoading(true);
+    const all = await loadDict("journals");
     const rows = all.slice(offset, offset + PAGE_SIZE);
-    setAvailableReactions((prev) => (offset === 0 ? rows : [...prev, ...rows]));
-    setReactionsHasMore(offset + PAGE_SIZE < all.length);
-    setReactionsLoading(false);
+    setAvailableJournals((prev) => (offset === 0 ? rows : [...prev, ...rows]));
+    setJournalsHasMore(offset + PAGE_SIZE < all.length);
+    setJournalsLoading(false);
   }, [loadDict]);
 
   const fetchAuthorsForSelection = useCallback(async (offset: number) => {
@@ -211,12 +211,12 @@ export function PlusMenu({ onSelect, mode }: PlusMenuProps) {
       setDrawerCategory(cat);
       setDrawerSearch("");
       setDrawerSearchResults(null);
-      if (cat === "nuclides" && availableNuclides.length === 0) fetchNuclidesForSelection(0);
-      if (cat === "reactions" && availableReactions.length === 0) fetchReactionsForSelection(0);
+      if (cat === "categories" && availableCategories.length === 0) fetchCategoriesForSelection(0);
+      if (cat === "journals" && availableJournals.length === 0) fetchJournalsForSelection(0);
       if (cat === "authors" && availableAuthors.length === 0) fetchAuthorsForSelection(0);
     },
-    [availableNuclides.length, availableReactions.length, availableAuthors.length,
-     fetchNuclidesForSelection, fetchReactionsForSelection, fetchAuthorsForSelection],
+    [availableCategories.length, availableJournals.length, availableAuthors.length,
+     fetchCategoriesForSelection, fetchJournalsForSelection, fetchAuthorsForSelection],
   );
 
   // ---- server-side search with debounce ----
@@ -229,7 +229,7 @@ export function PlusMenu({ onSelect, mode }: PlusMenuProps) {
 
     setDrawerSearchLoading(true);
     const timer = setTimeout(async () => {
-      const all = await loadDict(drawerCategory === "nuclides" ? "nuclides" : drawerCategory === "reactions" ? "reactions" : "authors");
+      const all = await loadDict(drawerCategory === "categories" ? "categories" : drawerCategory === "journals" ? "journals" : "authors");
       const needle = drawerSearch.toLowerCase();
       setDrawerSearchResults(all.filter((r) => r.value.toLowerCase().includes(needle)).slice(0, PAGE_SIZE));
       setDrawerSearchLoading(false);
@@ -247,19 +247,19 @@ export function PlusMenu({ onSelect, mode }: PlusMenuProps) {
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_THRESHOLD;
     if (!nearBottom) return;
 
-    if (drawerCategory === "nuclides" && !nuclidesLoading && nuclidesHasMore) {
-      fetchNuclidesForSelection(availableNuclides.length);
-    } else if (drawerCategory === "reactions" && !reactionsLoading && reactionsHasMore) {
-      fetchReactionsForSelection(availableReactions.length);
+    if (drawerCategory === "categories" && !categoriesLoading && categoriesHasMore) {
+      fetchCategoriesForSelection(availableCategories.length);
+    } else if (drawerCategory === "journals" && !journalsLoading && journalsHasMore) {
+      fetchJournalsForSelection(availableJournals.length);
     } else if (drawerCategory === "authors" && !authorsLoading && authorsHasMore) {
       fetchAuthorsForSelection(availableAuthors.length);
     }
   }, [
     drawerCategory, drawerSearch,
-    nuclidesLoading, nuclidesHasMore, availableNuclides.length,
-    reactionsLoading, reactionsHasMore, availableReactions.length,
+    categoriesLoading, categoriesHasMore, availableCategories.length,
+    journalsLoading, journalsHasMore, availableJournals.length,
     authorsLoading, authorsHasMore, availableAuthors.length,
-    fetchNuclidesForSelection, fetchReactionsForSelection, fetchAuthorsForSelection,
+    fetchCategoriesForSelection, fetchJournalsForSelection, fetchAuthorsForSelection,
   ]);
 
   // ---- helpers ----
@@ -278,16 +278,16 @@ export function PlusMenu({ onSelect, mode }: PlusMenuProps) {
   // ---- what to render in the drawer ----
   const getDrawerItems = (): DbItem[] => {
     if (drawerSearchResults !== null) return drawerSearchResults;
-    if (drawerCategory === "nuclides") return availableNuclides;
-    if (drawerCategory === "reactions") return availableReactions;
+    if (drawerCategory === "categories") return availableCategories;
+    if (drawerCategory === "journals") return availableJournals;
     if (drawerCategory === "authors") return availableAuthors;
     return [];
   };
 
   const isDrawerLoading = () => {
     if (drawerSearchLoading) return true;
-    if (drawerCategory === "nuclides") return nuclidesLoading;
-    if (drawerCategory === "reactions") return reactionsLoading;
+    if (drawerCategory === "categories") return categoriesLoading;
+    if (drawerCategory === "journals") return journalsLoading;
     if (drawerCategory === "authors") return authorsLoading;
     return false;
   };
@@ -299,12 +299,12 @@ export function PlusMenu({ onSelect, mode }: PlusMenuProps) {
     }
 
     let prompt = "";
-    if (drawerCategory === "nuclides") {
-      prompt = `What papers in the NSR database discuss ${item.value}? Summarize their key findings and significance.`;
-    } else if (drawerCategory === "reactions") {
-      prompt = `What papers in the NSR database discuss ${item.value} reactions? Summarize their measurements, methods, and key results.`;
+    if (drawerCategory === "categories") {
+      prompt = `What notable preprints are in the ${item.value} category? Summarize their key findings and significance.`;
+    } else if (drawerCategory === "journals") {
+      prompt = `What preprints in the corpus were later published in ${item.value}? Summarize their key findings.`;
     } else if (drawerCategory === "authors") {
-      prompt = `What papers by ${item.value} are in the NSR database? Summarize their research contributions and key findings.`;
+      prompt = `What preprints by ${item.value} are in the corpus? Summarize their research contributions and key findings.`;
     }
     handleItemSelect(prompt);
   };
@@ -435,7 +435,7 @@ export function PlusMenu({ onSelect, mode }: PlusMenuProps) {
                 )}
               </>
             ) : (
-              /* DB-backed category (nuclides / reactions / authors) */
+              /* DB-backed category (categories / journals / authors) */
               <>
                 {getDrawerItems().map((item, i) => (
                   <button

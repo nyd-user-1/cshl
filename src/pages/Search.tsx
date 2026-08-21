@@ -10,14 +10,14 @@ import {
   Line, LineChart, Area, AreaChart, Pie, PieChart,
 } from "recharts";
 import { ELEMENTS } from "@/lib/structure";
-import { useNsrSearch, type SearchMode } from "@/hooks/useNsrSearch";
+import { useRecordSearch, type SearchMode } from "@/hooks/useRecordSearch";
 import { SearchBox } from "@/components/SearchInput";
 import { RecordDrawer } from "@/components/RecordDrawer";
 import { RecordDialog } from "@/components/RecordDialog";
 import { PanelChat } from "@/components/PanelChat";
 import { useAppPanel } from "@/hooks/useAppPanel";
 import { usePrefetchRecord } from "@/hooks/useS2Enrichment";
-import type { NsrRecord } from "@/types/nsr";
+import type { CorpusRecord } from "@/types/record";
 
 /* ------------------------------------------------------------------ */
 /*  Stat helpers                                                        */
@@ -29,8 +29,8 @@ interface CountEntry {
 }
 
 function countField(
-  records: NsrRecord[],
-  getter: (r: NsrRecord) => string[] | null | undefined,
+  records: CorpusRecord[],
+  getter: (r: CorpusRecord) => string[] | null | undefined,
 ): CountEntry[] {
   const map = new Map<string, number>();
   for (const r of records) {
@@ -45,7 +45,7 @@ function countField(
   );
 }
 
-function countYears(records: NsrRecord[]): CountEntry[] {
+function countYears(records: CorpusRecord[]): CountEntry[] {
   const map = new Map<string, number>();
   for (const r of records) {
     if (r.pub_year) {
@@ -71,7 +71,7 @@ function extractJournal(ref: string | null): string | null {
   return cleaned.length >= 3 ? cleaned : null;
 }
 
-function countJournals(records: NsrRecord[]): CountEntry[] {
+function countJournals(records: CorpusRecord[]): CountEntry[] {
   const map = new Map<string, number>();
   for (const r of records) {
     const j = extractJournal(r.reference);
@@ -102,7 +102,7 @@ const TYPE_LABEL: Record<string, string> = {
   JOURNAL: "Journal", PREPRINT: "Preprint", REPORT: "Report", CONFERENCE: "Conference",
   THESIS: "Thesis", PRIVATE_COMMUNICATION: "Private comm.", BOOK: "Book", UNKNOWN: "Unknown",
 };
-const typeOf = (r: NsrRecord) => r.reference_type ?? "UNKNOWN";
+const typeOf = (r: CorpusRecord) => r.reference_type ?? "UNKNOWN";
 const labelFor = (map: Record<string, string>) => (v: string) => map[v] ?? v;
 
 /** Ensure every known value appears (count 0 when absent); observed order first, then the rest. */
@@ -123,7 +123,7 @@ function parseNuclide(code: string): { z: number; n: number; a: number; symbol: 
 }
 
 /** Top-cited records in the set (key → cites); records without a count are skipped. */
-function countCitations(records: NsrRecord[]): CountEntry[] {
+function countCitations(records: CorpusRecord[]): CountEntry[] {
   return records
     .filter((r) => (r.citation_count ?? 0) > 0)
     .map((r) => ({ value: r.key_number, count: r.citation_count as number }))
@@ -136,7 +136,7 @@ const RAMP = ["#FF9933", "#E0801F", "#B8641A", "#8B7332", "#6B5A28", "#4A4020", 
 const decadeOf = (y: number) => `${Math.floor(y / 10) * 10}s`;
 
 /** rows: one per decade, columns: one per series key (stacked area input) */
-function seriesByDecade(records: NsrRecord[], getter: (r: NsrRecord) => string[] | null | undefined, topN = 5) {
+function seriesByDecade(records: CorpusRecord[], getter: (r: CorpusRecord) => string[] | null | undefined, topN = 5) {
   const totals = new Map<string, number>();
   for (const r of records) for (const k of getter(r) ?? []) totals.set(k, (totals.get(k) ?? 0) + 1);
   const keys = [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN).map(([k]) => k);
@@ -179,7 +179,7 @@ const EMPTY_FILTERS: Filters = {
   types: new Set(),
 };
 
-function applyFilters(records: NsrRecord[], filters: Filters): NsrRecord[] {
+function applyFilters(records: CorpusRecord[], filters: Filters): CorpusRecord[] {
   return records.filter((r) => {
     if (filters.years.size > 0 && !filters.years.has(String(r.pub_year))) return false;
     if (filters.nuclides.size > 0) {
@@ -457,7 +457,7 @@ function CumulativeChart({ entries, onClose }: { entries: CountEntry[]; onClose:
 }
 
 /** Line: relevance score by rank position — how fast the match quality falls off. */
-function RelevanceChart({ records, onClose }: { records: NsrRecord[]; onClose: () => void }) {
+function RelevanceChart({ records, onClose }: { records: CorpusRecord[]; onClose: () => void }) {
   const data = records.filter((r) => r.similarity != null).map((r, i) => ({ rank: i + 1, score: Math.round((r.similarity as number) * 100), key: r.key_number }));
   if (data.length < 5) return null;
   return (
@@ -475,7 +475,7 @@ function RelevanceChart({ records, onClose }: { records: NsrRecord[]; onClose: (
 
 /** Stacked area: a categorical field across decades (topics, reference types). */
 function DecadeAreaChart({ icon, title, records, getter, label, onClose }: {
-  icon: React.ReactNode; title: string; records: NsrRecord[]; getter: (r: NsrRecord) => string[] | null | undefined; label: (v: string) => string; onClose: () => void;
+  icon: React.ReactNode; title: string; records: CorpusRecord[]; getter: (r: CorpusRecord) => string[] | null | undefined; label: (v: string) => string; onClose: () => void;
 }) {
   const { keys, rows } = seriesByDecade(records, getter);
   if (rows.length < 3 || keys.length === 0) return null;
@@ -524,7 +524,7 @@ function DoughnutChart({ icon, title, entries, activeValues, onToggle, label, on
 }
 
 /** Scatter: publication year vs citations; click a point to open the record. */
-function CitationScatter({ records, onOpen, onClose }: { records: NsrRecord[]; onOpen: (key: string) => void; onClose: () => void }) {
+function CitationScatter({ records, onOpen, onClose }: { records: CorpusRecord[]; onOpen: (key: string) => void; onClose: () => void }) {
   const pts = records.filter((r) => r.pub_year && (r.citation_count ?? 0) > 0).map((r) => ({ year: r.pub_year, cites: r.citation_count as number, key: r.key_number, title: r.title }));
   if (pts.length < 3) return null;
   return (
@@ -555,7 +555,7 @@ function ResultRow({
   onChat,
   onHover,
 }: {
-  record: NsrRecord;
+  record: CorpusRecord;
   first: boolean;
   onClick: () => void;
   onDetail: () => void;
@@ -649,7 +649,7 @@ export default function Search() {
   const [inputValue, setInputValue] = useState(urlQuery);
   const [mode, setMode] = useState<SearchMode>("hybrid");
   const [drawerIndex, setDrawerIndex] = useState(-1);
-  const [detailRecord, setDetailRecord] = useState<NsrRecord | null>(null);
+  const [detailRecord, setDetailRecord] = useState<CorpusRecord | null>(null);
   const { openPanel } = useAppPanel();
   const prefetchRecord = usePrefetchRecord();
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
@@ -662,7 +662,7 @@ export default function Search() {
     setHiddenWidgets(new Set());
   }, [urlQuery]);
 
-  const { data, isLoading } = useNsrSearch(urlQuery, mode);
+  const { data, isLoading } = useRecordSearch(urlQuery, mode);
   const records = useMemo(() => data?.records ?? [], [data]);
 
   // Apply client-side filters
@@ -826,7 +826,7 @@ export default function Search() {
               {hasActiveFilters(filters) && !isLoading && (
                 <button
                   onClick={() => setFilters(EMPTY_FILTERS)}
-                  className="text-sm text-nuclear hover:underline shrink-0"
+                  className="text-sm text-brand hover:underline shrink-0"
                 >
                   Clear filters
                 </button>
@@ -878,7 +878,7 @@ export default function Search() {
                     onDragLeave={() => setOverId((o) => (o === id ? null : o))}
                     onDrop={(e) => { e.preventDefault(); moveWidget(dragId.current, id); dragId.current = null; setOverId(null); }}
                     onDragEnd={() => { dragId.current = null; setOverId(null); }}
-                    className={`${w.full ? "w-full min-w-[222px]" : "flex-1 min-w-[222px] max-w-[300px]"} rounded-lg transition-shadow ${overId === id ? "ring-2 ring-nuclear/60" : ""}`}
+                    className={`${w.full ? "w-full min-w-[222px]" : "flex-1 min-w-[222px] max-w-[300px]"} rounded-lg transition-shadow ${overId === id ? "ring-2 ring-brand/60" : ""}`}
                   >
                     {w.node}
                   </div>

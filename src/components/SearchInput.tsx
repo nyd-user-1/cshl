@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { ArrowUp, ChevronDown, X, Loader2, Search } from "lucide-react";
-import type { SearchMode } from "@/hooks/useNsrSearch";
+import type { SearchMode } from "@/hooks/useRecordSearch";
 import { PlusMenu } from "@/components/PlusMenu";
 
 /* ------------------------------------------------------------------ */
@@ -14,7 +14,7 @@ interface SimpleSearchInputProps {
   placeholder?: string;
 }
 
-export function SearchInput({ value, onChange, isLoading, placeholder = "Search NSR records..." }: SimpleSearchInputProps) {
+export function SearchInput({ value, onChange, isLoading, placeholder = "Search preprints..." }: SimpleSearchInputProps) {
   return (
     <div className="relative w-full">
       <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -27,7 +27,7 @@ export function SearchInput({ value, onChange, isLoading, placeholder = "Search 
       />
       {isLoading && (
         <div className="absolute right-4 top-1/2 -translate-y-1/2">
-          <div className="h-4 w-4 animate-spin rounded-full border-2 border-nuclear border-t-transparent" />
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand border-t-transparent" />
         </div>
       )}
     </div>
@@ -136,7 +136,7 @@ export function SearchBox({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Search the Nuclear Science References database..."
+            placeholder="Search the bioRxiv & medRxiv preprint corpus..."
             rows={1}
             className="min-h-[40px] w-full resize-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 p-0 pr-8 placeholder:text-muted-foreground/60 text-base text-foreground outline-none"
           />

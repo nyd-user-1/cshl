@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { NsrRecord } from "@/types/nsr";
+import type { CorpusRecord } from "@/types/record";
 
 interface Filters {
   year?: number;
@@ -9,7 +9,7 @@ interface Filters {
 }
 
 interface PaginatedResult {
-  records: NsrRecord[];
+  records: CorpusRecord[];
   totalCount: number;
 }
 
@@ -20,11 +20,11 @@ async function fetchRecords(filters: Filters): Promise<PaginatedResult> {
   if (filters.publishedOnly) params.set("published", "1");
   const res = await fetch(`/api/records?${params}`);
   if (!res.ok) throw new Error(`records ${res.status}`);
-  const data = (await res.json()) as { records: NsrRecord[]; totalCount: number };
+  const data = (await res.json()) as { records: CorpusRecord[]; totalCount: number };
   return { records: data.records ?? [], totalCount: data.totalCount ?? 0 };
 }
 
-export function useNsrRecords(filters: Filters = {}) {
+export function useRecords(filters: Filters = {}) {
   return useQuery({
     queryKey: ["preprints", filters.year ?? "all", filters.publishedOnly ?? false, filters.page ?? 1, filters.pageSize ?? 99],
     queryFn: () => fetchRecords(filters),
