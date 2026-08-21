@@ -125,18 +125,45 @@ def split(papers, depth, max_depth=5):
         else:      groups[max(fs, key=lambda f: (freq[f], f))].append(p)
     return groups
 
-def by_year(papers):
+import re
+_DATED = re.compile(r"^(\d{4})\.(\d{2})\.")
+def _period(p, halves):
+    """Time key. bioRxiv/medRxiv slugs from 2020 on encode the submission date
+    (2024.04.07.24305438), so a year band that is still too big can be halved into
+    something a reader still recognises -- '2025 H1' -- rather than shredded by md5."""
+    m = _DATED.match(p)
+    if halves and m:
+        return (int(m.group(1)), 1 if int(m.group(2)) <= 6 else 2)
+    return (year.get(p) or 0, 0)
+
+def by_year(papers, halves=False):
     g = defaultdict(list)
-    for p in papers: g[year.get(p) or 0].append(p)
-    # merge adjacent years into bands that fit
+    for p in papers: g[_period(p, halves)].append(p)
     bands, cur, lo = [], [], None
-    for y in sorted(g):
-        if lo is None: lo = y
-        cur += g[y]
+    for k in sorted(g):
+        if lo is None: lo = k
+        cur += g[k]
         if len(cur) >= A.max_room * 0.75:
-            bands.append(((lo, y), cur)); cur, lo = [], None
+            bands.append(((lo, k), cur)); cur, lo = [], None
     if cur: bands.append(((lo, max(g)), cur))
     return bands
+
+def time_bands(papers):
+    """Year bands; any band still over the ceiling is retried at half-year resolution."""
+    out, over = [], []
+    for k, band in by_year(papers, halves=False):
+        (out if len(band) <= A.max_room else over).append((k, band))
+    for k, band in over:
+        for k2, b2 in by_year(band, halves=True):
+            out.append((k2, b2))
+    return out
+
+def fmt_span(span):
+    def one(k):
+        y, h = (k if isinstance(k, (list, tuple)) else (k, 0))
+        return f"{y} H{h}" if h else f"{y}"
+    a, b = one(span[0]), one(span[1])
+    return a if a == b else f"{a}\u2013{b}"
 
 def build(category, papers):
     rooms, unplaced = [], []
@@ -145,7 +172,7 @@ def build(category, papers):
             rooms.append({"axis": "mesh" if path else "category", "facet": path,
                           "label": pretty(path) if path else None, "papers": ps}); return
         if depth > 5:
-            for (lo, hi), band in by_year(ps):
+            for (lo, hi), band in time_bands(ps):
                 if len(band) <= A.max_room:
                     rooms.append({"axis": "year", "facet": path, "label": pretty(path) if path else None,
                                   "years": [lo, hi], "papers": band})
@@ -162,7 +189,7 @@ def build(category, papers):
                 rooms.append({"axis": "no-mesh-facet", "facet": path,
                               "label": (pretty(path) + " · " if path else "") + "unclassified", "papers": nf})
             else:
-                for (lo, hi), band in by_year(nf):
+                for (lo, hi), band in time_bands(nf):
                     if len(band) <= A.max_room:
                         rooms.append({"axis": "year", "facet": path,
                                       "label": (pretty(path) + " · " if path else "") + "unclassified",
@@ -192,7 +219,7 @@ for c, ps in sorted(by_cat.items(), key=lambda kv: -len(kv[1])):
         r["category"] = c
         r["name"] = (c.title() if c != "__NO_CATEGORY__" else "Uncategorised") + \
                     (f" · {r['label']}" if r.get("label") else "") + \
-                    (f" ({r['years'][0]}–{r['years'][1]})" if r.get("years") else "")
+                    (f" ({fmt_span(r['years'])})" if r.get("years") else "")
     # Disambiguate collisions. Several distinct tree nodes can resolve to the same nearest
     # named ancestor, which produced three separate rooms all called "Neuroscience · Neurons"
     # -- unusable in a navigation UI. Distinguish them by the descriptor that most

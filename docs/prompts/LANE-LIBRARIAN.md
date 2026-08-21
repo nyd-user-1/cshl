@@ -262,3 +262,44 @@ threshold, so a badly-chosen threshold could only be corrected by **re-running t
 Patched `cmd_infer` on the running box to persist the full top-20 probability vector, so the
 threshold becomes a local, free decision. Verified `PATCH_OK` with an AST parse before leaving
 it. The infer stage is ~1.5 h downstream of the patch, so nothing in flight was disturbed.
+
+### Measured throughput (replaces the estimate)
+
+`7.2 it/s` at batch 32, GPU 96% utilised, 22.7 GB of 46 GB resident. 230 samples/s.
+
+| stage | steps | measured / projected |
+|---|---|---|
+| length-grouping pass (one-off, CPU) | — | 190 s |
+| cshl-category, 1 epoch | 8,122 | ~19 min |
+| cshl-MESH-tagger, 3 epochs | 9,630 | ~30 min (4,920-way BCE head) |
+
+Revised total ~1.3 h against the 2.1 h estimate, so ~**$3.0** rather than $4.70. Two notes
+against the estimate, both mine to own: the box is only half-used at batch 32 (22.7 of 46 GB)
+— batch 64 would have been free and roughly 1.5× faster, and I sized conservatively for the
+24 GB fallback types instead of sizing for the box I got and letting the OOM loop handle the
+fallback. Not worth a restart; worth recording so the next run starts at 64.
+
+### Room map, "before" baseline (observed MeSH only) — every paper placed
+
+Built the room map against observed MeSH alone first, so the tagger's contribution is
+measurable rather than asserted. First pass left **36,212 papers unplaced**: three buckets
+(neuroscience ×2, bioinformatics ×1) whose members carry no MeSH at all and whose *single
+year band* still exceeded 10,000.
+
+Fixed on the named axis rather than by shredding: **91.7% of slugs encode their submission
+date** (`2024.04.07.24305438`), so a year band that overflows is retried at half-year
+resolution — "Neuroscience · unclassified (2025 H1)" is still a room a person can read.
+An md5 shard would not be.
+
+| | first pass | with half-year fallback |
+|---|---|---|
+| rooms | 164 | **170** |
+| placed | 397,237 | **433,449** |
+| unplaced | 36,212 | **0** |
+| over ceiling | 0 | **0** |
+
+Also fixed: three separate rooms were all named "Neuroscience · Neurons" because distinct
+tree nodes resolve to the same nearest named ancestor. Unusable in a navigation UI. They are
+now distinguished by the descriptor that separates each from its namesakes —
+"Neurons — axons", "— cerebellum", "— hypothalamus" — computed within the collision group,
+not against the corpus. Zero duplicate names remain.
