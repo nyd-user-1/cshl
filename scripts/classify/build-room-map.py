@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""
+LANE-LIBRARIAN — the room map.
+
+A "room" is a scoped haystack a subject agent searches. The product bet (BEDROCK-KB-BAKEOFF,
+and D9's curve when it exists) is that our stack wins inside small rooms, so every room must
+come in under a size ceiling. Category alone does not achieve that: 18 of 76 categories exceed
+10,000 papers and neuroscience is 62,183.
+
+Splitting axis, in order of preference (the brief's "MeSH subtree first, year only as fallback"):
+  1. MeSH tree facet, deepening until the room fits
+  2. year band
+  3. nothing else -- a room that still will not fit after 1 and 2 is REPORTED, not md5-shredded,
+     because "Neuroscience - shard 3" is not a name a researcher recognises.
+
+Check tags are excluded from the facet axis. The most frequent MeSH descriptors in this corpus
+are Humans (56.6%), Animals (36.3%), Female (22.8%), Male (22.4%), Mice (15.2%) -- NLM check
+tags describing the study population, not the subject. Faceting on them yields a "Humans" room
+holding half the corpus. They live in MeSH tree M, under B01.050 (Animals), or carry no tree
+number at all (Female, Male), so the exclusion is structural rather than a hand-written list.
+"""
+import json, os, sys, argparse
+from collections import defaultdict, Counter
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+MINE = f"{ROOT}/data/mine"
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--max-room", type=int, default=10000)
+ap.add_argument("--predictions", default="")     # mesh.predictions.jsonl(.gz) from the box
+ap.add_argument("--out", default=f"{ROOT}/data/classify/room-map.json")
+ap.add_argument("--min-room", type=int, default=150)  # below this, merge back into the parent
+A = ap.parse_args()
+
+def log(*a): print("[rooms]", *a, flush=True)
+
+# ---------------------------------------------------------------- MeSH tree
+name, trees = {}, {}
+for line in open(f"{MINE}/mesh_dict.jsonl"):
+    d = json.loads(line)
+    name[d["ui"]] = d["name"]; trees[d["ui"]] = d.get("tree_numbers") or []
+
+def is_check_tag(ui):
+    tn = trees.get(ui, [])
+    if not tn: return True                                   # Female, Male: no tree at all
+    return all(t.startswith("M") or t.startswith("B01.050") or t[0] in "VZ" for t in tn)
+
+CHECK = {ui for ui in trees if is_check_tag(ui)}
+log(f"mesh descriptors {len(trees)}, treated as check tags / non-topical: {len(CHECK)}")
+
+# human-readable facet names, from the descriptor that OWNS the node (its whole tree number)
+facet_name = {}
+for ui, tn in trees.items():
+    for t in tn:
+        if ui not in CHECK: facet_name.setdefault(t, name[ui])
+
+def facets_of(ui, depth):
+    """tree prefixes at `depth` levels, e.g. depth 2 -> 'C04', depth 3 -> 'C04.588'."""
+    out = set()
+    for t in trees.get(ui, []):
+        parts = t.split(".")
+        if len(parts) >= depth: out.add(".".join(parts[:depth]))
+        elif parts: out.add(".".join(parts))
+    return out
+
+def pretty(f):
+    n = facet_name.get(f)
+    if n: return n
+    # walk up to the nearest named ancestor
+    parts = f.split(".")
+    while parts:
+        parts.pop()
+        cand = ".".join(parts)
+        if cand in facet_name: return facet_name[cand] + " (broader)"
+    return {"A":"Anatomy","B":"Organisms","C":"Diseases","D":"Chemicals & drugs",
+            "E":"Techniques","F":"Psychiatry & psychology","G":"Phenomena & processes",
+            "H":"Disciplines","I":"Society","J":"Technology & food","K":"Humanities",
+            "L":"Information science","N":"Health care"}.get(f[0], f)
+
+# ---------------------------------------------------------------- corpus + labels
+log("reading corpus")
+cat, year, labels = {}, {}, defaultdict(list)
+for line in open(f"{MINE}/corpus-text.jsonl"):
+    d = json.loads(line)
+    cat[d["key"]] = d.get("category"); year[d["key"]] = d.get("year")
+
+observed = set()
+for line in open(f"{MINE}/mesh.jsonl"):
+    d = json.loads(line)
+    m = d.get("mesh") or []
+    if m:
+        observed.add(d["key"])
+        labels[d["key"]] = [x["ui"] for x in m if isinstance(x, dict) and "ui" in x]
+
+n_pred = 0
+if A.predictions:
+    import gzip
+    op = gzip.open if A.predictions.endswith(".gz") else open
+    for line in op(A.predictions, "rt"):
+        d = json.loads(line)
+        if d["slug"] in observed: continue      # never overwrite ground truth
+        labels[d["slug"]] = [x["ui"] for x in d.get("predicted", [])]
+        n_pred += 1
+log(f"papers {len(cat)}  observed-mesh {len(observed)}  predicted-mesh {n_pred}")
+
+by_cat = defaultdict(list)
+for k, c in cat.items(): by_cat[c or "__NO_CATEGORY__"].append(k)
+
+# ---------------------------------------------------------------- the split
+def split(papers, depth, max_depth=5):
+    """Partition `papers` by their primary MeSH facet at `depth`. Each paper lands in exactly
+    one facet -- rooms are a partition, so 'papers without a room' is a meaningful count."""
+    freq = Counter()
+    pf = {}
+    for p in papers:
+        fs = set()
+        for ui in labels.get(p, []):
+            if ui in CHECK: continue
+            fs |= facets_of(ui, depth)
+        pf[p] = fs; freq.update(fs)
+    groups = defaultdict(list)
+    for p in papers:
+        fs = pf[p]
+        if not fs: groups["__NO_FACET__"].append(p)
+        else:      groups[max(fs, key=lambda f: (freq[f], f))].append(p)
+    return groups
+
+def by_year(papers):
+    g = defaultdict(list)
+    for p in papers: g[year.get(p) or 0].append(p)
+    # merge adjacent years into bands that fit
+    bands, cur, lo = [], [], None
+    for y in sorted(g):
+        if lo is None: lo = y
+        cur += g[y]
+        if len(cur) >= A.max_room * 0.75:
+            bands.append(((lo, y), cur)); cur, lo = [], None
+    if cur: bands.append(((lo, max(g)), cur))
+    return bands
+
+def build(category, papers):
+    rooms, unplaced = [], []
+    def rec(ps, depth, path):
+        if len(ps) <= A.max_room:
+            rooms.append({"axis": "mesh" if path else "category", "facet": path,
+                          "label": pretty(path) if path else None, "papers": ps}); return
+        if depth > 5:
+            for (lo, hi), band in by_year(ps):
+                if len(band) <= A.max_room:
+                    rooms.append({"axis": "year", "facet": path, "label": pretty(path) if path else None,
+                                  "years": [lo, hi], "papers": band})
+                else:
+                    unplaced.append({"facet": path, "years": [lo, hi], "n": len(band), "papers": band})
+            return
+        groups = split(ps, depth)
+        nf = groups.pop("__NO_FACET__", [])
+        # a facet that captured essentially everything cannot split -- go deeper on it directly
+        for f, g in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            rec(g, depth + 1, f)
+        if nf:
+            if len(nf) <= A.max_room:
+                rooms.append({"axis": "no-mesh-facet", "facet": path,
+                              "label": (pretty(path) + " · " if path else "") + "unclassified", "papers": nf})
+            else:
+                for (lo, hi), band in by_year(nf):
+                    if len(band) <= A.max_room:
+                        rooms.append({"axis": "year", "facet": path,
+                                      "label": (pretty(path) + " · " if path else "") + "unclassified",
+                                      "years": [lo, hi], "papers": band})
+                    else:
+                        unplaced.append({"facet": path or category, "years": [lo, hi], "n": len(band), "papers": band})
+    rec(papers, 2, "")
+    return rooms, unplaced
+
+placed_hint = len(cat)
+log(f"building rooms, ceiling {A.max_room}")
+all_rooms, all_unplaced = [], []
+for c, ps in sorted(by_cat.items(), key=lambda kv: -len(kv[1])):
+    rooms, unplaced = build(c, ps)
+    # merge slivers back so we do not ship 40-paper "rooms"
+    small = [r for r in rooms if len(r["papers"]) < A.min_room]
+    big = [r for r in rooms if len(r["papers"]) >= A.min_room]
+    if small:
+        merged = [p for r in small for p in r["papers"]]
+        target = min(big, key=lambda r: len(r["papers"])) if big else None
+        if target and len(target["papers"]) + len(merged) <= A.max_room:
+            target["papers"] += merged
+        else:
+            big.append({"axis": "residual", "facet": "", "label": "other", "papers": merged})
+        rooms = big
+    for r in rooms:
+        r["category"] = c
+        r["name"] = (c.title() if c != "__NO_CATEGORY__" else "Uncategorised") + \
+                    (f" · {r['label']}" if r.get("label") else "") + \
+                    (f" ({r['years'][0]}–{r['years'][1]})" if r.get("years") else "")
+    # Disambiguate collisions. Several distinct tree nodes can resolve to the same nearest
+    # named ancestor, which produced three separate rooms all called "Neuroscience · Neurons"
+    # -- unusable in a navigation UI. Distinguish them by the descriptor that most
+    # distinguishes each room from its namesakes, not by a shard number.
+    seen = Counter(r["name"] for r in rooms)
+    dupes = {n for n, k in seen.items() if k > 1}
+    for dn in dupes:
+        grp = [r for r in rooms if r["name"] == dn]
+        prof = []
+        for r in grp:
+            c2 = Counter()
+            for p in r["papers"]:
+                for ui in labels.get(p, []):
+                    if ui not in CHECK: c2[ui] += 1
+            prof.append((c2, max(len(r["papers"]), 1)))
+        for i, r in enumerate(grp):
+            mine, n_mine = prof[i]
+            others = Counter(); n_oth = 0
+            for j, (c2, n2) in enumerate(prof):
+                if j != i: others += c2; n_oth += n2
+            n_oth = max(n_oth, 1)
+            # the descriptor this room has that its namesakes do NOT -- a name a reader can act on
+            cand = [(ui, mine[ui] / n_mine - others[ui] / n_oth) for ui in mine
+                    if mine[ui] >= 5 and name.get(ui, "").lower() not in dn.lower()]
+            if cand:
+                best = max(cand, key=lambda kv: kv[1])[0]
+                r["name"] = f"{dn} — {name[best].lower()}"
+            else:
+                r["name"] = f"{dn} [{r['facet']}]"
+    all_rooms += rooms
+    for u in unplaced: u["category"] = c
+    all_unplaced += unplaced
+
+placed = sum(len(r["papers"]) for r in all_rooms)
+unpl = sum(u["n"] for u in all_unplaced)
+sizes = sorted((len(r["papers"]) for r in all_rooms), reverse=True)
+log(f"rooms {len(all_rooms)}  placed {placed}  unplaced {unpl}  total {placed+unpl} (corpus {len(cat)})")
+log(f"largest {sizes[:5]}  smallest {sizes[-5:]}  over ceiling: {sum(1 for s in sizes if s > A.max_room)}")
+
+out = {"max_room": A.max_room, "min_room": A.min_room,
+       "predictions_used": bool(A.predictions), "n_predicted": n_pred,
+       "corpus": len(cat), "placed": placed, "unplaced": unpl,
+       "rooms": [{"name": r["name"], "category": r["category"], "axis": r["axis"],
+                  "facet": r["facet"], "years": r.get("years"), "n": len(r["papers"]),
+                  "n_predicted_labels": sum(1 for p in r["papers"] if p not in observed)}
+                 for r in sorted(all_rooms, key=lambda r: (r["category"], -len(r["papers"])))],
+       "unplaced": [{k: v for k, v in u.items() if k != "papers"} for u in all_unplaced]}
+json.dump(out, open(A.out, "w"), indent=1)
+with open(A.out.replace(".json", ".members.jsonl"), "w") as w:
+    for r in all_rooms:
+        w.write(json.dumps({"room": r["name"], "slugs": r["papers"]}) + "\n")
+log(f"wrote {A.out}")
