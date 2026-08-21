@@ -12,7 +12,7 @@ import {
 import { ELEMENTS } from "@/lib/structure";
 import { useRecordSearch, type SearchMode } from "@/hooks/useRecordSearch";
 import { SearchBox } from "@/components/SearchInput";
-import { RecordDrawer } from "@/components/RecordDrawer";
+import { RecordPanel } from "@/components/RecordPanel";
 import { RecordDialog } from "@/components/RecordDialog";
 import { PanelChat } from "@/components/PanelChat";
 import { useAppPanel } from "@/hooks/useAppPanel";
@@ -648,7 +648,7 @@ export default function Search() {
   const urlQuery = searchParams.get("q") ?? "";
   const [inputValue, setInputValue] = useState(urlQuery);
   const [mode, setMode] = useState<SearchMode>("hybrid");
-  const [drawerIndex, setDrawerIndex] = useState(-1);
+  // Record detail — the app-shell push panel, same as References.
   const [detailRecord, setDetailRecord] = useState<CorpusRecord | null>(null);
   const { openPanel } = useAppPanel();
   const prefetchRecord = usePrefetchRecord();
@@ -735,9 +735,19 @@ export default function Search() {
 
   const hasQuery = urlQuery.length >= 3;
 
+  const showRecord = (index: number) => {
+    const rec = filteredRecords[index];
+    if (!rec) return;
+    openPanel({
+      title: rec.title,
+      content: <RecordPanel record={rec} onOpenRelated={openByKey} />,
+      onPrev: index > 0 ? () => showRecord(index - 1) : undefined,
+      onNext: index < filteredRecords.length - 1 ? () => showRecord(index + 1) : undefined,
+    });
+  };
   const openByKey = (key: string) => {
     const i = filteredRecords.findIndex((r) => r.key_number === key);
-    if (i >= 0) setDrawerIndex(i);
+    if (i >= 0) showRecord(i);
   };
   const widgets: Record<string, { full?: boolean; node: React.ReactNode }> = {
     yearChart: { full: true, node: <YearBarChart entries={yearEntries} activeYears={filters.years} onToggle={(v) => toggleSet("years", v)} onClose={() => hideWidget("yearChart")} /> },
@@ -784,8 +794,6 @@ export default function Search() {
     journalEntries.length > 0 ||
     authorEntries.length > 0 ||
     subjectEntries.length > 0;
-
-  const drawerRecords = filteredRecords;
 
   return (
     <div className="h-full px-4 pt-4 pb-6 overflow-x-hidden">
@@ -843,7 +851,7 @@ export default function Search() {
                     key={record.id}
                     record={record}
                     first={i === 0}
-                    onClick={() => setDrawerIndex(i)}
+                    onClick={() => showRecord(i)}
                     onDetail={() => setDetailRecord(record)}
                     onHover={() => prefetchRecord(record.id)}
                     onChat={() => openPanel({
@@ -894,16 +902,6 @@ export default function Search() {
       {/* Record detail dialog (stand-in for a /record page) */}
       <RecordDialog record={detailRecord} open={detailRecord !== null} onOpenChange={(o) => !o && setDetailRecord(null)} />
 
-      {/* Record drawer */}
-      <RecordDrawer
-        records={drawerRecords}
-        currentIndex={drawerIndex}
-        open={drawerIndex >= 0}
-        onOpenChange={(open) => {
-          if (!open) setDrawerIndex(-1);
-        }}
-        onNavigate={setDrawerIndex}
-      />
     </div>
   );
 }

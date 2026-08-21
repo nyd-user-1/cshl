@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router-dom";
 import { ArrowUpDown, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
@@ -12,7 +12,8 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useRecords } from "@/hooks/useRecords";
 import { useStructuredSearch } from "@/hooks/useStructuredSearch";
 import { useFeedEmitter } from "@/hooks/useFeedEmitter";
-import { RecordDrawer } from "@/components/RecordDrawer";
+import { RecordPanel } from "@/components/RecordPanel";
+import { useAppPanel } from "@/hooks/useAppPanel";
 import type { CorpusRecord } from "@/types/record";
 
 const CARDS_PER_PAGE = 99;
@@ -122,9 +123,8 @@ export default function References({ server }: { server?: "biorxiv" | "medrxiv" 
   const [searchMode, setSearchMode] = useState<SearchMode>(initialMode);
 
   // Structured search inputs
-  // Record detail drawer
-  const [drawerIndex, setDrawerIndex] = useState(0);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Record detail — the app-shell push panel (see components/AppPanel).
+  const { openPanel } = useAppPanel();
 
   const [categoryInput, setCategoryInput] = useState(initialCategory);
   const [journalInput, setJournalInput] = useState(initialJournal);
@@ -338,6 +338,9 @@ export default function References({ server }: { server?: "biorxiv" | "medrxiv" 
     return records.slice(start, start + CARDS_PER_PAGE);
   }, [records, currentPage, isBrowsing]);
 
+  const pagedRecordsRef = useRef<CorpusRecord[] | null>(null);
+  pagedRecordsRef.current = pagedRecords;
+
   const [visibleCount, setVisibleCount] = useState(20);
   const [renderCompletedAt, setRenderCompletedAt] = useState<number | null>(null);
   const searchRequestStartRef = useRef<number | null>(null);
@@ -379,6 +382,28 @@ export default function References({ server }: { server?: "biorxiv" | "medrxiv" 
 
   // Reset page when data source changes
   useEffect(() => { setPage(1); }, [debouncedQuery, yearFilter, structuredParams]);
+
+  // Opening a record pushes the panel; prev/next walk this page of results, and
+  // a related-paper click swaps the panel to that paper without closing it.
+  const showRecord = useCallback((index: number) => {
+    const list = pagedRecordsRef.current ?? [];
+    const rec = list[index];
+    if (!rec) return;
+    openPanel({
+      title: rec.title,
+      content: (
+        <RecordPanel
+          record={rec}
+          onOpenRelated={(key) => {
+            const i = (pagedRecordsRef.current ?? []).findIndex((r) => r.key_number === key);
+            if (i >= 0) showRecord(i);
+          }}
+        />
+      ),
+      onPrev: index > 0 ? () => showRecord(index - 1) : undefined,
+      onNext: index < list.length - 1 ? () => showRecord(index + 1) : undefined,
+    });
+  }, [openPanel]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -696,11 +721,7 @@ export default function References({ server }: { server?: "biorxiv" | "medrxiv" 
                 record={record}
                 searchQuery={isSearching ? debouncedQuery : undefined}
                 searchMode={searchMode}
-                onClick={() => {
-                  const idx = pagedRecords?.indexOf(record) ?? 0;
-                  setDrawerIndex(idx);
-                  setDrawerOpen(true);
-                }}
+                onClick={() => showRecord(pagedRecords?.indexOf(record) ?? 0)}
               />
             ))}
           </div>
@@ -716,13 +737,6 @@ export default function References({ server }: { server?: "biorxiv" | "medrxiv" 
         )}
       </div>
 
-      <RecordDrawer
-        records={pagedRecords ?? []}
-        currentIndex={drawerIndex}
-        open={drawerOpen}
-        onOpenChange={setDrawerOpen}
-        onNavigate={setDrawerIndex}
-      />
     </div>
   );
 }

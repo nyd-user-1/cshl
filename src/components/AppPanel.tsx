@@ -23,6 +23,8 @@ export function AppPanel({
   detailHref,
   prevHref,
   nextHref,
+  onPrev,
+  onNext,
 }: {
   /** the `#app-panel-root` element (AppLayout owns it via ref) */
   root: Element | null;
@@ -38,10 +40,13 @@ export function AppPanel({
   detailHref?: string;
   prevHref?: string;
   nextHref?: string;
+  /** index-based navigation (the record list): callbacks instead of hrefs */
+  onPrev?: () => void;
+  onNext?: () => void;
 }) {
   if (!root) return null;
   return createPortal(
-    <PanelFrame resetKey={resetKey} open={open} onClose={onClose} title={title} footer={footer} defaultExpanded={defaultExpanded} bodyClass={bodyClass} detailHref={detailHref} prevHref={prevHref} nextHref={nextHref}>
+    <PanelFrame resetKey={resetKey} open={open} onClose={onClose} title={title} footer={footer} defaultExpanded={defaultExpanded} bodyClass={bodyClass} detailHref={detailHref} prevHref={prevHref} nextHref={nextHref} onPrev={onPrev} onNext={onNext}>
       {children}
     </PanelFrame>,
     root,
@@ -54,9 +59,10 @@ export function AppPanel({
  * Width is driven by classes on the always-present wrapper — that is what
  * transitions; the page wrapper is flex-1 and follows it.
  */
-function PanelFrame({ resetKey, open, onClose, title, footer, children, defaultExpanded, bodyClass, detailHref, prevHref, nextHref }: {
+function PanelFrame({ resetKey, open, onClose, title, footer, children, defaultExpanded, bodyClass, detailHref, prevHref, nextHref, onPrev, onNext }: {
   resetKey?: number; open: boolean; onClose: () => void; title: React.ReactNode; footer?: React.ReactNode; children?: React.ReactNode;
   defaultExpanded?: boolean; bodyClass?: string; detailHref?: string; prevHref?: string; nextHref?: string;
+  onPrev?: () => void; onNext?: () => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
   // Reset expand state per open WITHOUT remounting (React's "adjust state during render" pattern),
@@ -81,6 +87,8 @@ function PanelFrame({ resetKey, open, onClose, title, footer, children, defaultE
             </div>
             {prevHref && <Link to={prevHref} className={iconBtn} aria-label="Previous"><ArrowLeft className="h-4 w-4" /></Link>}
             {nextHref && <Link to={nextHref} className={iconBtn} aria-label="Next"><ArrowRight className="h-4 w-4" /></Link>}
+            {onPrev && <button onClick={onPrev} className={iconBtn} aria-label="Previous"><ArrowLeft className="h-4 w-4" /></button>}
+            {onNext && <button onClick={onNext} className={iconBtn} aria-label="Next"><ArrowRight className="h-4 w-4" /></button>}
             <button onClick={() => setExpanded((v) => !v)} className={iconBtn} aria-label={expanded ? "Collapse" : "Expand"}>
               {expanded ? <Columns3 className="h-4 w-4" /> : <Columns2 className="h-4 w-4" />}
             </button>

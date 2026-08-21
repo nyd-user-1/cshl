@@ -12,6 +12,8 @@ interface PanelSpec {
   footer?: React.ReactNode;
   detailHref?: string;
   defaultExpanded?: boolean;
+  onPrev?: () => void;
+  onNext?: () => void;
 }
 interface PanelCtx {
   open: boolean;
@@ -37,6 +39,8 @@ export function AppPanelProvider({ children, portalRoot }: { children: React.Rea
         title={spec?.title ?? ""}
         footer={spec?.footer}
         detailHref={spec?.detailHref}
+        onPrev={spec?.onPrev}
+        onNext={spec?.onNext}
         defaultExpanded={spec?.defaultExpanded}
         bodyClass="flex flex-col"
       >
