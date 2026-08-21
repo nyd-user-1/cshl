@@ -303,3 +303,42 @@ tree nodes resolve to the same nearest named ancestor. Unusable in a navigation 
 now distinguished by the descriptor that separates each from its namesakes —
 "Neurons — axons", "— cerebellum", "— hypothalamus" — computed within the collision group,
 not against the corpus. Zero duplicate names remain.
+
+## 2026-08-21 — cshl-category trained and scored
+
+Trained 1 epoch, batch 32, max_len 1024, lr 3e-5, ModernBERT-base. Weights uploaded on
+completion (599 MB) before MeSH started, per the upload-early rule.
+
+| split | n | accuracy | macro F1 |
+|---|---|---|---|
+| held-out test | 32,794 | **65.09%** | 50.44% |
+| frozen `cshl-eval-v1` | 10,000 | **65.17%** | 50.73% |
+| majority-class floor | — | 14.45% | — |
+
+The two held-out sets were drawn independently and agree to **0.08 pp**. That is worth more
+than either number alone: it is the cheap version of Orch §6 (two implementations agreeing
+retroactively validates both), and it says the test split is not lucky.
+
+### The confusions are the product finding, not the error bar
+
+Top confusions on test, `gold -> predicted`:
+
+| confusion | n |
+|---|---|
+| genomics → bioinformatics | 170 |
+| infectious diseases → epidemiology | 156 |
+| biochemistry → biophysics | 136 |
+| public and global health → epidemiology | 120 |
+| biophysics → biochemistry | 118 |
+| molecular biology → cell biology | 115 |
+| animal behavior and cognition → neuroscience | 114 |
+| epidemiology → infectious diseases | 111 |
+| genetics → genomics | 100 |
+
+Every one is a pair of genuinely overlapping fields, and several are **symmetric**
+(biochemistry↔biophysics, epidemiology↔infectious diseases). A 65% accuracy against a
+single-label target whose gold is *author self-assignment at submission* is not a 35% error
+rate against ground truth — a large share of those "errors" are papers that could defensibly
+sit in either category. That is a ceiling imposed by the label, not by the model, and it is
+direct evidence for the cross-category rooms in the stretch: the model is rediscovering which
+category boundaries are fictions.
