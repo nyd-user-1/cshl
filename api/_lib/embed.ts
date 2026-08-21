@@ -52,7 +52,7 @@ export function activeEncoder(): EncoderName {
 // weights loaded on the serve box are ONE decision in two places: change either and the
 // other has to move with it, or the app queries one model's space with another model's
 // vector and returns confident nonsense with a 200.
-export const vectorTable = (enc: EncoderName) => (enc === "nsr" ? "preprint_embeddings_cshl_qp" : "preprint_embeddings");
+export const vectorTable = (enc: EncoderName) => (enc === "nsr" ? "preprint_embeddings_cshl_qp2" : "preprint_embeddings");
 
 /**
  * Is the vector sidecar actually populated? The dense arm is worth an encoder round
