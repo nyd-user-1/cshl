@@ -39,17 +39,10 @@ export default async function handler(req: any, res: any) {
   const rerank = String(req.query?.rerank ?? "1") !== "0";
   if (question.length < 3) return res.status(400).json({ error: "q is required" });
 
-  if (!process.env.AWS_BEARER_TOKEN_BEDROCK && process.env.BEDROCK_API_KEY)
-    process.env.AWS_BEARER_TOKEN_BEDROCK = process.env.BEDROCK_API_KEY;
-  // The env also carries AWS_ACCESS_KEY_ID/SECRET, and the SDK prefers SigV4
-  // over the bearer token — but only the bearer token is authorized for the KB
-  // (the deployed keys can't even GetInferenceProfile). Drop them so the bearer
-  // wins. This function's instance only; S3 presigning lives in its own function.
-  if (process.env.AWS_BEARER_TOKEN_BEDROCK) {
-    delete process.env.AWS_ACCESS_KEY_ID;
-    delete process.env.AWS_SECRET_ACCESS_KEY;
-    delete process.env.AWS_SESSION_TOKEN;
-  }
+  // Unlike /api/chat, this function signs with the nsr-vercel-api SigV4 keys:
+  // bedrock-agent-runtime does not accept the bearer token at all (verified —
+  // it isn't a policy gap, the client never reads AWS_BEARER_TOKEN_BEDROCK).
+  // The KB statements live in that user's nsr-vercel-scope inline policy.
 
   const t0 = Date.now();
   try {
