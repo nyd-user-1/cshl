@@ -260,20 +260,52 @@ for c, ps in sorted(by_cat.items(), key=lambda kv: -len(kv[1])):
 
 placed = sum(len(r["papers"]) for r in all_rooms)
 unpl = sum(u["n"] for u in all_unplaced)
-sizes = sorted((len(r["papers"]) for r in all_rooms), reverse=True)
-log(f"rooms {len(all_rooms)}  placed {placed}  unplaced {unpl}  total {placed+unpl} (corpus {len(cat)})")
-log(f"largest {sizes[:5]}  smallest {sizes[-5:]}  over ceiling: {sum(1 for s in sizes if s > A.max_room)}")
+
+# ---------------------------------------------------------------- rooms vs shards
+# A ROOM is what a user picks: always topical, always choosable.
+# A SHARD is what the index holds. THE CEILING GOVERNS SHARDS, NOT ROOMS.
+#
+# Why: the first version made the year band part of the room name, which produced four
+# "Neuroscience · Brain" rooms distinguished only by date. Navigation is the router, and a
+# user's question has no date -- so they cannot choose correctly, and a route the user has no
+# basis for choosing fails INVISIBLY, which is the failure the scoped architecture exists to
+# prevent. Year bands were never wrong as a sharding strategy, only as a naming one.
+# Picking "Neuroscience · Brain" searches all four of its shards; the haystack the user is
+# confined to is the room, and each shard stays under the ceiling.
+rooms_by_key = defaultdict(list)
+for r in all_rooms:
+    base = r["name"].split(" (")[0]          # drop the year span from the user-facing name
+    rooms_by_key[(r["category"], base)].append(r)
+
+rooms_out = []
+for (c, base), shards in rooms_by_key.items():
+    shards.sort(key=lambda r: -len(r["papers"]))
+    n = sum(len(r["papers"]) for r in shards)
+    rooms_out.append({
+        "name": base, "category": c, "n": n, "shards": len(shards),
+        "axis": shards[0]["axis"] if len(shards) == 1 else "mesh+year-shards",
+        "n_predicted_labels": sum(1 for r in shards for p in r["papers"] if p not in observed),
+        "shard_detail": [{"n": len(r["papers"]), "axis": r["axis"],
+                          "years": r.get("years"), "name": r["name"]} for r in shards],
+    })
+rooms_out.sort(key=lambda r: (r["category"], -r["n"]))
+
+shard_sizes = sorted((len(r["papers"]) for r in all_rooms), reverse=True)
+room_sizes = sorted((r["n"] for r in rooms_out), reverse=True)
+log(f"shards {len(all_rooms)}  ROOMS {len(rooms_out)}  placed {placed}  unplaced {unpl}  total {placed+unpl} (corpus {len(cat)})")
+log(f"largest shard {shard_sizes[0]}  shards over ceiling: {sum(1 for s in shard_sizes if s > A.max_room)}")
+log(f"largest room {room_sizes[0]}  multi-shard rooms: {sum(1 for r in rooms_out if r['shards'] > 1)}")
 
 out = {"max_room": A.max_room, "min_room": A.min_room,
+       "ceiling_governs": "shards",
        "predictions_used": bool(A.predictions), "n_predicted": n_pred,
        "corpus": len(cat), "placed": placed, "unplaced": unpl,
-       "rooms": [{"name": r["name"], "category": r["category"], "axis": r["axis"],
-                  "facet": r["facet"], "years": r.get("years"), "n": len(r["papers"]),
-                  "n_predicted_labels": sum(1 for p in r["papers"] if p not in observed)}
-                 for r in sorted(all_rooms, key=lambda r: (r["category"], -len(r["papers"])))],
+       "n_shards": len(all_rooms),
+       "rooms": rooms_out,
        "unplaced_groups": [{k: v for k, v in u.items() if k != "papers"} for u in all_unplaced]}
 json.dump(out, open(A.out, "w"), indent=1)
 with open(A.out.replace(".json", ".members.jsonl"), "w") as w:
     for r in all_rooms:
-        w.write(json.dumps({"room": r["name"], "slugs": r["papers"]}) + "\n")
+        w.write(json.dumps({"room": r["name"].split(" (")[0], "shard": r["name"],
+                            "slugs": r["papers"]}) + "\n")
 log(f"wrote {A.out}")

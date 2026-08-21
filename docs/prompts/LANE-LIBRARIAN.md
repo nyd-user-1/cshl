@@ -593,3 +593,54 @@ other running instances in the account predate this lane by days and were not to
    patched by this lane.
 
 **Published nothing.** Weights and artifacts are in S3 only.
+
+---
+
+## ADDENDUM 2026-08-21 ~09:35Z — acted on the review in `docs/OVERNIGHT-FINDINGS-2026-08-21.md` §5
+
+Found a review of this lane's room map committed to `main` (c875471) while I was finishing.
+The critique is correct and I have implemented it rather than defending the original.
+
+**The problem:** the map conflated two concepts. Putting the year band in the room *name*
+produced four "Neuroscience · Brain" rooms and two "Telencephalon" rooms separated only by
+date. Navigation is the router; a user's question has no date; so they cannot choose correctly,
+and a route the user has no basis for choosing **fails invisibly** — the exact failure the
+scoped architecture exists to prevent.
+
+**The fix, a naming change and not a re-run:**
+
+- a **room** is what a user picks — always topical, always choosable
+- a **shard** is what the index holds — **the ceiling governs shards, not rooms**
+
+| | before | after |
+|---|---|---|
+| user-facing rooms | 252 | **247** |
+| shards | 252 | 252 |
+| largest room | 9,948 | 21,287 (Neuroscience · Brain, 4 shards) |
+| largest **shard** | 9,948 | **9,948** |
+| shards over ceiling | 0 | **0** |
+| papers unplaced | 0 | **0** |
+
+Year bands survive unchanged as a sharding strategy — they were only ever wrong as a naming
+strategy. Picking "Neuroscience · Brain" searches all four shards: the user is confined to
+21,287 documents rather than 433,449, and no shard exceeds the ceiling.
+
+Three rooms are multi-shard: Neuroscience · Brain (4), Neuroscience · Telencephalon (2),
+Bioinformatics · Algorithms (2). `docs/ROOM-MAP.md` regenerated.
+
+### Two repo hygiene notes, one of them my fault
+
+1. **Mine.** An over-broad `git add -A` committed `.claude/worktrees/rooms` — a *different*
+   concurrent session's git worktree — as a gitlink on this branch. Untracked and added to
+   `.gitignore`. It should never have been captured.
+2. **Not mine, but recorded.** Commit `7b84e66` ("fix(chat): never assert unpublished
+   status … + LANE-MEDRXIV-ROOMS handoff") sits on `lane/librarian` and was authored by
+   another session working in this same directory. `LANE-MEDRXIV-ROOMS.md` names the hazard
+   explicitly: *"Do not run `git checkout` inside /Code/cshl — another session is live in that
+   directory, and checking out a branch there moves its HEAD mid-run and makes its commits land
+   on your branch. This has already happened twice tonight."* I have **left the commit in
+   place** rather than rebasing it out: its content is also present on `main`, so nothing is
+   lost, and rewriting history on a shared checkout while another session is live is exactly
+   how that work would get destroyed. Flagged for a human, not silently resolved.
+
+Branch `lane/librarian` pushed. Not merged.
