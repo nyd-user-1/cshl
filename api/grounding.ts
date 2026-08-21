@@ -28,12 +28,35 @@ const GUARDRAIL_VERSION = process.env.BEDROCK_GUARDRAIL_VERSION ?? "DRAFT";
 const MAX_SOURCE_CHARS = 40000;
 const MAX_ANSWER_CHARS = 6000;
 
+/** Score the PROSE, not the scaffolding.
+ *
+ *  A heading ("## Significance of X") and a citation marker ("[1]") appear
+ *  nowhere in the source text, so the guardrail counts each as an unsupported
+ *  claim and the score collapses. Measured on one answer, identical content:
+ *  0.58 with markup, 0.87 stripped. The markup is ours, not the model's
+ *  assertion about the literature, so it does not belong in the evidence check. */
+function plainProse(md: string): string {
+  return md
+    .replace(/```[\s\S]*?```/g, " ")     // code fences
+    .replace(/^#{1,6}\s+.*$/gm, "")      // headings
+    .replace(/\*\*(.+?)\*\*/g, "$1")     // bold
+    .replace(/\*(.+?)\*/g, "$1")         // italic
+    .replace(/`(.+?)`/g, "$1")           // inline code
+    .replace(/^\s*[-*+]\s+/gm, "")       // bullets
+    .replace(/^\s*\d+\.\s+/gm, "")       // numbered items
+    .replace(/^\s*(?:-{3,}|\*{3,})\s*$/gm, "") // rules
+    .replace(/\[(\d+)\]/g, "")           // [1] markers
+    .replace(/\[(.+?)\]\(.+?\)/g, "$1")  // links → their text
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export default async function handler(req: any, res: any) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   try {
     const { answer, query, keys } = req.body ?? {};
-    const text = String(answer ?? "").trim().slice(0, MAX_ANSWER_CHARS);
+    const text = plainProse(String(answer ?? "")).slice(0, MAX_ANSWER_CHARS);
     const q = String(query ?? "").trim().slice(0, 2000);
     const keyList = (Array.isArray(keys) ? keys : [])
       .map((k) => String(k ?? "").trim())
