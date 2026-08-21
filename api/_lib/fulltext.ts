@@ -8,11 +8,16 @@
 //   2. jatsxml_url                    — structured JATS, cleanest to parse
 //   3. the article HTML full-text page (derived from doi + server + version)
 //   4. Europe PMC fullTextXML         — different origin, different rate limits
+//   5. r.jina.ai reader               — a fetch proxy whose crawler the origin
+//                                       does not block (the same reasoning as
+//                                       /api/pdf's Google-viewer route)
 //
 // bioRxiv/medRxiv sit behind Cloudflare rate limiting that answers a busy
-// client with 429 (measured: one request per ~20 s per IP once tripped), so a
-// miss on rungs 2–3 is expected background noise, not an error. Rung 4 covers
-// ~6% of preprints plus published versions.
+// client with 429 (measured 2026-08-21: EVERY biorxiv.org fetch from Vercel's
+// egress 429s; medrxiv.org intermittently allows), so a miss on rungs 2–3 is
+// expected background noise, not an error. Rung 4 covers ~6% of preprints plus
+// published versions; rung 5 is the reliable path for blocked origins
+// (measured: 114 KB clean markdown in ~4.6 s for a paper rungs 2–4 all missed).
 //
 // TIMING CONTRACT. The caller gives a prompt budget (~3 s). Each fetch races
 // that budget for *inclusion in the prompt*, but keeps running afterwards (up
@@ -96,6 +101,23 @@ export function trimJats(xml: string): string | null {
   return text.length >= 400 ? text : null;
 }
 
+/** Reader-proxy markdown → abstract + the sections a reader needs, capped. */
+export function trimReaderMarkdown(md: string): string | null {
+  const body = md.replace(/^[\s\S]*?Markdown Content:\s*/, "");
+  const secs = body.split(/\n(?=#{1,4} )/);
+  const wanted = /abstract|result|discussion|conclusion|finding/i;
+  let picked = secs.filter((s) => wanted.test(s.match(/^#{1,4} (.+)/)?.[1] ?? ""));
+  if (!picked.length) picked = secs;
+  const text = picked
+    .join("\n\n")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")      // images carry no facts
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")    // keep link text, drop URLs
+    .replace(/[ \t]+/g, " ")
+    .slice(0, PER_PAPER_CHARS)
+    .trim();
+  return text.length >= 400 ? text : null;
+}
+
 /** bioRxiv/medRxiv .full HTML page → article text, capped. */
 export function trimArticleHtml(html: string): string | null {
   const clean = html.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<style[\s\S]*?<\/style>/g, "");
@@ -162,6 +184,16 @@ async function fetchEpmc(row: FulltextRow, signal: AbortSignal): Promise<string 
   return null;
 }
 
+async function fetchReader(row: FulltextRow, signal: AbortSignal): Promise<string | null> {
+  if (!row.doi || !row.server) return null;
+  const v = row.version ? `v${row.version}` : "";
+  const md = await fetchText(
+    `https://r.jina.ai/https://www.${row.server}.org/content/${row.doi}${v}.full`,
+    signal,
+  );
+  return md ? trimReaderMarkdown(md) : null;
+}
+
 /* ── the ladder, cache-aware ─────────────────────────────────────────────── */
 
 async function fetchOne(row: FulltextRow, signal: AbortSignal): Promise<{ source: string; text: string } | null> {
@@ -169,6 +201,7 @@ async function fetchOne(row: FulltextRow, signal: AbortSignal): Promise<{ source
     ["jats", fetchJats],
     ["html", fetchHtml],
     ["epmc", fetchEpmc],
+    ["reader", fetchReader],
   ] as const) {
     if (signal.aborted) return null;
     try {

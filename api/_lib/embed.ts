@@ -85,6 +85,7 @@ async function cloudflare(text: string): Promise<number[]> {
     method: "POST",
     headers: { Authorization: `Bearer ${CF_AI_TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify({ text: [text] }),
+    signal: AbortSignal.timeout(8000),
   });
   const j = (await r.json()) as { success: boolean; errors?: unknown; result?: { data?: number[][] } };
   const v = j.result?.data?.[0];
@@ -95,10 +96,14 @@ async function cloudflare(text: string): Promise<number[]> {
 /** TEI-style endpoint (nsr-serve, HF Inference Endpoints and hf-inference all accept {inputs}). */
 async function tei(url: string, text: string, key: string): Promise<number[]> {
   if (!key) throw new Error("no bearer key for embed endpoint");
+  // A cold or wedged serve box must fail FAST into the bge fallback, not hang
+  // the turn: measured 2026-08-21, an un-timed fetch here held /api/chat for
+  // ~50 s before the rest of retrieval could proceed.
   const r = await fetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({ inputs: text, normalize: true, truncate: true }),
+    signal: AbortSignal.timeout(8000),
   });
   if (!r.ok) throw new Error(`embed endpoint failed: ${r.status} ${(await r.text()).slice(0, 200)}`);
   const j = (await r.json()) as number[] | number[][];

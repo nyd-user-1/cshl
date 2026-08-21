@@ -375,12 +375,14 @@ export default async function handler(req: any, res: any) {
     // Task 1b: the records that reach the prompt get their body fetched on
     // demand (top 4). The prompt budget keeps a slow origin from hanging the
     // turn; stragglers land in preprint_fulltext for the next ask.
+    const tArms = Date.now() - t0;
     const ftTargets = records.slice(0, 4).map((r) => ({
       key_number: r.key_number, doi: r.doi, server: r.server,
       version: r.version, jatsxml_url: r.jatsxml_url,
     }));
     const fulltextResults = await getFulltext(sql as never, ftTargets).catch(() => [] as FulltextResult[]);
     const fulltextByKey = new Map(fulltextResults.map((f) => [f.key_number, f]));
+    const tFulltext = Date.now() - t0 - tArms;
 
     const roomContext = room
       ? `\n\nSCOPE: This conversation is scoped to the "${room.category}" room — ${room.server} preprints in that category. The retrieved records reflect that scope.${
@@ -442,7 +444,7 @@ export default async function handler(req: any, res: any) {
     if (!bedrockRes.stream) throw new Error(`Bedrock returned no stream for ${chosenModel}`);
 
     console.log(
-      `chat retrieval+bedrock-start: ${Date.now() - t0}ms, records=${records.length}` +
+      `chat retrieval+bedrock-start: ${Date.now() - t0}ms (arms=${tArms}ms, fulltext=${tFulltext}ms), records=${records.length}` +
       `, fulltext=${fulltextResults.map((f) => `${f.key_number}:${f.source}`).join("|") || "none"}` +
       (room ? `, room=${room.server}/${room.category}${widened ? " (widened)" : ""}` : ""),
     );
