@@ -1,7 +1,6 @@
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   SquarePen,
-  FileText,
   Search,
   ChevronDown,
   Share2,
@@ -170,6 +169,13 @@ const WORKSPACE_ITEMS: { label: string; path: string; prefetch: () => Promise<un
   { label: "Community", path: "/community", prefetch: () => import("@/pages/Community") },
 ];
 
+/** Each archive's sub-nav — a–z: Agents · Papers · Subjects. */
+const archiveItems = (server: "medrxiv" | "biorxiv") => [
+  { label: "Agents", path: `/${server}/agents`, prefetch: () => import("@/pages/archive/AgentsPage") },
+  { label: "Papers", path: `/${server}/papers`, prefetch: () => import("@/pages/References") },
+  { label: "Subjects", path: `/${server}/subjects`, prefetch: () => import("@/pages/archive/SubjectsPage") },
+];
+
 /** A collapsible nav group: the label opens its landing (or toggles when there is none); the chevron only toggles. */
 function Group({ label, icon, active, expanded, onToggle, onOpen, onHover, items, pathname, go }: {
   label: string; icon: React.ReactNode; active: boolean; expanded: boolean;
@@ -200,7 +206,7 @@ function Group({ label, icon, active, expanded, onToggle, onOpen, onHover, items
               onClick={() => go(item.path)}
               onMouseEnter={() => { item.prefetch(); }}
               className={`flex w-full items-center rounded-lg py-1.5 pl-10 pr-3 text-xs transition-colors ${
-                pathname === item.path || (item.path.includes("/graph") && pathname.startsWith("/graph"))
+                pathname === item.path || pathname.startsWith(item.path + "/")
                   ? "bg-muted font-medium text-foreground"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
@@ -222,9 +228,15 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const [chatsExpanded, setChatsExpanded] = useState(true);
   const onWorkspace = ["/community"].some((p) => location.pathname.startsWith(p));
   const [workspaceExpanded, setWorkspaceExpanded] = useState(onWorkspace);
+  const onMedrxiv = location.pathname.startsWith("/medrxiv");
+  const onBiorxiv = location.pathname.startsWith("/biorxiv");
+  const [medrxivExpanded, setMedrxivExpanded] = useState(onMedrxiv);
+  const [biorxivExpanded, setBiorxivExpanded] = useState(onBiorxiv);
   const { data: sessions, refresh } = useChatSessions();
 
   useEffect(() => { if (onWorkspace) setWorkspaceExpanded(true); }, [onWorkspace]);
+  useEffect(() => { if (onMedrxiv) setMedrxivExpanded(true); }, [onMedrxiv]);
+  useEffect(() => { if (onBiorxiv) setBiorxivExpanded(true); }, [onBiorxiv]);
 
   // Only close sidebar on mobile (< md breakpoint)
   const closeMobile = () => {
@@ -268,31 +280,32 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             New Search
           </button>
 
-          {/* medRxiv rooms — the rooms product's front door (LANE-MEDRXIV-ROOMS). */}
-          <button
-            onClick={() => { navigate("/medrxiv"); closeMobile(); }}
-            onMouseEnter={() => { import("@/pages/medrxiv/MedrxivHome"); import("@/pages/medrxiv/MedrxivCards"); }}
-            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-              location.pathname.startsWith("/medrxiv") ? "bg-muted" : "hover:bg-muted"
-            }`}
-          >
-            <LayoutGrid className="h-4 w-4" />
-            medRxiv Rooms
-          </button>
-
-          {/* Preprints — the References browser over bioRxiv + medRxiv. The NSR-era
-              sections (ENDF, ENSDF, XUNDL, NSR archive) are deleted; their card-page
-              design survives, content-agnostic, in src/pages/templates/CardPage.tsx. */}
-          <button
-            onClick={() => { navigate("/references"); closeMobile(); }}
-            onMouseEnter={() => { import("@/pages/References"); }}
-            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-              location.pathname === "/references" || location.pathname.startsWith("/nsr") ? "bg-muted" : "hover:bg-muted"
-            }`}
-          >
-            <FileText className="h-4 w-4" />
-            Preprints
-          </button>
+          {/* The archives — each with Agents · Papers · Subjects. The label
+              toggles the group; the sub-items are the destinations. */}
+          <Group
+            label="medRxiv"
+            icon={<LayoutGrid className="h-4 w-4" />}
+            active={onMedrxiv}
+            expanded={medrxivExpanded}
+            onToggle={() => setMedrxivExpanded((v) => !v)}
+            onOpen={() => setMedrxivExpanded((v) => !v)}
+            onHover={() => { import("@/pages/archive/SubjectsPage"); import("@/pages/archive/AgentsPage"); }}
+            items={archiveItems("medrxiv")}
+            pathname={location.pathname}
+            go={(p) => { navigate(p); closeMobile(); }}
+          />
+          <Group
+            label="bioRxiv"
+            icon={<LayoutGrid className="h-4 w-4" />}
+            active={onBiorxiv}
+            expanded={biorxivExpanded}
+            onToggle={() => setBiorxivExpanded((v) => !v)}
+            onOpen={() => setBiorxivExpanded((v) => !v)}
+            onHover={() => { import("@/pages/archive/SubjectsPage"); import("@/pages/archive/AgentsPage"); }}
+            items={archiveItems("biorxiv")}
+            pathname={location.pathname}
+            go={(p) => { navigate(p); closeMobile(); }}
+          />
 
           {/* Workspace — no landing page yet; the label toggles the group */}
           <Group

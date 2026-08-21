@@ -3,8 +3,10 @@ import { useSearchParams, useNavigate, useParams, useLocation } from "react-rout
 import { ChatInput } from "@/components/ChatInput";
 import { DetailBody, type EntityType } from "@/components/EntityDetail";
 import { Badge } from "@/components/ui/badge";
-import { X } from "lucide-react";
+import { Search, X } from "lucide-react";
 import { useChat, type ChatRoom } from "@/hooks/useChat";
+import { ARCHIVE_LABEL } from "@/hooks/useArchive";
+import { subjectTitle } from "@/lib/subjects";
 
 // ChatMessage drags in react-markdown + KaTeX (~200 KB gz). A fresh landing
 // renders zero messages, so that weight loads only once a conversation exists.
@@ -12,14 +14,24 @@ const ChatMessage = lazy(() =>
   import("@/components/ChatMessage").then((m) => ({ default: m.ChatMessage })),
 );
 
-/** The visible scope: the user always sees which room they are in. */
-function RoomChip({ category }: { category: string }) {
+/** The visible scope: the user always sees which agent they are talking to.
+ *  The X exits the agent — back to the archive's agent list. */
+function AgentChip({ room, onExit }: { room: ChatRoom; onExit: () => void }) {
   return (
-    <div className="mx-auto mb-2 flex max-w-[720px] justify-center md:justify-start">
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-brand">
-        {category}
-        <span className="font-normal normal-case tracking-normal text-muted-foreground">· medRxiv room</span>
-      </span>
+    <div className="mx-auto mb-2 w-full max-w-[720px]">
+      <div className="flex items-center gap-2 rounded-xl border bg-muted/40 px-3 py-2">
+        <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="truncate text-[11px] font-semibold uppercase tracking-wide text-foreground">
+          {subjectTitle(room.category)} Agent
+        </span>
+        <button
+          onClick={onExit}
+          aria-label="Exit this agent"
+          className="ml-auto flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -30,16 +42,17 @@ export default function Chat() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // The ROOM. Set by navigation (a card click landed here), never by a widget:
-  // /medrxiv/rooms/:category mounts this same page with the scope pre-applied,
-  // and the scope rides every request the conversation makes.
-  const room: ChatRoom | null = useMemo(
-    () =>
-      routeCategory && location.pathname.startsWith("/medrxiv/rooms/")
-        ? { server: "medrxiv", category: decodeURIComponent(routeCategory).toLowerCase() }
-        : null,
-    [routeCategory, location.pathname],
-  );
+  // The SCOPE. Set by navigation (an agent or subject card click landed here),
+  // never by a widget: /:archive/agents/:category mounts this same page with
+  // the scope pre-applied, and it rides every request the conversation makes.
+  // (/medrxiv/rooms/:category is the pre-subjects URL — still honored.)
+  const room: ChatRoom | null = useMemo(() => {
+    if (!routeCategory) return null;
+    const m = location.pathname.match(/^\/(medrxiv|biorxiv)\/(?:agents|rooms)\//);
+    return m
+      ? { server: m[1] as ChatRoom["server"], category: decodeURIComponent(routeCategory).toLowerCase() }
+      : null;
+  }, [routeCategory, location.pathname]);
 
   const { messages, isLoading, sendMessage, stopGeneration, clearMessages, loadSession, sessionId } =
     useChat(room);
@@ -214,13 +227,13 @@ export default function Chat() {
 
           {/* Input pinned to bottom */}
           <div className="px-2 md:px-4 py-3 md:py-4 shrink-0 bg-background">
-            {room && <RoomChip category={room.category} />}
+            {room && <AgentChip room={room} onExit={() => navigate(`/${room.server}/agents`)} />}
             <ChatInput
               onSubmit={(text, modelId) => sendMessage(text, undefined, undefined, modelId)}
               onStop={stopGeneration}
               isLoading={isLoading}
               searchToggle
-              placeholder={room ? `Ask a ${room.category} question…` : undefined}
+              placeholder={room ? `Chat with the ${ARCHIVE_LABEL[room.server]} ${subjectTitle(room.category)} preprints…` : undefined}
             />
           </div>
         </>
@@ -229,9 +242,10 @@ export default function Chat() {
         <div className="flex flex-1 flex-col items-center justify-center px-4">
           {room && (
             <div className="mb-3 w-full max-w-[720px] text-center">
-              <RoomChip category={room.category} />
+              <AgentChip room={room} onExit={() => navigate(`/${room.server}/agents`)} />
               <p className="mt-1 text-xs text-muted-foreground">
-                Every question here searches only medRxiv&apos;s {room.category} preprints.
+                Every question here searches only {ARCHIVE_LABEL[room.server]}&apos;s{" "}
+                {room.category} preprints.
               </p>
             </div>
           )}
@@ -239,7 +253,7 @@ export default function Chat() {
             onSubmit={(text, modelId) => sendMessage(text, undefined, undefined, modelId)}
             isLoading={isLoading}
             searchToggle
-            placeholder={room ? `Ask a ${room.category} question…` : undefined}
+            placeholder={room ? `Chat with the ${ARCHIVE_LABEL[room.server]} ${subjectTitle(room.category)} preprints…` : undefined}
           />
         </div>
       )}

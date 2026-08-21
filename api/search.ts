@@ -64,6 +64,10 @@ export default async function handler(req: any, res: any) {
     const conds: string[] = []; const params: unknown[] = [];
     if (categories.length) { params.push(categories); conds.push(`p.categories && $${params.length}::text[]`); }
     if (journals.length) { params.push(journals); conds.push(`lower(p.published_journal) = ANY($${params.length}::text[])`); }
+    // &server= confines chip search to one archive (the Papers pages).
+    if (req.query?.server === "biorxiv" || req.query?.server === "medrxiv") {
+      params.push(String(req.query.server)); conds.push(`p.server = $${params.length}`);
+    }
     params.push(lim);
     const rows = await q(
       `SELECT ${SELECT}, 1.0::float AS similarity FROM preprints p
@@ -82,6 +86,9 @@ export default async function handler(req: any, res: any) {
   const roomServer = req.query?.server === "biorxiv" || req.query?.server === "medrxiv" ? String(req.query.server) : null;
   const roomCategory = roomServer && req.query?.category ? String(req.query.category).trim().toLowerCase() : null;
   const room = roomServer && roomCategory ? { server: roomServer, category: roomCategory } : null;
+  // Server without category: the whole-archive scope (the Papers pages). Not a
+  // room — no widening — just both arms confined to one server.
+  const serverOnly = roomServer && !roomCategory ? roomServer : null;
 
   if (raw.length < 2) return res.status(200).json({ records: [], count: 0, mode: requested });
 
@@ -140,17 +147,23 @@ export default async function handler(req: any, res: any) {
           } else {
           // ef_search must be set inside the same transaction as the probe, and the vector
           // is BOUND, never interpolated — a join-sourced or inlined probe defeats HNSW.
+          //
+          // Whole-archive scope (serverOnly): same HNSW probe with the server
+          // filter applied post-scan; ef_search rises to 400 so that even the
+          // smaller archive (medRxiv ≈ 20% of vectors) fills the limit.
           const [, rows] = (await (sql as unknown as {
             transaction: (qs: unknown[]) => Promise<unknown[]>;
           }).transaction([
-            (sql as unknown as { query: (t: string, p?: unknown[]) => unknown }).query(`SET LOCAL hnsw.ef_search = 100`),
+            (sql as unknown as { query: (t: string, p?: unknown[]) => unknown }).query(
+              `SET LOCAL hnsw.ef_search = ${serverOnly ? 400 : 100}`),
             (sql as unknown as { query: (t: string, p?: unknown[]) => unknown }).query(
               `SELECT ${SELECT}, (1 - (e.embedding <=> $1::vector))::float AS similarity
                FROM ${vectorTable(enc)} e
                JOIN preprints p USING (key_number)
+               ${serverOnly ? "WHERE p.server = $3" : ""}
                ORDER BY e.embedding <=> $1::vector
                LIMIT $2`,
-              [toVectorLiteral(vector), limit],
+              serverOnly ? [toVectorLiteral(vector), limit, serverOnly] : [toVectorLiteral(vector), limit],
             ),
           ])) as [unknown, Row[]];
           denseRows = rows ?? [];
@@ -195,9 +208,10 @@ export default async function handler(req: any, res: any) {
          SELECT ${SELECT},
                 least(ts_rank_cd(p.fts, tq.q) / 4.0, 0.99)::float AS similarity
          FROM preprints p, tq
-         WHERE p.fts @@ tq.q${room ? ` AND p.server = $3 AND p.categories && $4::text[]` : ""}
+         WHERE p.fts @@ tq.q${room ? ` AND p.server = $3 AND p.categories && $4::text[]` : serverOnly ? ` AND p.server = $3` : ""}
          ORDER BY ts_rank_cd(p.fts, tq.q) DESC, p.pub_year DESC NULLS LAST
-         LIMIT $2`, room ? [raw, limit, room.server, [room.category]] : [raw, limit]);
+         LIMIT $2`,
+        room ? [raw, limit, room.server, [room.category]] : serverOnly ? [raw, limit, serverOnly] : [raw, limit]);
     }
     const ftsMs = Date.now() - tFts0;
 

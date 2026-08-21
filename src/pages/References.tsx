@@ -103,7 +103,10 @@ const YEAR_OPTIONS = Array.from(
 /*  Page                                                               */
 /* ------------------------------------------------------------------ */
 
-export default function References() {
+/** With `server`, this page is an archive's Papers view (/medrxiv/papers,
+ *  /biorxiv/papers): browse, search, and filters all confined to that archive.
+ *  Without it, it is the corpus-wide browser at /references. */
+export default function References({ server }: { server?: "biorxiv" | "medrxiv" }) {
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Read initial state from URL params (from feed item clicks)
@@ -178,13 +181,14 @@ export default function References() {
   }, [paramKey]);
 
   const debouncedQuery = useDebouncedValue(query, 320);
-  const search = useRecordSearch(debouncedQuery, searchMode);
+  const search = useRecordSearch(debouncedQuery, searchMode, server);
   const browse = useRecords({
     year: yearFilter ? Number(yearFilter) : undefined,
     page,
     pageSize: CARDS_PER_PAGE,
+    server,
   });
-  const structured = useStructuredSearch(structuredParams);
+  const structured = useStructuredSearch(structuredParams ? { ...structuredParams, server } : null);
 
   // Feed emitter
   const { emit } = useFeedEmitter();
@@ -453,6 +457,7 @@ export default function References() {
             value={categoryInput}
             onChange={handleCategoryChange}
             onSubmit={(v) => handleStructuredSearch({ category: v })}
+            server={server}
           />
 
           {/* Reaction filter */}
@@ -630,6 +635,7 @@ export default function References() {
             value={categoryInput}
             onChange={handleCategoryChange}
             onSubmit={(v) => handleStructuredSearch({ category: v })}
+            server={server}
           />
 
         <DictCombobox

@@ -4,6 +4,7 @@ import type { CorpusRecord } from "@/types/record";
 export interface StructuredSearchParams {
   categories?: string[];
   journals?: string[];
+  server?: "biorxiv" | "medrxiv";
 }
 
 async function structuredSearch(
@@ -12,6 +13,7 @@ async function structuredSearch(
   const q = new URLSearchParams({ mode: "structured", limit: "50" });
   if (params.categories?.length) q.set("categories", params.categories.join(","));
   if (params.journals?.length) q.set("journals", params.journals.join(","));
+  if (params.server) q.set("server", params.server);
   const res = await fetch(`/api/search?${q}`);
   if (!res.ok) throw new Error(`structured ${res.status}`);
   const data = (await res.json()) as { records: CorpusRecord[] };

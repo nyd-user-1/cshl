@@ -16,24 +16,26 @@ interface DictComboboxProps {
   value: string;
   onChange: (value: string) => void;
   onSubmit: (value?: string) => void;
+  /** Confine the vocabulary to one archive (per-server categories/counts). */
+  server?: "biorxiv" | "medrxiv";
 }
 
-async function fetchDict(type: string): Promise<string[]> {
-  const res = await fetch(`/api/dict?type=${type}&limit=20000`);
+async function fetchDict(type: string, server?: string): Promise<string[]> {
+  const res = await fetch(`/api/dict?type=${type}&limit=20000${server ? `&server=${server}` : ""}`);
   if (!res.ok) throw new Error(`dict ${type} ${res.status}`);
   const rows = (await res.json()) as { value: string }[];
   return rows.map((r) => r.value).filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
 
-export function DictCombobox({ label, dictType, placeholder, value, onChange, onSubmit }: DictComboboxProps) {
+export function DictCombobox({ label, dictType, placeholder, value, onChange, onSubmit, server }: DictComboboxProps) {
   const [open, setOpen] = useState(false);
   const [inputValue, setInputValue] = useState(value || "");
   const ref = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const { data: options = [] } = useQuery({
-    queryKey: ["dict", dictType],
-    queryFn: () => fetchDict(dictType),
+    queryKey: ["dict", dictType, server ?? "all"],
+    queryFn: () => fetchDict(dictType, server),
     staleTime: 1000 * 60 * 30,
   });
 

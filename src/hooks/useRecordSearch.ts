@@ -34,12 +34,14 @@ function remember(cacheKey: string, result: SearchResult) {
   }
 }
 
-const cacheKeyFor = (query: string, mode: SearchMode) => `${mode}:${query.trim().toLowerCase()}`;
+const cacheKeyFor = (query: string, mode: SearchMode, server?: string) =>
+  `${server ?? "all"}:${mode}:${query.trim().toLowerCase()}`;
 
-async function searchNsr(query: string, mode: SearchMode, signal?: AbortSignal): Promise<SearchResult> {
+async function searchNsr(query: string, mode: SearchMode, server?: string, signal?: AbortSignal): Promise<SearchResult> {
   const t0 = performance.now();
   const params = new URLSearchParams({ q: query, mode: mode === "keyword" ? "keyword" : "semantic", limit: "100" });
   if (mode === "semantic") params.set("arm", "dense");
+  if (server) params.set("server", server);
   const res = await fetch(`/api/search?${params}`, { signal });
   if (!res.ok) {
     let detail = "";
@@ -54,17 +56,17 @@ async function searchNsr(query: string, mode: SearchMode, signal?: AbortSignal):
   if (import.meta.env.DEV) {
     console.table({ query, mode: result.mode, rows: result.count, client_ms: Math.round(performance.now() - t0), ...(result.timings ?? {}) });
   }
-  if (result.records.length > 0) remember(cacheKeyFor(query, mode), result);
+  if (result.records.length > 0) remember(cacheKeyFor(query, mode, server), result);
   return result;
 }
 
-export function useRecordSearch(query: string, mode: SearchMode = "hybrid") {
+export function useRecordSearch(query: string, mode: SearchMode = "hybrid", server?: "biorxiv" | "medrxiv") {
   return useQuery({
-    queryKey: ["nsr-search", query, mode],
-    queryFn: ({ signal }: QueryFunctionContext) => searchNsr(query, mode, signal),
+    queryKey: ["nsr-search", query, mode, server ?? "all"],
+    queryFn: ({ signal }: QueryFunctionContext) => searchNsr(query, mode, server, signal),
     enabled: query.length >= 3,
     staleTime: 1000 * 60 * 5,
-    placeholderData: queryCache.get(cacheKeyFor(query, mode)),
+    placeholderData: queryCache.get(cacheKeyFor(query, mode, server)),
     gcTime: 1000 * 60 * 30,
     retry: 1,
   });

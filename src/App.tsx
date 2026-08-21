@@ -23,12 +23,12 @@ const Community = lazy(() => import("@/pages/Community"));
 const Announcing = lazy(() => import("@/pages/Announcing"));
 const Models = lazy(() => import("@/pages/Models"));
 
-// The rooms product (LANE-MEDRXIV-ROOMS): /medrxiv is the bucket, cards the
-// front door, agents the list view, rooms/:category the scoped chat. /biorxiv
-// is deliberately not built yet — the shape leaves room for it.
-const MedrxivHome = lazy(() => import("@/pages/medrxiv/MedrxivHome"));
-const MedrxivCards = lazy(() => import("@/pages/medrxiv/MedrxivCards"));
-const MedrxivAgents = lazy(() => import("@/pages/medrxiv/MedrxivAgents"));
+// The archive sections: each archive (medRxiv, bioRxiv) has three sub-pages —
+// Agents (one scoped assistant per subject), Papers (the References browser
+// confined to that archive), Subjects (the MeSH-backed subject catalog).
+// /:archive/agents/:category is the scoped chat.
+const SubjectsPage = lazy(() => import("@/pages/archive/SubjectsPage"));
+const AgentsPage = lazy(() => import("@/pages/archive/AgentsPage"));
 
 const queryClient = new QueryClient();
 
@@ -56,14 +56,22 @@ function App() {
                 {/* /references is the corpus browser; /nsr redirects for NSR-era links */}
                 <Route path="/references" element={<References />} />
                 <Route path="/nsr" element={<Navigate to="/references" replace />} />
-                {/* the rooms product */}
-                <Route path="/medrxiv" element={<MedrxivHome />} />
-                <Route path="/medrxiv/cards" element={<MedrxivCards />} />
-                <Route path="/medrxiv/agents" element={<MedrxivAgents />} />
+                {/* the archive sections — Agents · Papers · Subjects, per archive */}
+                <Route path="/medrxiv" element={<Navigate to="/medrxiv/subjects" replace />} />
+                <Route path="/medrxiv/subjects" element={<SubjectsPage key="medrxiv-subjects" server="medrxiv" />} />
+                <Route path="/medrxiv/agents" element={<AgentsPage key="medrxiv-agents" server="medrxiv" />} />
+                <Route path="/medrxiv/agents/:category" element={<Chat />} />
+                <Route path="/medrxiv/papers" element={<References key="medrxiv-papers" server="medrxiv" />} />
+                <Route path="/biorxiv" element={<Navigate to="/biorxiv/subjects" replace />} />
+                <Route path="/biorxiv/subjects" element={<SubjectsPage key="biorxiv-subjects" server="biorxiv" />} />
+                <Route path="/biorxiv/agents" element={<AgentsPage key="biorxiv-agents" server="biorxiv" />} />
+                <Route path="/biorxiv/agents/:category" element={<Chat />} />
+                <Route path="/biorxiv/papers" element={<References key="biorxiv-papers" server="biorxiv" />} />
+                {/* pre-subjects URLs — old routes redirect or stay scoped, never 404 */}
+                <Route path="/medrxiv/cards" element={<Navigate to="/medrxiv/subjects" replace />} />
                 <Route path="/medrxiv/rooms/:category" element={<Chat />} />
-                {/* /preprints is retired — old routes redirect, never 404 */}
-                <Route path="/preprints" element={<Navigate to="/medrxiv" replace />} />
-                <Route path="/preprints/cards" element={<Navigate to="/medrxiv/cards" replace />} />
+                <Route path="/preprints" element={<Navigate to="/references" replace />} />
+                <Route path="/preprints/cards" element={<Navigate to="/medrxiv/subjects" replace />} />
                 <Route path="/preprints/agents" element={<Navigate to="/medrxiv/agents" replace />} />
                 <Route path="/resources" element={<Resources />} />
                 <Route path="/search" element={<Search />} />
