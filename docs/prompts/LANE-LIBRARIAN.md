@@ -475,3 +475,121 @@ so that number says nothing) but **which axis** each paper is placed on:
 
 Rooms rose 170 → 252. A room split by MeSH subtree is a topic a researcher can choose; a room
 split by year is a filing cabinet. That swap, for 142k papers, is the deliverable.
+
+## Cross-category rooms (stretch) — done, and it produced a method finding
+
+Ran only after items 4 and 5 were complete, on the laptop + Neon (no GPU, ~$0.02).
+
+**The first design was wrong and was killed.** It issued one
+`avg(embedding) WHERE key_number = ANY(ARRAY[...10,000 slugs])` per room — 252 near-full scans
+of a 3.4 GB table on a 0.25-CU Neon, each carrying ~250 KB of SQL literal. Twelve minutes, no
+measurable progress. Same shape as RIG-DOCTRINE §9 (megabytes of SQL text) crossed with an
+aggregate no index can help. Rewritten to stage membership in a TEMP table and compute all 229
+centroids in **one** join — completed in ~6 minutes. Cost of the mistake: ~12 min wall-clock and
+about $0.01, itemised here rather than folded into the total.
+
+**Finding: centroid cosine is not evidence of a shared room.** 19,439 cross-category pairs sit
+at cosine ≥ 0.80, and the top candidates are packed into 0.986–0.990 — the measure barely
+separates them. Their measured *interleaving* over that same band ranges 0.17 → 0.42. Proposing
+merges on cosine alone would have married unrelated rooms that both sit near the corpus mean.
+The membership test is what carries the claim.
+
+Strongest proposals, ranked by interleaving (not similarity):
+
+| interleaving | room A × room B | union |
+|---|---|---|
+| **0.42** | Cell Biology · Cell Differentiation × Developmental Biology · Cell Differentiation | 684 |
+| **0.37** | Microbiology · RNA Virus Infections × Immunology · Virus Diseases | 961 |
+| **0.36** | Bioinformatics · Genetic Techniques × Genomics · Sequence Analysis | 3,191 |
+| 0.32 | Bioinformatics · Genetic Techniques × Genomics · Biology | 2,553 |
+| 0.31 | Public And Global Health × Health Policy | 9,078 |
+
+The membership evidence reads correctly: the first pair is STAP / naive-vs-primed pluripotency
+papers, the second HIV and Zika. These are single communities split by a filing decision.
+
+**Not applied.** The room map ships as the category-first partition; these are proposals for a
+human. And the cap is stated loudly rather than hidden: **19,439 candidates existed, 12 were
+tested**, chosen by the very cosine ranking I then showed to be a weak proxy — so they are not
+necessarily the best 12.
+
+---
+
+## COMPLETE
+
+### Deliverables
+
+| asked for | delivered |
+|---|---|
+| inventory both datasets + leakage check | done — zero leakage, re-derived from the md5 rule, not read off the manifest |
+| fine-tune one classifier per task | done — `cshl-category`, `cshl-MESH-tagger`, ModernBERT-base |
+| score on UNTOUCHED test splits vs trivial + kNN baselines | done — plus the frozen `cshl-eval-v1` 10k as a second held-out set |
+| weights to S3, publish nothing | `s3://cshl-embed-rxiv/models/cshl-classify/20260821-librarian/` — **nothing published to HF** |
+| apply tagger to the corpus lacking MeSH, NEW table | `preprint_mesh_predicted`, both arms, coverage 39.61% → **99.96%** |
+| room map, every room ≤ ceiling | `docs/ROOM-MAP.md` — **252 rooms, 0 over ceiling, 0 papers unplaced** |
+| stretch: cross-category rooms | done, with its limits stated |
+
+### The two headline results
+
+**cshl-category is worth serving.**
+
+| | accuracy | macro F1 |
+|---|---|---|
+| majority-class floor | 14.45% | 0.33% |
+| kNN over stock bge-m3 | 58.12% | 35.46% |
+| **cshl-category** | **65.09%** | **50.44%** |
+
++6.97 pp over kNN, +15 pp macro F1, and test/frozen-eval agree to 0.08 pp.
+
+**cshl-MESH-tagger is NOT worth serving.** On the full held-out test split (n=13,127):
+
+| | P@5 | P@10 | R@10 | R@15 |
+|---|---|---|---|---|
+| cshl-MESH-tagger @0.20 | 58.68 | 41.00 | 46.40 | 52.66 |
+| **kNN over stock bge-m3** | **63.39** | **46.36** | **53.72** | **61.82** |
+
+Beaten by 4.7–9.2 pp on every ranking metric, reproduced on the frozen eval. By the brief's own
+criterion the model is not worth serving: **the right MeSH labeller for this corpus is a kNN
+lookup over embeddings we already store and index** — no new model, no weights, no inference box.
+The room map was therefore built on kNN labels, not the model's.
+
+### Spend — itemised, waste included
+
+| item | $ |
+|---|---|
+| g6e.2xlarge, 08:02:40Z → ~09:13Z (~71 min @ $2.2421/hr) | 2.65 |
+| EBS 200 GB gp3 for the run | 0.03 |
+| S3 storage + requests (~2.5 GB, prorated) | ~0.01 |
+| Neon compute (vector pull, 3.9M-row COPY, centroid scan) | ~0.02 |
+| **waste:** killed cross-category design, ~12 min of futile Neon scanning | ~0.01 |
+| **waste:** first kNN launch failed on a missing `AWS_DEFAULT_REGION` (died in seconds) | ~0.00 |
+| **TOTAL** | **≈ $2.72** against a $10 cap |
+
+No orphan boxes: `i-0421ce7340212d127` terminated; verified by `describe-instances`. The three
+other running instances in the account predate this lane by days and were not touched.
+
+### What I got wrong, recorded
+
+- **Sized the batch for the wrong box.** Chose batch 32 to survive the 24 GB fallback types, got
+  a 46 GB L40S and used 22.7 GB of it. Batch 64 was free and ~1.5× faster; the OOM-halving loop
+  existed precisely so I could have sized for the box I wanted. Next run starts at 64.
+- **Shipped a gate with a wrong invariant.** My first slice gate required the inference set to be
+  disjoint from *category* labels, which cover 100% of the corpus. It failed loudly with 178,753
+  overlaps. The gate was wrong, not the data — and it working as designed is the argument for it.
+- **Left the MeSH threshold at a default.** 0.5 was never justified; tuning on val was worth
+  +8.8 pp micro-F1 and cost nothing. Caught only because smoke output looked odd.
+- **Designed the centroid query badly** and spent 12 minutes proving it. See above.
+
+### Awaiting a human decision
+
+1. **Do not serve `cshl-MESH-tagger`.** Recommend kNN propagation instead. Both arms are in
+   `preprint_mesh_predicted` so this is reversible. If the tagger is wanted anyway, the obvious
+   next moves are more epochs, a class-balanced loss (macro-F1 on occurring labels is **1.86%** —
+   the head has collapsed onto frequent descriptors), or distilling from the kNN labels.
+2. **The 10,000 room ceiling is provisional.** D9/LANE-CURVE has not run. `build-room-map.py`
+   takes `--max-room N`; re-run when `HAYSTACK-CURVE.md` exists.
+3. **Cross-category merges are proposals, not applied.**
+4. **`manifest.json.split_rule.fn` is wrong as written** (missing the `:` separator that
+   `assemble.mjs:61` adds). One-string fix, owned by whoever owns the miner — not silently
+   patched by this lane.
+
+**Published nothing.** Weights and artifacts are in S3 only.

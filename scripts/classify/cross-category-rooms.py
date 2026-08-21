@@ -45,19 +45,40 @@ for line in open(A.members):
     d = json.loads(line); members[d["room"]] = d["slugs"]
 print(f"[xcat] {len(members)} rooms")
 
-# ---- 1. centroids, in-database
+# ---- 1. centroids, in ONE database pass.
+# The first version issued one `avg(embedding) ... WHERE key_number = ANY(ARRAY[...10k slugs])`
+# per room: 252 near-full scans of a 3.4 GB table on a 0.25-CU Neon, each carrying a ~250 KB
+# SQL literal. It made no measurable progress in ten minutes and was killed. Same failure
+# shape as RIG-DOCTRINE #9 (megabytes of SQL text) crossed with an index that cannot help a
+# whole-table average. Correct design: stage membership in a TEMP table, join once, GROUP BY.
+import tempfile, subprocess as sp
+big = [rn for rn, sl in members.items() if len(sl) >= 200]
+rid = {rn: i for i, rn in enumerate(big)}
+with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as f:
+    for rn in big:
+        for sl in members[rn]: f.write(f"{rid[rn]}\t{sl}\n")
+    memtsv = f.name
+sql = f"""
+CREATE TEMP TABLE rm(room_id int, key_number text);
+\\copy rm FROM '{memtsv}'
+CREATE INDEX ON rm(key_number);
+ANALYZE rm;
+\\copy (SELECT r.room_id, avg(e.embedding)::text FROM rm r JOIN {A.table} e USING (key_number) GROUP BY r.room_id) TO STDOUT
+"""
+print(f"[xcat] {len(big)} rooms >=200 members; one-pass centroid query", flush=True)
+r = sp.run([f"{ROOT}/scripts/psql-cshl.sh", "-v", "ON_ERROR_STOP=1", "-q"], input=sql,
+           capture_output=True, text=True)
+if r.returncode: raise RuntimeError(r.stderr[:1500])
 cent, names = {}, []
-for i, (rn, slugs) in enumerate(members.items()):
-    if len(slugs) < 200: continue
-    arr = "ARRAY[" + ",".join("'" + s.replace("'", "''") + "'" for s in slugs) + "]"
-    out = psql(f"SELECT avg(embedding)::text FROM {A.table} WHERE key_number = ANY({arr});")
-    if not out or not out[0][0].strip(): continue
-    v = np.fromstring(out[0][0].strip().strip("[]"), sep=",", dtype=np.float32)
+inv = {v: k for k, v in rid.items()}
+for line in r.stdout.strip().split("\n"):
+    if not line.strip(): continue
+    a, b = line.split("\t", 1)
+    v = np.fromstring(b.strip().strip("[]"), sep=",", dtype=np.float32)
     n = np.linalg.norm(v)
     if n == 0: continue
-    cent[rn] = v / n; names.append(rn)
-    if i % 20 == 0: print(f"[xcat] centroid {i}/{len(members)}", flush=True)
-print(f"[xcat] {len(cent)} centroids")
+    cent[inv[int(a)]] = v / n; names.append(inv[int(a)])
+print(f"[xcat] {len(cent)} centroids", flush=True)
 
 # ---- 2. cross-category pairs by centroid cosine
 M = np.stack([cent[n] for n in names])

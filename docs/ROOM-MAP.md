@@ -706,3 +706,76 @@ so this count is meaningful rather than an artefact of double-counting.
 |---|---|---|---|
 | Forensic Medicine · other | 30 | `residual` | 77% |
 
+
+## Cross-category rooms (stretch)
+
+Category is author-assigned at submission — a filing decision, not a claim about what a paper
+is near. Where two categories genuinely overlap, a category-first partition cuts one community
+in half. This section proposes unions that the **cshl-CITE** encoder
+(`preprint_embeddings_cshl`) says are one room.
+
+### Centroid similarity alone is not evidence — and that is the finding
+
+**19,439** cross-category room pairs sit at centroid cosine ≥ 0.8, and the
+top candidates are packed between 0.986 and 0.990 — the measure barely separates them. But their
+**interleaving** (how often a paper's nearest neighbour *inside the union* comes from the other
+room) ranges from 0.17 to 0.42 across that same band. Centroid proximity would happily have
+married rooms that are two distinct blobs sitting near the corpus mean.
+
+So nothing below is proposed on cosine. Each pair had to survive a membership test, and the
+ranking here is by interleaving, not similarity.
+
+| interleaving | cos | room A | room B | union | fits ceiling |
+|---|---|---|---|---|---|
+| **0.42** | 0.988 | Cell Biology · Cell Differentiation (280) | Developmental Biology · Cell Differentiation (404) | 684 | yes |
+| **0.37** | 0.986 | Microbiology · RNA Virus Infections (636) | Immunology · Virus Diseases (325) | 961 | yes |
+| **0.36** | 0.990 | Bioinformatics · Genetic Techniques (2,241) | Genomics · Sequence Analysis (950) | 3,191 | yes |
+| **0.32** | 0.990 | Bioinformatics · Genetic Techniques (2,241) | Genomics · Biology (312) | 2,553 | yes |
+| **0.31** | 0.989 | Public And Global Health (7,932) | Health Policy (1,146) | 9,078 | yes |
+| **0.30** | 0.988 | Genetics · Public Health (1,330) | Genomics · Biological Evolution (1,386) | 2,716 | yes |
+| **0.29** | 0.990 | Bioinformatics · Genetic Techniques (2,241) | Genomics · Genetic Techniques (1,900) | 4,141 | yes |
+| **0.26** | 0.987 | Health Systems And Quality Improvement (1,467) | Primary Care Research (635) | 2,102 | yes |
+| **0.25** | 0.988 | Molecular Biology · Gene Expression Regulation (1,661) | Biochemistry · Nucleic Acids (1,611) | 3,272 | yes |
+| **0.22** | 0.987 | Genetics · Genetic Techniques (829) | Genomics · Genetic Techniques (1,900) | 2,729 | yes |
+| **0.17** | 0.987 | Cell Biology · unclassified (3,114) | Molecular Biology · Gene Expression Regulation (1,661) | 4,775 | yes |
+| **0.17** | 0.988 | Bioinformatics · Genetic Structures (1,259) | Genomics · Proteins (372) | 1,631 | yes |
+
+### Membership, shown not asserted
+
+The brief's constraint was *propose nothing you cannot show membership for*. The three
+strongest, with real papers drawn from the proposed union:
+
+**Cell Biology · Cell Differentiation × Developmental Biology · Cell Differentiation** — interleaving 0.42, union 684
+
+- `027730` Investigation of the cellular reprogramming phenomenon referred to as stimulus-triggered acquisition of plurip
+- `028472` Results of an attempt to reproduce the STAP phenomenon
+- `030676` Dynamic stem cell states: naive to primed pluripotency in rodents and humans
+- `049346` Guided self-organization recapitulates tissue architecture in a bioengineered brain organoid model
+
+**Microbiology · RNA Virus Infections × Immunology · Virus Diseases** — interleaving 0.37, union 961
+
+- `031005` A computational model of inhibition of HIV-1 by interferon-alpha
+- `041913` Times to Key Events in the Course of Zika Infection and their Implications for Surveillance: A Systematic Revi
+- `066225` Depot Medroxyprogesterone Acetate is associated with increased Peripheral blood CD 3 and CD 4 T-Lymphocyte Cou
+- `071571` Bovine Lactoferrin Activity Against Chikungunya and Zika Viruses
+
+**Bioinformatics · Genetic Techniques × Genomics · Sequence Analysis** — interleaving 0.36, union 3,191
+
+- `000158` Functional Annotation Signatures of Disease Susceptibility Loci Improve SNP Association Analysis
+- `000315` On the Reproducibility of TCGA Ovarian Cancer MicroRNA Profiles
+- `001024` Exploring DNA structures in real-time polymerase kinetics using Pacific Biosciences sequencer data
+- `001479` Massively differential bias between two widely used Illumina library preparation methods for small RNA sequenc
+
+### Limits, stated rather than left implicit
+
+- **19,439 candidate pairs existed; 12 were tested.** The 12 were the top of the
+  centroid-cosine ranking — and since that ranking turned out to be a weak proxy for real
+  overlap, these are *not* necessarily the 12 best merges in the corpus. A proper sweep would
+  run the membership test far wider. This is a sampled probe, not an exhaustive search.
+- Only pairs whose union still fits the ceiling were considered, so genuine large-scale overlaps
+  (neuroscience × animal behaviour, for instance) are excluded by construction.
+- Interleaving is measured on 25 sampled papers per side. It ranks candidates; it does not
+  carry a confidence interval.
+- **Nothing here is applied.** The room map ships as the category-first partition. These are
+  proposals for a human to accept or reject.
+
