@@ -1,15 +1,15 @@
 import { TexText } from "./TexText";
 import { useState, useRef, useEffect } from "react";
 import { ThumbsUp, ThumbsDown, Copy, Check, BookOpen, ExternalLink, GraduationCap, FileText, ArrowRight } from "lucide-react";
+import { subjectTitle } from "@/lib/subjects";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import type { MessageSources } from "@/hooks/useChat";
 import { usePaperLookup } from "@/hooks/usePaperLookup";
 import { TextSearch } from "@/components/icons/TextSearch";
 
-/** MedRxiv's 51 category rooms exist tonight; bioRxiv's do not. A category chip
- *  is a link only when the room it names is real. */
-const ROOMED_SERVERS = new Set(["medrxiv"]);
+/** Both archives have subject agents now; a category chip always links. */
+const ROOMED_SERVERS = new Set(["medrxiv", "biorxiv"]);
 
 interface SimilarRecord {
   key_number: string;
@@ -50,35 +50,38 @@ function RelatedFooter({ sourceKey }: { sourceKey: string }) {
 
   if (!related?.length) return null;
   return (
-    <div className="mt-3 border-t pt-2">
-      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+    <div className="mt-4 border-t pt-3">
+      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         Keep reading
       </p>
-      <div className="space-y-1">
+      <div className="flex flex-col items-start gap-1.5">
         {related.map((r) => (
-          <div key={r.key_number} className="flex items-center gap-2 text-xs">
+          <div key={r.key_number} className="group flex w-full items-center gap-2">
+            <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
             <a
               href={r.doi ? `https://doi.org/${r.doi}` : undefined}
               target="_blank"
               rel="noopener noreferrer"
-              className="min-w-0 flex-1 truncate text-muted-foreground transition-colors hover:text-foreground"
+              className="min-w-0 flex-1 truncate text-left text-[13.5px] text-foreground"
             >
-              <TexText text={r.title ?? r.key_number} />
+              <span className="link-wipe max-w-full truncate align-bottom">
+                <TexText text={r.title ?? r.key_number} />
+              </span>
             </a>
             {(r.categories ?? []).slice(0, 1).map((cat) =>
               r.server && ROOMED_SERVERS.has(r.server) ? (
                 <button
                   key={cat}
-                  onClick={() => navigate(`/medrxiv/rooms/${encodeURIComponent(cat)}`)}
+                  onClick={() => navigate(`/${r.server}/agents/${encodeURIComponent(cat)}`)}
                   className="inline-flex shrink-0 items-center gap-0.5 rounded-full border px-2 py-0.5 text-[10px] font-medium text-brand transition-colors hover:bg-muted"
-                  title={`Open the ${cat} room`}
+                  title={`Ask the ${subjectTitle(cat)} agent`}
                 >
-                  {cat}
+                  {subjectTitle(cat)}
                   <ArrowRight className="h-2.5 w-2.5" />
                 </button>
               ) : (
                 <span key={cat} className="shrink-0 rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
-                  {cat}
+                  {subjectTitle(cat)}
                 </span>
               ),
             )}
@@ -173,7 +176,7 @@ export function ChatResponseFooter({
                 setTimeout(() => sourcesRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 100);
               }
             }}
-            className={`inline-flex items-center justify-center h-10 w-10 md:h-8 md:w-8 rounded-md transition-colors ${
+            className={`inline-flex items-center justify-center h-7 w-7 rounded-[3px] transition-colors ${
               sourcesOpen
                 ? "text-foreground bg-muted"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -193,7 +196,7 @@ export function ChatResponseFooter({
                 setTimeout(() => abstractRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 100);
               }
             }}
-            className={`inline-flex items-center justify-center h-10 w-10 md:h-8 md:w-8 rounded-md transition-colors ${
+            className={`inline-flex items-center justify-center h-7 w-7 rounded-[3px] transition-colors ${
               abstractOpen
                 ? "text-foreground bg-muted"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -213,7 +216,7 @@ export function ChatResponseFooter({
                 setTimeout(() => pdfRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 100);
               }
             }}
-            className={`inline-flex items-center justify-center h-10 w-10 md:h-8 md:w-8 rounded-md transition-colors ${
+            className={`inline-flex items-center justify-center h-7 w-7 rounded-[3px] transition-colors ${
               pdfOpen
                 ? "text-foreground bg-muted"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -227,7 +230,7 @@ export function ChatResponseFooter({
         {/* Copy */}
         <button
           onClick={handleCopy}
-          className="inline-flex items-center justify-center h-10 w-10 md:h-8 md:w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          className="inline-flex items-center justify-center h-7 w-7 rounded-[3px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
           title="Copy response"
         >
           {copied ? (
@@ -241,7 +244,7 @@ export function ChatResponseFooter({
         <div className="flex items-center gap-1 ml-auto">
           <button
             onClick={() => setFeedback(feedback === "good" ? null : "good")}
-            className={`inline-flex items-center justify-center h-10 w-10 md:h-8 md:w-8 rounded-md transition-colors ${
+            className={`inline-flex items-center justify-center h-7 w-7 rounded-[3px] transition-colors ${
               feedback === "good"
                 ? "text-green-600 hover:text-green-600 hover:bg-green-50"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -252,7 +255,7 @@ export function ChatResponseFooter({
           </button>
           <button
             onClick={() => setFeedback(feedback === "bad" ? null : "bad")}
-            className={`inline-flex items-center justify-center h-10 w-10 md:h-8 md:w-8 rounded-md transition-colors ${
+            className={`inline-flex items-center justify-center h-7 w-7 rounded-[3px] transition-colors ${
               feedback === "bad"
                 ? "text-red-500 hover:text-red-500 hover:bg-red-50"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"

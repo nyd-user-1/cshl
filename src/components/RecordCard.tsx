@@ -76,7 +76,14 @@ export const RecordCard = memo(function RecordCard({ record, searchQuery, search
     const params = new URLSearchParams({ prompt, context });
     if (url) params.set("url", url);
 
-    navigate(`/?${params.toString()}`);
+    // The question goes to the paper's own subject agent when the record names
+    // one — the scope rides the URL, so the answer is retrieved in-subject.
+    const category = record.categories?.[0];
+    const dest =
+      record.server && category
+        ? `/${record.server}/agents/${encodeURIComponent(category)}`
+        : "/";
+    navigate(`${dest}?${params.toString()}`);
 
     emit({
       event_type: "record_inquiry",

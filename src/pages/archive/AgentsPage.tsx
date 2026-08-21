@@ -54,9 +54,6 @@ export default function AgentsPage({ server }: { server: ArchiveServer }) {
             Name
             <ArrowUpDown className="h-3.5 w-3.5" />
           </button>
-          <span className="ml-auto text-xs text-muted-foreground">
-            One assistant per subject.
-          </span>
         </div>
       </div>
 

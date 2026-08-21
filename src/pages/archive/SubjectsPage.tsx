@@ -101,10 +101,11 @@ export default function SubjectsPage({ server }: { server: ArchiveServer }) {
   const navigate = useNavigate();
   const { data: live, isLoading } = useArchiveCategories(server);
   const [query, setQuery] = useState("");
-  const [nameSortAsc, setNameSortAsc] = useState<boolean | null>(null);
+  // a–z is the default; the Name toggle flips to z–a and back.
+  const [nameSortAsc, setNameSortAsc] = useState(true);
 
   // The static file is the row source (it carries the MeSH data); the live
-  // dict supplies current counts and default count-descending order.
+  // dict supplies current counts.
   const subjects = useMemo(() => {
     const rows = SUBJECTS[server] ?? [];
     const counts = new Map(live?.map((c) => [c.value, c.record_count]));
@@ -117,14 +118,11 @@ export default function SubjectsPage({ server }: { server: ArchiveServer }) {
           subject.mesh?.label.toLowerCase().includes(q) ||
           subject.mesh?.id.toLowerCase().includes(q),
       );
-    if (nameSortAsc !== null)
-      out = [...out].sort((a, b) =>
-        nameSortAsc
-          ? a.subject.category.localeCompare(b.subject.category)
-          : b.subject.category.localeCompare(a.subject.category),
-      );
-    else out = [...out].sort((a, b) => b.papers - a.papers);
-    return out;
+    return [...out].sort((a, b) =>
+      nameSortAsc
+        ? a.subject.category.localeCompare(b.subject.category)
+        : b.subject.category.localeCompare(a.subject.category),
+    );
   }, [server, live, query, nameSortAsc]);
 
   return (
@@ -141,19 +139,12 @@ export default function SubjectsPage({ server }: { server: ArchiveServer }) {
             {ARCHIVE_LABEL[server]} subjects
           </span>
           <button
-            onClick={() => setNameSortAsc((p) => (p === null ? true : p ? false : null))}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${
-              nameSortAsc !== null
-                ? "bg-foreground text-background font-medium"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground"
-            }`}
+            onClick={() => setNameSortAsc((p) => !p)}
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             Name
             <ArrowUpDown className="h-3.5 w-3.5" />
           </button>
-          <span className="ml-auto text-xs text-muted-foreground">
-            Pick a subject and ask.
-          </span>
         </div>
       </div>
 
