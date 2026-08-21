@@ -37,3 +37,6 @@ supabase/.temp/
 /data/
 .env*
 .cutover-backup
+
+# Nested lane worktrees (harness default) — never commit as gitlinks
+.claude/worktrees/
