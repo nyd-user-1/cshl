@@ -88,7 +88,11 @@ function formatNsrContext(records: Rec[]): string {
     ];
     if (r.categories?.length) parts.push(`    Category: ${r.categories.join(", ")}`);
     if (r.status_tags?.length) parts.push(`    Status: ${r.status_tags.join(", ")}`);
-    if (r.abstract) parts.push(`    Abstract: ${r.abstract.slice(0, 500)}`);
+    // Full abstract, capped only as a runaway guard. The old 500-char cut is
+    // what lost the Vink comparison to AWS's managed KB — its generator read
+    // whole chunks while ours read stubs; a worse retriever beat us on content
+    // because it was allowed to read. ≤10 records × ≤4k chars ≈ 10k tokens max.
+    if (r.abstract) parts.push(`    Abstract: ${r.abstract.slice(0, 4000)}`);
     return parts.join("\n");
   });
   return `\n## Retrieved Records\n${lines.join("\n\n")}`;
