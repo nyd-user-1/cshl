@@ -244,9 +244,32 @@ export default async function handler(req: any, res: any) {
       );
     // websearch ANDs every term, which is too strict for conversational
     // queries — when the strict pass finds nothing, retry with terms OR'ed.
-    const orQuery = () => userMessage.split(/\s+/).filter((w) => w.length > 2).slice(0, 12).join(" or ");
+    // The OR retry MUST prune high-document-frequency lexemes via fts_high_df,
+    // exactly as /api/search does: a naive OR ranks every match, and a message
+    // like "please read <DOI> and report what it says" ORs 'read', 'report',
+    // 'say' over 433k docs — measured 42.7 s inside this handler before the
+    // pruning was copied over. Same query pruned: ~100 ms.
+    const ftsOrPruned = (scoped: boolean) =>
+      q(
+        `WITH terms AS (
+           SELECT unnest(string_to_array(
+                    replace(plainto_tsquery('english', $1)::text, '''', ''), ' & ')) AS l
+         ), kept AS (
+           SELECT string_agg(l, ' | ') AS expr FROM terms
+            WHERE l NOT IN (SELECT lexeme FROM fts_high_df)
+         ), tq AS (
+           SELECT nullif((SELECT expr FROM kept), '')::tsquery AS q
+         )
+         SELECT ${SELECT},
+                least(ts_rank_cd(fts, tq.q) / 4.0, 0.99)::float AS similarity
+         FROM preprints, tq
+         WHERE tq.q IS NOT NULL AND fts @@ tq.q${scoped && room ? ` AND ${roomCond(2)}` : ""}
+         ORDER BY ts_rank_cd(fts, tq.q) DESC
+         LIMIT 8`,
+        scoped && room ? [userMessage, ...roomParams] : [userMessage],
+      );
     const ftsP: Promise<Rec[]> = ftsFor(userMessage, true)
-      .then((rows) => (rows.length > 0 ? rows : ftsFor(orQuery(), true)))
+      .then((rows) => (rows.length > 0 ? rows : ftsOrPruned(true)))
       .catch(() => []);
 
     // Dense arm — the query vector is computed once and shared with the
@@ -364,7 +387,7 @@ export default async function handler(req: any, res: any) {
     let widened = false;
     if (room && (!inRoomEvidence || records.length < 3)) {
       const [ftsWide, denseWide] = await Promise.all([
-        ftsFor(userMessage, false).then((r) => (r.length ? r : ftsFor(orQuery(), false))).catch(() => []),
+        ftsFor(userMessage, false).then((r) => (r.length ? r : ftsOrPruned(false))).catch(() => []),
         vecP.then((v) => (v ? denseQuery(v, false) : [])),
       ]);
       const wide = merge([records, interleave(denseWide, ftsWide)], 14);
