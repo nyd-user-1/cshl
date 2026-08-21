@@ -127,7 +127,57 @@ extrapolating geometrically. Residual risk is that an equally-close neighbour ca
 still be less apt — but the main mechanism by which this would have failed is
 ruled out.
 
-## 5. Lane status at time of writing
+## 5. The room map is good — and it needs one distinction it doesn't have
+
+`docs/ROOM-MAP.md` on `lane/librarian`: **252 rooms, every one of 433,449 papers
+placed, largest 9,948, none over the ceiling.** The lane made the right call
+under sunk cost — it built the map with **kNN-propagated MeSH, not the tagger it
+had just trained**, because the tagger lost; both arms are loaded in
+`preprint_mesh_predicted` and distinguished by `model`, so the choice is
+auditable and reversible, and observed MeSH is never overwritten. It also flags
+the ceiling as provisional pending D9, and marks per-room what fraction of
+members were placed by a predicted label. That is the standard we want.
+
+**The problem is not the partition. It is that the map conflates two things.**
+
+Only 8 of 252 rooms fell back to the year axis, but they are concentrated in the
+three most popular topical families, and they are among the largest rooms:
+
+| family | rooms | papers |
+|---|---|---|
+| Neuroscience · Brain | 4 (2013–2021, 2020 H1–2024 H2, 2025, 2026) | 21,287 |
+| Neuroscience · Telencephalon | 2 (2013–2022, 2023–2026) | 15,653 |
+| Bioinformatics · Algorithms | 2 (2013–2025, 2026) | 10,347 |
+
+**Navigation is the router.** A user with a question about the brain is now shown
+four "Brain" rooms and two "Telencephalon" rooms distinguished only by date. Their
+question has no date, so they cannot choose correctly — and a chosen route that
+the user has no basis for choosing fails *invisibly*, which is the exact failure
+the architecture exists to prevent. ("Telencephalon" and "Brain" are also
+near-synonyms to a non-specialist, so the topical distinction doesn't rescue it.)
+
+**The fix is Brendan's own position from last night, and it is a naming change,
+not a re-run.** His words: *"Assume 13,456… how much degradation if it has to
+search v1, the original 10k, and then v2, the 3,456 overflow? We're still
+confining it to 13,456, or two rooms as opposed to 433k."*
+
+So separate the two concepts the map currently merges:
+
+- A **room** is what a user picks. It is always topical and always choosable.
+- A **shard** is what the index holds. The ceiling governs *shards*, not rooms.
+
+"Neuroscience · Brain" becomes one choosable room of 21,287 papers held in four
+shards; picking it searches all four. Year bands stay exactly as they are as a
+*sharding* strategy — they are only wrong as a *naming* strategy. This takes
+user-facing rooms from 252 to **247**, and no user ever guesses a date.
+
+The seven `unclassified` rooms (7,711 papers) are honestly named, small, and
+fine. And the rooms sitting at 97–100% predicted labels are the 2026 ones —
+recent papers aren't published yet, so they have no NLM MeSH. That is finding §4's
+coverage bias surfacing in the map, and it is the population whose propagation
+geometry I checked and found sound.
+
+## 6. Lane status at time of writing
 
 - `lane/librarian` — 3 commits, category model trained and scored, room map
   gap closed (36,212 → 0) via a half-year fallback. No COMPLETE/BLOCKED yet.
