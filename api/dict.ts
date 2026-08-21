@@ -1,9 +1,11 @@
 // /api/dict — dictionaries for the filter comboboxes and the "+" menu, from Neon.
 //   ?type=categories|journals|institutions|authors [&q=prefix] [&limit=N]
-//   ?type=categories&server=medrxiv — per-server category counts, computed from
-//   preprints (the categories table's paper_count is cross-server, which lies for
-//   any category both servers use). These are the room cards' real numbers;
-//   edge-cached for a day.
+//   ?type=categories&server=medrxiv — per-server category counts, the room
+//   cards' real numbers. Read from category_server_counts (sql/22), which is
+//   materialized because the live unnest+GROUP BY measured 3.1 s cold. The
+//   `categories` table's paper_count is cross-server and lies for any category
+//   both servers use, so it is not a substitute. Falls back to the live
+//   aggregate if the table has not been created yet.
 //
 // Returns [{ value, record_count }], the same shape the pickers already consume.
 // The NSR-era types (nuclides, reactions) map onto this corpus as categories and
@@ -29,13 +31,24 @@ export default async function handler(req: any, res: any) {
     let rows: Record<string, unknown>[];
     const server = req.query?.server === "biorxiv" || req.query?.server === "medrxiv" ? String(req.query.server) : null;
     if (type === "categories" && server) {
-      rows = await sql.query(
-        `SELECT c.category AS value, count(*)::int AS record_count
-         FROM preprints p, unnest(p.categories) c(category)
-         WHERE p.server = $1 ${q ? "AND c.category ILIKE $2" : ""}
-         GROUP BY 1 ORDER BY record_count DESC, value`,
-        q ? [server, like] : [server],
-      );
+      const live = () =>
+        sql.query(
+          `SELECT c.category AS value, count(*)::int AS record_count
+           FROM preprints p, unnest(p.categories) c(category)
+           WHERE p.server = $1 ${q ? "AND c.category ILIKE $2" : ""}
+           GROUP BY 1 ORDER BY record_count DESC, value`,
+          q ? [server, like] : [server],
+        );
+      rows = await sql
+        .query(
+          `SELECT category AS value, paper_count AS record_count
+           FROM category_server_counts
+           WHERE server = $1 ${q ? "AND category ILIKE $2" : ""}
+           ORDER BY record_count DESC, value`,
+          q ? [server, like] : [server],
+        )
+        .then((r) => (r.length ? r : live()))
+        .catch(live);
     } else if (type === "categories") {
       rows = await sql.query(
         `SELECT category AS value, paper_count AS record_count FROM categories
