@@ -28,6 +28,64 @@ interface RecordDrawerProps {
   onNavigate: (index: number) => void;
 }
 
+/* ------------------------------------------------------------------ *
+ *  Related preprints — powered by cshl-CITE (see api/similar.ts).
+ *
+ *  Deliberately a different model from the one behind the search box:
+ *  this asks "what else is like this paper?", which is a document->document
+ *  question, and the citation-trained encoder is the one measured best at
+ *  it (R@10 0.212 vs MedCPT 0.179, p = 0.0001). Costs no inference — the
+ *  paper's vector is already stored, so this is one indexed kNN.
+ * ------------------------------------------------------------------ */
+function RelatedPreprints({ recordKey, onOpen }: { recordKey: string; onOpen?: (key: string) => void }) {
+  const [rows, setRows] = useState<Array<Record<string, unknown>> | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setRows(null); setFailed(false);
+    if (!recordKey) return;
+    fetch(`/api/similar?key=${encodeURIComponent(recordKey)}&limit=6`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => { if (alive) setRows(d.records ?? []); })
+      .catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [recordKey]);
+
+  if (failed || (rows && rows.length === 0)) return null;
+
+  return (
+    <div className="pt-5">
+      <div className="flex items-baseline gap-2">
+        <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          Related preprints
+        </h4>
+        <span className="text-[10px] text-muted-foreground/70">cshl-CITE</span>
+      </div>
+      {!rows ? (
+        <p className="mt-2 text-xs text-muted-foreground">Finding related work…</p>
+      ) : (
+        <ul className="mt-2 space-y-2">
+          {rows.map((r) => (
+            <li key={String(r.key_number)}>
+              <button
+                type="button"
+                onClick={() => onOpen?.(String(r.key_number))}
+                className="w-full text-left text-xs leading-snug text-foreground/85 hover:text-foreground hover:underline"
+              >
+                {String(r.title)}
+              </button>
+              <span className="text-[10px] text-muted-foreground">
+                {String(r.server ?? "")}{r.pub_year ? ` · ${r.pub_year}` : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function RecordDrawer({
   records,
   currentIndex,
@@ -339,6 +397,10 @@ export function RecordDrawer({
               </>
             );
           })()}
+
+          {record?.key_number && (
+            <RelatedPreprints recordKey={String(record.key_number)} />
+          )}
         </div>
       </SheetContent>
     </Sheet>
