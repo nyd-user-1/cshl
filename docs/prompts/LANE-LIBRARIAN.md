@@ -231,3 +231,34 @@ inference passes (test + eval + 261,768 corpus rows).
 **Watchdog 180 min**, deliberately: worst case is 3 h × $3.0042 (the priciest menu type) =
 **$9.01**, inside the $10 cap with nothing else spent. Checkpoints + RESUME_* make an overrun a
 relaunch, not a loss.
+
+## 2026-08-21 ~03:5xZ — box launched
+
+`i-0421ce7340212d127`, **g6e.2xlarge** (L40S 46 GB), $2.2421/hr, watchdog 180 min
+(shutdown 11:03:25Z). RUN_ID `20260821-librarian`.
+
+The AZ failover fired **for real** on the way in, not just in the test:
+
+```
+type g6e.2xlarge: no capacity in subnet-0200d8f947fcf9090 — next AZ
+type g6e.2xlarge: no capacity in subnet-06b1914b54fc3e0c5 — next AZ
+type g6e.2xlarge: no capacity in subnet-0407bd1ff7e9d8c44 — next AZ
+launched: i-0421ce7340212d127 (g6e.2xlarge, subnet-09e840612db030382)
+```
+
+Three of four AZs were out of g6e.2xlarge. Without the walk this launch simply fails.
+
+On-box gates, all passed before a dollar of training:
+- `transformers 4.57.6` ≥ 4.48, asserted rather than assumed (ModernBERT predates neither).
+- manifest disjointness re-read on the box: all zeros, `pass: true`.
+- **SMOKE PASSED in 127s** — both trainers, both scorers and the inference path exercised
+  end-to-end at 200 rows before the real run started.
+
+### Mid-flight patch (SSM), made before the stage it affects
+
+Smoke showed the tagger emitting all 20 top-k labels at threshold 0.5 — meaningless for a
+2-step model, but it exposed a design flaw worth fixing: `infer` wrote only labels above the
+threshold, so a badly-chosen threshold could only be corrected by **re-running the box**.
+Patched `cmd_infer` on the running box to persist the full top-20 probability vector, so the
+threshold becomes a local, free decision. Verified `PATCH_OK` with an AST parse before leaving
+it. The infer stage is ~1.5 h downstream of the patch, so nothing in flight was disturbed.
