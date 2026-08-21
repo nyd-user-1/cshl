@@ -11,6 +11,8 @@ export interface SubjectMesh {
   label: string;
   treeNumbers: string[];
   scopeNote: string | null;
+  /** NLM's "See Also" cross-references — related MeSH headings. */
+  seeAlso: { id: string; label: string }[];
 }
 
 export interface Subject {

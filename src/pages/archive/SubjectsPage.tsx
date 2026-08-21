@@ -22,11 +22,13 @@ function SubjectCard({
   subject,
   papers,
   onOpen,
+  onPapers,
 }: {
   server: ArchiveServer;
   subject: Subject;
   papers: number;
   onOpen: () => void;
+  onPapers: () => void;
 }) {
   const title = subjectTitle(subject.category);
   return (
@@ -35,9 +37,8 @@ function SubjectCard({
       className="group relative rounded-lg border border-border/40 bg-muted/40 p-4 pb-14 md:p-6 md:pb-16 min-h-[240px] transition-all hover:shadow-lg hover:border-border cursor-pointer"
     >
       <div className="flex items-center gap-2 mb-3">
-        <BookMarked className="h-5 w-5 text-muted-foreground" />
         <span className="text-base font-bold">{title}</span>
-        <span className="ml-auto text-sm font-medium text-muted-foreground">{fmt(papers)}</span>
+        <BookMarked className="ml-auto h-5 w-5 text-muted-foreground" />
       </div>
 
       <p className="text-sm text-foreground leading-snug mb-3 line-clamp-4">
@@ -45,7 +46,7 @@ function SubjectCard({
           `${ARCHIVE_LABEL[server]} preprints in ${title.toLowerCase()}.`}
       </p>
 
-      <div className="grid grid-cols-1 gap-y-2 text-xs">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
         {subject.mesh && subject.mesh.treeNumbers.length > 0 && (
           <div className="min-w-0">
             <span className="text-muted-foreground">Tree Number(s)</span>
@@ -56,28 +57,31 @@ function SubjectCard({
           <div className="min-w-0">
             <span className="text-muted-foreground">Unique ID</span>
             <div className="mt-0.5">
-              <span className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-foreground/80">
+              <a
+                href={meshUrl(subject.mesh.id)}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                title="Open in NLM's MeSH browser"
+                className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-foreground/80 hover:bg-foreground/20"
+              >
                 {subject.mesh.id}
-              </span>
+              </a>
             </div>
           </div>
         )}
       </div>
 
       <div className="absolute bottom-3 left-4 md:bottom-4 md:left-6 right-4 flex items-center justify-between">
-        {subject.mesh ? (
-          <a
-            href={meshUrl(subject.mesh.id)}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="text-xs text-brand hover:underline truncate max-w-[60%]"
-          >
-            mesh/{subject.mesh.id}
-          </a>
-        ) : (
-          <span />
-        )}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onPapers();
+          }}
+          className="text-xs text-brand hover:underline"
+        >
+          {fmt(papers)} Papers
+        </button>
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -177,6 +181,9 @@ export default function SubjectsPage({ server }: { server: ArchiveServer }) {
                   papers={papers}
                   onOpen={() =>
                     navigate(`/${server}/agents/${encodeURIComponent(subject.category)}`)
+                  }
+                  onPapers={() =>
+                    navigate(`/${server}/papers?category=${encodeURIComponent(subject.category)}`)
                   }
                 />
               ))}

@@ -84,7 +84,24 @@ interface SubjectRow {
     label: string;
     treeNumbers: string[];
     scopeNote: string | null;
+    seeAlso: { id: string; label: string }[];
   };
+}
+
+const str = (v: unknown): string | null =>
+  typeof v === "string"
+    ? v
+    : v && typeof v === "object" && "@value" in (v as object)
+      ? String((v as Record<string, unknown>)["@value"])
+      : null;
+
+const labelCache = new Map<string, string | null>();
+async function labelOf(id: string): Promise<string | null> {
+  if (labelCache.has(id)) return labelCache.get(id)!;
+  const d = await json<Record<string, unknown>>(`${MESH}/${id}.json`);
+  const label = str(d?.label);
+  labelCache.set(id, label);
+  return label;
 }
 
 const titleCase = (s: string) =>
@@ -138,16 +155,24 @@ async function enrich(category: string, papers: number): Promise<SubjectRow> {
   const pc = detail?.preferredConcept;
   if (typeof pc === "string") {
     const concept = await json<Record<string, unknown>>(`${pc}.json`);
-    const note = concept?.scopeNote;
-    if (typeof note === "string") scopeNote = note.trim();
-    else if (note && typeof note === "object" && "@value" in (note as object))
-      scopeNote = String((note as Record<string, unknown>)["@value"]).trim();
+    scopeNote = str(concept?.scopeNote)?.trim() ?? null;
+  }
+  // The descriptor's "see also" cross-references — related headings, as NLM's
+  // own MeSH browser shows them.
+  const sa = detail?.seeAlso;
+  const saIds = (Array.isArray(sa) ? sa : sa ? [sa] : [])
+    .map((u) => String(u).split("/").pop()!)
+    .filter((s) => /^D\d+/.test(s));
+  const seeAlso: { id: string; label: string }[] = [];
+  for (const sid of saIds.slice(0, 4)) {
+    const label = await labelOf(sid);
+    if (label) seeAlso.push({ id: sid, label });
   }
   return {
     category,
     name: hit.label,
     papers,
-    mesh: { id, label: hit.label, treeNumbers, scopeNote },
+    mesh: { id, label: hit.label, treeNumbers, scopeNote, seeAlso },
   };
 }
 

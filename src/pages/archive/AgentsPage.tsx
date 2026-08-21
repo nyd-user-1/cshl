@@ -11,7 +11,7 @@ import { ArrowUp, ArrowUpDown, Bot } from "lucide-react";
 import { SearchInput } from "@/components/SearchInput";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ARCHIVE_LABEL, useArchiveCategories, type ArchiveServer } from "@/hooks/useArchive";
-import { findSubject, subjectTitle } from "@/lib/subjects";
+import { findSubject, meshUrl, subjectTitle } from "@/lib/subjects";
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 
@@ -20,18 +20,17 @@ export default function AgentsPage({ server }: { server: ArchiveServer }) {
   const label = ARCHIVE_LABEL[server];
   const { data: categories, isLoading, error } = useArchiveCategories(server);
   const [query, setQuery] = useState("");
-  const [nameSortAsc, setNameSortAsc] = useState<boolean | null>(null);
+  // a–z is the default; the Name toggle flips to z–a and back.
+  const [nameSortAsc, setNameSortAsc] = useState(true);
 
   const agents = useMemo(() => {
     if (!categories) return null;
     const q = query.trim().toLowerCase();
     let out = categories;
     if (q) out = out.filter((c) => c.value.includes(q));
-    if (nameSortAsc !== null)
-      out = [...out].sort((a, b) =>
-        nameSortAsc ? a.value.localeCompare(b.value) : b.value.localeCompare(a.value),
-      );
-    return out;
+    return [...out].sort((a, b) =>
+      nameSortAsc ? a.value.localeCompare(b.value) : b.value.localeCompare(a.value),
+    );
   }, [categories, query, nameSortAsc]);
 
   const openAgent = (category: string) =>
@@ -49,12 +48,8 @@ export default function AgentsPage({ server }: { server: ArchiveServer }) {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium text-foreground">{label} agents</span>
           <button
-            onClick={() => setNameSortAsc((p) => (p === null ? true : p ? false : null))}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors ${
-              nameSortAsc !== null
-                ? "bg-foreground text-background font-medium"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground"
-            }`}
+            onClick={() => setNameSortAsc((p) => !p)}
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             Name
             <ArrowUpDown className="h-3.5 w-3.5" />
@@ -96,8 +91,8 @@ export default function AgentsPage({ server }: { server: ArchiveServer }) {
                     className="group relative rounded-lg border border-border/40 bg-muted/40 p-4 pb-14 md:p-6 md:pb-16 min-h-[240px] transition-all hover:shadow-lg hover:border-border cursor-pointer"
                   >
                     <div className="flex items-center gap-2 mb-3">
-                      <Bot className="h-5 w-5 text-muted-foreground" />
                       <span className="text-base font-bold">{title} Agent</span>
+                      <Bot className="ml-auto h-5 w-5 text-muted-foreground" />
                     </div>
 
                     <p className="text-sm text-foreground leading-snug mb-3">
@@ -114,19 +109,27 @@ export default function AgentsPage({ server }: { server: ArchiveServer }) {
                           {mesh ? ` · MeSH ${mesh.id}` : ""}
                         </p>
                       </div>
-                      <div className="min-w-0">
-                        <span className="text-muted-foreground">Retrieval</span>
-                        <div className="flex flex-wrap gap-1.5 mt-0.5">
-                          {["Hybrid", "Semantic", "Keyword"].map((m) => (
-                            <span
-                              key={m}
-                              className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-foreground/80"
-                            >
-                              {m}
-                            </span>
-                          ))}
+                      {mesh && mesh.seeAlso.length > 0 && (
+                        <div className="min-w-0">
+                          <span className="text-muted-foreground">See Also</span>
+                          <p className="font-medium truncate">
+                            {mesh.seeAlso.map((s, i) => (
+                              <span key={s.id}>
+                                {i > 0 && ", "}
+                                <a
+                                  href={meshUrl(s.id)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="hover:underline"
+                                >
+                                  {s.label}
+                                </a>
+                              </span>
+                            ))}
+                          </p>
                         </div>
-                      </div>
+                      )}
                     </div>
 
                     <div className="absolute bottom-3 left-4 md:bottom-4 md:left-6 right-4 flex items-center justify-between">

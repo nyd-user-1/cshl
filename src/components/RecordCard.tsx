@@ -1,10 +1,12 @@
 import { memo, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { ArrowUp, Copy, Check, Hash } from "lucide-react";
+import { ArrowUp, Copy, Check } from "lucide-react";
 import type { CorpusRecord } from "@/types/record";
 import type { SearchMode } from "@/hooks/useRecordSearch";
 import { useFeedEmitter } from "@/hooks/useFeedEmitter";
+import { ARCHIVE_LABEL } from "@/hooks/useArchive";
+import { subjectTitle } from "@/lib/subjects";
 
 interface RecordCardProps {
   record: CorpusRecord;
@@ -91,21 +93,10 @@ export const RecordCard = memo(function RecordCard({ record, searchQuery, search
       onClick={onClick}
       className="group relative rounded-lg border border-border/40 bg-muted/40 p-4 pb-14 md:p-6 md:pb-16 min-h-[240px] md:min-h-[280px] transition-all hover:shadow-lg hover:border-border active:shadow-lg active:border-border cursor-pointer"
     >
-      {/* Top row: hash icon + key number + year */}
-      <div className="flex items-center gap-2 mb-3">
-        <Hash className="h-5 w-5 text-muted-foreground" />
-        <span className="text-base font-bold">{record.key_number}</span>
-        <span className="ml-auto flex items-center gap-2">
-          {/* Match-percentage badge removed 2026-08-20 — see the note in Search.tsx: the
-              hybrid list mixes cosine and lexical scores on one visual scale. */}
-          <span className="text-sm font-medium text-muted-foreground">
-            {record.pub_year}
-          </span>
-        </span>
-      </div>
-
-      {/* Title */}
-      <p className="text-sm text-foreground leading-snug mb-3 line-clamp-2">
+      {/* Title leads the card; the key number lives in the footer link. */}
+      {/* Match-percentage badge removed 2026-08-20 — see the note in Search.tsx: the
+          hybrid list mixes cosine and lexical scores on one visual scale. */}
+      <p className="text-base font-bold text-foreground leading-snug mb-3 line-clamp-2">
         {searchMode === "keyword" && searchQuery
           ? highlightText(record.title, searchQuery)
           : record.title}
@@ -133,30 +124,18 @@ export const RecordCard = memo(function RecordCard({ record, searchQuery, search
           )}
         </div>
 
-        {/* Row 1, Col 2: Reference */}
-        <div className="min-w-0">
-          {record.reference && (
-            <>
-              <span className="text-muted-foreground">Reference</span>
-              <p className="font-medium truncate">
-                {record.reference.replace(/\s*\(\d{4}\)\s*$/, "")}
-              </p>
-            </>
-          )}
-        </div>
-
-        {/* Row 2, Col 1: Category */}
+        {/* Row 1, Col 2: Subject */}
         <div className="min-w-0">
           {record.categories && record.categories.length > 0 && (
             <>
-              <span className="text-muted-foreground">Category</span>
+              <span className="text-muted-foreground">Subject</span>
               <div className="flex flex-wrap gap-1.5 mt-0.5">
                 {record.categories.slice(0, 3).map((cat) => (
                   <span
                     key={cat}
                     className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-foreground/80"
                   >
-                    {cat}
+                    {subjectTitle(cat)}
                   </span>
                 ))}
                 {record.categories.length > 3 && (
@@ -169,28 +148,14 @@ export const RecordCard = memo(function RecordCard({ record, searchQuery, search
           )}
         </div>
 
-        {/* Row 2, Col 2: Status */}
+        {/* Row 2, Col 1: Reference — the archive, plainly */}
         <div className="min-w-0">
-          {record.status_tags && record.status_tags.length > 0 && (
-            <>
-              <span className="text-muted-foreground">Status</span>
-              <div className="flex flex-wrap gap-1.5 mt-0.5">
-                {record.status_tags.slice(0, 3).map((tag) => (
-                  <span
-                    key={tag}
-                    className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-foreground/80"
-                  >
-                    {tag}
-                  </span>
-                ))}
-                {record.status_tags.length > 3 && (
-                  <span className="inline-flex items-center rounded-full bg-foreground/10 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                    +{record.status_tags.length - 3}
-                  </span>
-                )}
-              </div>
-            </>
-          )}
+          <span className="text-muted-foreground">Reference</span>
+          <p className="font-medium truncate">
+            {record.server
+              ? ARCHIVE_LABEL[record.server]
+              : (record.reference ?? "").replace(/\s*\(.*\)\s*$/, "") || "—"}
+          </p>
         </div>
 
       </div>
@@ -205,10 +170,10 @@ export const RecordCard = memo(function RecordCard({ record, searchQuery, search
             onClick={(e) => e.stopPropagation()}
             className="text-xs text-brand hover:underline truncate max-w-[60%]"
           >
-            {record.doi}
+            {record.key_number}
           </a>
         ) : (
-          <span />
+          <span className="text-xs text-muted-foreground">{record.key_number}</span>
         )}
         <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
