@@ -44,6 +44,7 @@ export default function Chat() {
   const { messages, isLoading, sendMessage, stopGeneration, clearMessages, loadSession, sessionId } =
     useChat(room);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollPaneRef = useRef<HTMLDivElement>(null);
   const [autoSubmitted, setAutoSubmitted] = useState(false);
   const [entity, setEntity] = useState<{ type: EntityType; id: string } | null>(null);
   const [entityDetail, setEntityDetail] = useState<Record<string, unknown> | null>(null);
@@ -68,6 +69,23 @@ export default function Chat() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Late-arriving footer content (the /api/similar follow-ups) grows the
+  // transcript after that scroll has already run. Re-pin to the bottom, but
+  // only when the reader is still there — never yank someone who has scrolled
+  // up to re-read.
+  useEffect(() => {
+    function onFollowups() {
+      const pane = scrollPaneRef.current;
+      if (!pane) return;
+      const distanceFromBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight;
+      if (distanceFromBottom < 240) {
+        requestAnimationFrame(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }));
+      }
+    }
+    window.addEventListener("followups-rendered", onFollowups);
+    return () => window.removeEventListener("followups-rendered", onFollowups);
+  }, []);
 
   // Cmd+Shift+O → new chat
   useEffect(() => {
@@ -176,7 +194,7 @@ export default function Chat() {
       {hasMessages ? (
         <>
           {/* Messages — scrollable */}
-          <div className="flex-1 overflow-y-auto">
+          <div ref={scrollPaneRef} className="flex-1 overflow-y-auto">
             <div className="mx-auto max-w-[720px] px-2 md:px-4 py-4 md:py-8">
               {messages.map((msg) => (
                 <Suspense key={msg.id} fallback={<div className="mb-6 h-16 animate-pulse rounded-lg bg-muted/40" />}>

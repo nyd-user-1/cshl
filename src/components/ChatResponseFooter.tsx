@@ -31,7 +31,14 @@ function RelatedFooter({ sourceKey }: { sourceKey: string }) {
     fetch(`/api/similar?key=${encodeURIComponent(sourceKey)}&limit=4`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
-        if (!cancelled) setRelated((d?.records as SimilarRecord[]) ?? []);
+        if (cancelled) return;
+        setRelated((d?.records as SimilarRecord[]) ?? []);
+        // These arrive a beat after the answer finishes streaming, so they grow
+        // the transcript below the last auto-scroll and the row ends up clipped
+        // behind the composer — the one control that re-scopes the user, out of
+        // reach. Tell the page so it can re-pin, but only if the reader is
+        // still at the bottom (see Chat.tsx).
+        window.dispatchEvent(new Event("followups-rendered"));
       })
       .catch(() => {
         if (!cancelled) setRelated([]);
