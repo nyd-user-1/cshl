@@ -1243,3 +1243,62 @@ pass against a document set that did not contain QP2's pool.
 Rigs ported from the NSR program at commit `8c1b05b` (`docs/NSR-CPT-REPORT.md`), which
 itself inherited the embed and reranker rigs from 44b. What changed, and why, is recorded
 per file in `docs/prompts/LANE-RIG-PORT.md`.
+
+---
+
+## The QP3 run — a negative result, recorded rather than buried
+
+**2026-08-20. More data made the model worse. It is not published, and this section
+is why.**
+
+`cshl-QP3` was the third encoder in the query-pairs line and the largest: **140,000
+pairs — MESH 45,000 · OAKW 50,000 · AUTHORKW 40,000 · EXTRACT 5,000** — with **ANCE
+hard negatives** mined from cshl-QP2's own index, trained on the identical rig and
+config that produced QP2 (one L40S, batch 8, `passage_max_len` 384, 17,500 steps,
+1 epoch, 3 h 33 m, train loss 1.233). It reproduced QP2's throughput control exactly
+(1.47–1.52 it/s at 33.9 GB), so the hardware was not a variable. Coverage gate passed:
+433,449 / 433,449, zero nulls, query vectors digest-distinct from all six other arms.
+
+It lost to everything, including its own parent:
+
+| arm | MeSH R@10 | AUTHORKW R@10 | blended |
+|---|---:|---:|---:|
+| cshl-QP2 (100k) | **0.5238** | **0.7642** | **0.6150** |
+| cshl-QP (40k) | 0.4319 | 0.7497 | 0.5525 |
+| **cshl-QP3 (140k)** | **0.3997** | **0.7457** | **0.5310** |
+
+Paired exact McNemar, same 2,000 queries:
+
+| comparison | ΔR@10 blended | p | MeSH Δ | p |
+|---|---:|---:|---:|---:|
+| QP3 vs QP2 | **−0.0840** | 6.9e-18 | **−0.1241** | 3.9e-22 |
+| QP3 vs QP (40k) | −0.0215 | 0.029 | −0.0322 | 0.014 |
+
+**The run's own objective did not move.** AUTHORKW — the family the whole experiment
+was designed to fix, and the reason OAKW was mined at all — went 0.7642 → 0.7457,
+p = 0.24. Not significantly different. The keyword offensive failed on keywords *and*
+gave back the MeSH win.
+
+**Two suspects, and the run cannot separate them** because it changed both variables at
+once:
+
+1. **The OAKW family.** 50,000 of 140,000 pairs were OpenAlex *concept* labels, a query
+   type never validated against this benchmark. OpenAlex concepts are broad and heavily
+   overlapping ("Biology", "Genetics"); 36 % of the training signal telling the encoder
+   that coarse labels are good queries is a plausible mechanism for blurring exactly the
+   fine topical distinctions MeSH descriptors demand.
+2. **ANCE false negatives.** Hard negatives mined from QP2's own top-100 include
+   genuinely relevant papers that simply are not the annotated gold. Training against
+   them punishes correct retrieval.
+
+**Not published, deliberately.** `NYSgpt` carries QP and QP2; QP3's weights stay in S3
+at `models/cshl-encoder-bge-m3/20260820-053000-train/`. A checkpoint that loses to its
+own parent should not sit on a hub where someone could pull it by name. The reranked
+system row (`cshl_qp3 + cshl-RR`) was never computed — the lane stopped before it, and
+there is no reason to spend on it now.
+
+**What it cost and what it bought.** About $9 and a night. It bought two things worth
+more than the model would have been: the measured knowledge that this scaling curve is
+**not monotonic** — 40k → 100k helped, 100k → 140k hurt — and a named, testable
+hypothesis for why. The clean follow-up, if anyone wants it, is an ablation at 140k with
+**no OAKW and no ANCE**, which isolates volume from data quality for about $9.
