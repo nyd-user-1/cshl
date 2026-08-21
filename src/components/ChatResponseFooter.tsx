@@ -1,6 +1,6 @@
 import { TexText } from "./TexText";
 import { useState, useRef, useEffect } from "react";
-import { ThumbsUp, ThumbsDown, Copy, Check, BookOpen, ExternalLink, GraduationCap, FileText, ArrowRight } from "lucide-react";
+import { ThumbsUp, ThumbsDown, Copy, Check, BookOpen, ExternalLink, GraduationCap, FileText, ArrowRight, ShieldCheck } from "lucide-react";
 import { subjectTitle } from "@/lib/subjects";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -89,6 +89,50 @@ function RelatedFooter({ sourceKey }: { sourceKey: string }) {
         ))}
       </div>
     </div>
+  );
+}
+
+/** Bedrock's contextual-grounding check, run on the finished answer against the
+ *  preprints it was given (see api/grounding.ts). Displayed, not enforced: the
+ *  reader gets a number instead of a promise. */
+function GroundingBadge({ content, sources }: { content: string; sources?: MessageSources }) {
+  const [score, setScore] = useState<{ grounding: number | null; ok: boolean } | null>(null);
+  const keys = (sources?.nsr ?? []).map((r) => r.key_number).join(",");
+
+  useEffect(() => {
+    if (!content || !keys) return;
+    let cancelled = false;
+    fetch("/api/grounding", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answer: content, keys: keys.split(",") }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled && typeof d?.grounding === "number") setScore({ grounding: d.grounding, ok: d.ok });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [content, keys]);
+
+  if (!score) return null;
+  const pct = Math.round(score.grounding! * 100);
+  return (
+    <span
+      className={`ml-2 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+        score.ok ? "text-muted-foreground" : "border-destructive/40 text-destructive"
+      }`}
+      title={
+        score.ok
+          ? `Bedrock contextual-grounding check: ${pct}% of this answer is supported by the retrieved preprints.`
+          : `Only ${pct}% of this answer is supported by the retrieved preprints — read it with care.`
+      }
+    >
+      <ShieldCheck className="h-3 w-3" />
+      {pct}% grounded
+    </span>
   );
 }
 
@@ -242,6 +286,7 @@ export function ChatResponseFooter({
 
         {/* Thumbs Up / Down */}
         <div className="flex items-center gap-1 ml-auto">
+          <GroundingBadge content={content} sources={sources} />
           <button
             onClick={() => setFeedback(feedback === "good" ? null : "good")}
             className={`inline-flex items-center justify-center h-7 w-7 rounded-[3px] transition-colors ${

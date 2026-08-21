@@ -1,0 +1,92 @@
+// /api/grounding — score a finished answer against the preprints it was given.
+//
+// Bedrock's ApplyGuardrail contextual-grounding check, used as a MEASUREMENT
+// rather than a filter (the guardrail's action is NONE): it returns
+//   grounding — is every claim supported by the retrieved passages?
+//   relevance — does the answer address the question that was asked?
+//
+// Why this exists: the failure mode this product has actually shipped is a
+// confident answer built on nothing — a tool that fails closed still produces
+// fluent prose. Measured on a real pair: a faithful answer scores 0.95, an
+// answer with invented FDA approval and detection limits scores 0.00. That is
+// a signal worth putting in front of the reader instead of asking them to
+// trust us.
+//
+// POST { answer, query, keys: string[] }  →  { grounding, relevance, ok }
+// The passages are looked up here by key_number rather than shipped from the
+// browser: the client never held the abstracts, and the round trip stays small.
+import { BedrockRuntimeClient, ApplyGuardrailCommand } from "@aws-sdk/client-bedrock-runtime";
+import { neon } from "@neondatabase/serverless";
+
+export const config = { maxDuration: 30 };
+
+const GUARDRAIL_ID = process.env.BEDROCK_GUARDRAIL_ID ?? "1a0cn7441mk6";
+const GUARDRAIL_VERSION = process.env.BEDROCK_GUARDRAIL_VERSION ?? "DRAFT";
+
+// A text unit is 1,000 characters and the check is billed per unit, so the
+// grounding source is capped rather than sent whole.
+const MAX_SOURCE_CHARS = 12000;
+const MAX_ANSWER_CHARS = 6000;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export default async function handler(req: any, res: any) {
+  if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+  try {
+    const { answer, query, keys } = req.body ?? {};
+    const text = String(answer ?? "").trim().slice(0, MAX_ANSWER_CHARS);
+    const q = String(query ?? "").trim().slice(0, 2000);
+    const keyList = (Array.isArray(keys) ? keys : [])
+      .map((k) => String(k ?? "").trim())
+      .filter(Boolean)
+      .slice(0, 12);
+    if (!text || !keyList.length) return res.status(200).json({ skipped: true });
+
+    const sql = neon(process.env.DATABASE_URL!);
+    const rows = (await sql.query(
+      `SELECT key_number, title, abstract FROM preprints WHERE key_number = ANY($1::text[])`,
+      [keyList],
+    )) as { key_number: string; title: string | null; abstract: string | null }[];
+    const source = rows
+      .map((r) => [r.title, r.abstract].filter(Boolean).join(". "))
+      .filter(Boolean)
+      .join("\n\n")
+      .slice(0, MAX_SOURCE_CHARS);
+    if (!source) return res.status(200).json({ skipped: true });
+
+    if (!process.env.AWS_BEARER_TOKEN_BEDROCK && process.env.BEDROCK_API_KEY) {
+      process.env.AWS_BEARER_TOKEN_BEDROCK = process.env.BEDROCK_API_KEY;
+    }
+    const client = new BedrockRuntimeClient({ region: process.env.BEDROCK_REGION ?? "us-east-1" });
+    const out = await client.send(
+      new ApplyGuardrailCommand({
+        guardrailIdentifier: GUARDRAIL_ID,
+        guardrailVersion: GUARDRAIL_VERSION,
+        source: "OUTPUT",
+        content: [
+          { text: { text: source, qualifiers: ["grounding_source"] } },
+          ...(q ? [{ text: { text: q, qualifiers: ["query" as const] } }] : []),
+          { text: { text } },
+        ],
+      }),
+    );
+
+    let grounding: number | null = null;
+    let relevance: number | null = null;
+    for (const a of out.assessments ?? []) {
+      for (const f of a.contextualGroundingPolicy?.filters ?? []) {
+        if (f.type === "GROUNDING") grounding = f.score ?? null;
+        if (f.type === "RELEVANCE") relevance = f.score ?? null;
+      }
+    }
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).json({
+      grounding,
+      relevance,
+      // The thresholds the guardrail itself was configured with.
+      ok: (grounding ?? 0) >= 0.6 && (relevance ?? 0) >= 0.5,
+    });
+  } catch (err) {
+    // A scoring failure must never break the answer that was already delivered.
+    return res.status(200).json({ error: (err as Error).message.slice(0, 200) });
+  }
+}
