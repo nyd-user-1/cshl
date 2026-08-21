@@ -139,13 +139,37 @@ export default async function handler(req: any, res: any) {
     const tFts0 = Date.now();
     let ftsRows: Row[] = [];
     if (wantsFts || !denseRows.length) {
+      // OR semantics with high-frequency pruning, not AND.
+      //
+      // Production shipped `websearch_to_tsquery`, which ANDs space-separated terms:
+      // a four-concept query matched 13 documents out of 433,449, and three-concept
+      // queries routinely matched none. Measured on the frozen benchmark, switching to
+      // OR is +17% MeSH R@10 and +48% author-keyword.
+      //
+      // Naive OR is unshippable — it ranks every match, and one query measured
+      // **10,157 ms**. The cost is carried by high-document-frequency lexemes
+      // ("use", "studi", "univers"), so those are pruned via `fts_high_df`, a small
+      // precomputed table of terms appearing in >2% of the corpus. Same query,
+      // pruned: **108 ms**. If pruning empties the query (every term was common) we
+      // fall back to the AND path rather than return nothing.
       ftsRows = await q(
-        `SELECT ${SELECT},
-                least(ts_rank_cd(p.fts, websearch_to_tsquery('english', $1)) / 4.0, 0.99)::float AS similarity
-         FROM preprints p
-         WHERE p.fts @@ websearch_to_tsquery('english', $1)
-         ORDER BY ts_rank_cd(p.fts, websearch_to_tsquery('english', $1)) DESC,
-                  p.pub_year DESC NULLS LAST
+        `WITH terms AS (
+           SELECT unnest(string_to_array(
+                    replace(plainto_tsquery('english', $1)::text, '''', ''), ' & ')) AS l
+         ), kept AS (
+           SELECT string_agg(l, ' | ') AS expr FROM terms
+            WHERE l NOT IN (SELECT lexeme FROM fts_high_df)
+         ), tq AS (
+           SELECT coalesce(
+                    nullif((SELECT expr FROM kept), '')::tsquery,
+                    websearch_to_tsquery('english', $1)
+                  ) AS q
+         )
+         SELECT ${SELECT},
+                least(ts_rank_cd(p.fts, tq.q) / 4.0, 0.99)::float AS similarity
+         FROM preprints p, tq
+         WHERE p.fts @@ tq.q
+         ORDER BY ts_rank_cd(p.fts, tq.q) DESC, p.pub_year DESC NULLS LAST
          LIMIT $2`, [raw, limit]);
     }
     const ftsMs = Date.now() - tFts0;
