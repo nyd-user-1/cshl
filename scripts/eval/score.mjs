@@ -53,6 +53,7 @@ export const REGISTRY = {
   cshl:       { kind: 'dense', table: 'preprint_embeddings_cshl',      dim: 1024, metric: 'cosine', doc: 'NYSgpt/cshl-encoder-bge-m3',  query: 'NYSgpt/cshl-encoder-bge-m3' },
   cshl_qp:    { kind: 'dense', table: 'preprint_embeddings_cshl_qp',   dim: 1024, metric: 'cosine', doc: 'cshl-encoder-bge-m3 (qpairs run)', query: 'cshl-encoder-bge-m3 (qpairs run)' },
   cshl_qp2:   { kind: 'dense', table: 'preprint_embeddings_cshl_qp2',  dim: 1024, metric: 'cosine', doc: 'cshl-encoder-bge-m3 (qpairs2 run, 100k weighted)', query: 'cshl-encoder-bge-m3 (qpairs2 run, 100k weighted)' },
+  cshl_qp3:   { kind: 'dense', table: 'preprint_embeddings_cshl_qp3',  dim: 1024, metric: 'cosine', doc: 'cshl-encoder-bge-m3 (qpairs3 run, 140k ANCE-remined + OAKW)', query: 'cshl-encoder-bge-m3 (qpairs3 run, 140k ANCE-remined + OAKW)' },
   medcpt:     { kind: 'dense', table: 'preprint_embeddings_medcpt',    dim: 768,  metric: 'ip',     doc: 'ncbi/MedCPT-Article-Encoder', query: 'ncbi/MedCPT-Query-Encoder' },
   specter2:   { kind: 'dense', table: 'preprint_embeddings_specter2',  dim: 768,  metric: 'ip',     doc: 'allenai/specter2_base',       query: 'allenai/specter2_base' },
   scincl:     { kind: 'dense', table: 'preprint_embeddings_scincl',    dim: 768,  metric: 'ip',     doc: 'malteos/scincl',              query: 'malteos/scincl' },

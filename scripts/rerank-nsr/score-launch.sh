@@ -18,6 +18,14 @@ TYPE_MENU=${TYPE_MENU:-g5.xlarge,g6e.xlarge,g5.2xlarge}
 WATCHDOG_MIN=${WATCHDOG_MIN:-45}
 EVAL_VERSION=${EVAL_VERSION:-cshl-eval-2k}
 ARM=${ARM:-cshl_qp}
+# DOCS is a parameter, not a constant. It was hardcoded to `docs.jsonl` until the
+# compare rig renamed the docs files to carry their truncation width
+# (docs-<N>.jsonl); this script kept pulling the old name, its preflight found a
+# STALE leftover object of that name in S3 and passed, and the box would have
+# reranked QP2 against a document set that did not contain QP2 pool. Existence is
+# not freshness. The stale object has been deleted so the name cannot resolve again.
+DOCS=${DOCS:-docs-900.jsonl}
+MAXLEN=${MAXLEN:-256}
 MODEL_RUN=${MODEL_RUN:?set MODEL_RUN (the models/cshl-reranker-gte-modernbert/<run>/ to score)}
 MODEL_SUB=${MODEL_SUB:-final}
 RUN_ID=${RUN_ID:-$(date +%Y%m%d-%H%M%S)-score}
@@ -30,10 +38,10 @@ AMI=${AMI:-ami-012ba162b9cd2729c}
 aws s3 cp scripts/rerank-nsr/rerank.py s3://$BUCKET/reranker/rerank.py --only-show-errors
 # refuse early and on the laptop rather than 6 minutes into a booted box
 for k in "models/cshl-reranker-gte-modernbert/$MODEL_RUN/$MODEL_SUB/model.safetensors" \
-         "reranker/eval/$EVAL_VERSION/$ARM.lists.json" "reranker/eval/$EVAL_VERSION/docs.jsonl"; do
+         "reranker/eval/$EVAL_VERSION/$ARM.lists.json" "reranker/eval/$EVAL_VERSION/$DOCS"; do
   aws s3api head-object --bucket $BUCKET --key "$k" >/dev/null 2>&1 || { echo "missing s3://$BUCKET/$k"; exit 1; }
 done
-echo "preflight: weights + lists + docs all present"
+echo "preflight: weights + $ARM.lists.json + $DOCS all present (max_len=$MAXLEN)"
 
 UD=$(cat <<EOF
 #!/bin/bash
@@ -46,9 +54,9 @@ D=/opt/rr; mkdir -p \$D/model
 aws s3 cp --recursive --only-show-errors s3://$BUCKET/models/cshl-reranker-gte-modernbert/$MODEL_RUN/$MODEL_SUB/ \$D/model/
 aws s3 cp --only-show-errors s3://$BUCKET/reranker/rerank.py \$D/rerank.py
 aws s3 cp --only-show-errors s3://$BUCKET/reranker/eval/$EVAL_VERSION/$ARM.lists.json \$D/lists.json
-aws s3 cp --only-show-errors s3://$BUCKET/reranker/eval/$EVAL_VERSION/docs.jsonl \$D/docs.jsonl
+aws s3 cp --only-show-errors s3://$BUCKET/reranker/eval/$EVAL_VERSION/$DOCS \$D/docs.jsonl
 python3 \$D/rerank.py --model \$D/model --lists \$D/lists.json --docs \$D/docs.jsonl \\
-  --out \$D/reranked-$RUN_ID.json
+  --out \$D/reranked-$RUN_ID.json --max-len $MAXLEN
 RC=\$?
 # The UPLOAD is the deliverable, so its exit code is the run's exit code.
 # Run 20260819-232122-score reranked all 100,000 pairs correctly, failed the

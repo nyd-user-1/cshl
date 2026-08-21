@@ -108,11 +108,37 @@ if (existsSync(join(QMETA, 'queries.jsonl'))) {
   for (const l of readFileSync(join(QMETA, 'queries.jsonl'), 'utf8').split('\n').filter(Boolean)) {
     const o = JSON.parse(l); meta.set(o.qid, { text: o.text, gold: gold.get(o.qid) ?? new Set(), family: o.family })
   }
+} else if (QMETA.replace(/\\/g, '/').endsWith('slice-slugs.jsonl')) {
+  // THE SHAPE THIS SCRIPT SHOULD ALWAYS HAVE BEEN GIVEN (LANE-QP3).
+  //
+  // The `train-jsonl` branch below builds `gold: new Set()` — an EMPTY gold set
+  // — because a FlagEmbedding train.jsonl is text-only and carries no paper
+  // identity. Every gate in this file that reads `m.gold` therefore rejects
+  // NOTHING on that path: `stats.gold_struck` stays 0 and a query's OWN
+  // POSITIVE, which the current encoder ranks at or near 1 by construction, is
+  // eligible to be emitted as that query's hard negative. Training on that
+  // teaches the model that the right answer is wrong — the exact failure this
+  // file's header warns about, arriving through the door the header left open.
+  // The smoke test never saw it: it ran the benchmark-dir branch, where gold is
+  // populated, so the gate it demonstrated is not the gate the real mine used.
+  //
+  // from-mine.mjs now emits slice-slugs.jsonl beside every train.jsonl, row for
+  // row, carrying the positive's slug and the original negatives. With it the
+  // own-positive gate is real, and rows the mine cannot serve keep the
+  // negatives they already had instead of vanishing from the slice.
+  metaShape = 'slice-slugs'
+  const rl = createInterface({ input: createReadStream(QMETA), crlfDelay: Infinity })
+  for await (const line of rl) {
+    if (!line) continue
+    const o = JSON.parse(line)
+    meta.set(`T-${o.i}`, { text: o.query, gold: new Set([o.pos]), family: o.family, posSlug: o.pos, origNeg: o.neg ?? [] })
+  }
 } else {
   metaShape = 'train-jsonl'
   let i = 0
   const rl = createInterface({ input: createReadStream(QMETA), crlfDelay: Infinity })
   for await (const line of rl) { if (!line) continue; const o = JSON.parse(line); meta.set(`T-${i++}`, { text: o.query, gold: new Set(), posText: o.pos?.[0] }) }
+  console.warn('WARNING: train-jsonl shape — no paper identity, so the own-positive gate cannot fire. Prefer slice-slugs.jsonl.')
 }
 console.log(`query metadata: ${meta.size.toLocaleString()} (${metaShape})`)
 
@@ -137,7 +163,18 @@ async function pool(items, conc, fn) {
 }
 
 // ── retrieve, strike, keep ──────────────────────────────────────────────────
-const stats = { gold_struck: 0, eval_struck: 0, skipped_top: 0, kept: 0, short: 0, gold_rank_hist: {} }
+const stats = { gold_struck: 0, eval_struck: 0, skipped_top: 0, kept: 0, short: 0, gold_rank_hist: {},
+                ance_by_family: {}, fallback_by_family: {} }
+// Progress, because a 140k mine is otherwise ~20 minutes of total silence on an
+// unattended box, and silence is indistinguishable from a hang. Rate is also the
+// Neon-load number D8 asks to be logged, measured rather than estimated.
+let done = 0
+const t0 = Date.now()
+const tick = () => {
+  if (++done % 5000 && done !== ids.length) return
+  const s = (Date.now() - t0) / 1000
+  console.log(`  [mine] ${done.toLocaleString()}/${ids.length.toLocaleString()} · ${(done / s).toFixed(0)} q/s · ${s.toFixed(0)}s elapsed · eta ${((ids.length - done) / (done / s) / 60).toFixed(1)} min`)
+}
 const mined = await pool(ids, CONC, async (qid) => {
   const m = meta.get(qid)
   const v = `[${qvec.get(qid).join(',')}]`
@@ -156,9 +193,22 @@ const mined = await pool(ids, CONC, async (qid) => {
     neg.push(k)
     if (neg.length >= NEGS) break
   }
-  if (neg.length < MIN_NEGS) { stats.short++; return null }
+  const base = { qid, text: m.text, family: m.family, posText: m.posText, posSlug: m.posSlug,
+                 gold: [...m.gold], origNeg: m.origNeg ?? [] }
+  const fam = m.family ?? 'MIXED'
+  // D8: "ANCE negatives wherever mined; existing negatives elsewhere." A row the
+  // mine cannot serve is NOT dropped — dropping it would silently shrink the
+  // slice and break the FAMILY_TAKE mix that was verified when it was built.
+  // It keeps the negatives from-mine.mjs already gated, and is counted as such.
+  tick()
+  if (neg.length < MIN_NEGS) {
+    stats.short++
+    if (base.origNeg.length) { stats.fallback_by_family[fam] = (stats.fallback_by_family[fam] ?? 0) + 1; return { ...base, neg: [], ance: false } }
+    return null
+  }
   stats.kept++
-  return { qid, text: m.text, family: m.family, posText: m.posText, gold: [...m.gold], neg }
+  stats.ance_by_family[fam] = (stats.ance_by_family[fam] ?? 0) + 1
+  return { ...base, neg, ance: true }
 })
 const ok = mined.filter(Boolean)
 
@@ -166,12 +216,18 @@ console.log(`retrieved ${ids.length.toLocaleString()} x top-${TOPK}`)
 console.log(`  struck: ${stats.gold_struck.toLocaleString()} own-gold · ${stats.eval_struck.toLocaleString()} frozen-benchmark gold · ${stats.skipped_top.toLocaleString()} discarded as likely-unlabelled (SKIP_TOP=${SKIP_TOP})`)
 console.log(`  kept ${stats.kept.toLocaleString()} queries with >= ${MIN_NEGS} negatives · dropped ${stats.short.toLocaleString()} for too few`)
 console.log(`  where the labelled gold landed: ${JSON.stringify(stats.gold_rank_hist)}`)
-const negCounts = {}; for (const r of ok) negCounts[r.neg.length] = (negCounts[r.neg.length] ?? 0) + 1
-console.log(`  negatives/row: ${JSON.stringify(negCounts)}`)
+const negCounts = {}; for (const r of ok) if (r.ance) negCounts[r.neg.length] = (negCounts[r.neg.length] ?? 0) + 1
+console.log(`  ANCE negatives/row: ${JSON.stringify(negCounts)}`)
+console.log(`  rows on ANCE negatives:     ${JSON.stringify(stats.ance_by_family)}`)
+console.log(`  rows on inherited negatives:${JSON.stringify(stats.fallback_by_family)}`)
 
 // Independent re-check of the gate over the FINAL emitted set, not over the
 // per-row decisions that produced it.
-const leaks = ok.reduce((n, r) => n + r.neg.filter((k) => evalKeys.has(k)).length, 0)
+// Checked over EVERY slug that can reach the output — the mined negatives AND
+// the inherited ones AND the positive — not only over the mined side.
+const leaks = ok.reduce((n, r) => n + r.neg.filter((k) => evalKeys.has(k)).length
+                                   + (r.ance ? 0 : r.origNeg.filter((k) => evalKeys.has(k)).length)
+                                   + (r.posSlug && evalKeys.has(r.posSlug) ? 1 : 0), 0)
 console.log(`  emitted negatives referencing frozen-benchmark gold papers: ${leaks} (must be 0)`)
 if (leaks > 0) { console.error('ABORT: mined negatives touch the frozen benchmark.'); process.exit(1) }
 
@@ -183,28 +239,75 @@ if (SMOKE) {
 }
 
 // ── real mine: resolve text and write the FlagEmbedding slice ───────────────
-const need = new Set(ok.flatMap((r) => r.neg))
+// EVERY slug that can reach the output, including the inherited negatives of
+// rows that DID mine successfully — those are the fallback, and a fallback whose
+// text was never loaded is not a fallback. The fixture smoke test showed this
+// precisely: 35 rows whose ANCE negatives had no text fell through to
+// `unwritable` with `fell back: 0`, because `need` had skipped their origNeg.
+const need = new Set(ok.flatMap((r) => [...r.neg, ...r.origNeg, ...(r.posSlug ? [r.posSlug] : [])]))
 const text = new Map()
 {
   const rl = createInterface({ input: createReadStream(TEXTS), crlfDelay: Infinity })
   for await (const line of rl) { if (!line) continue; const o = JSON.parse(line); if (o.embed_text && need.has(o.key)) text.set(o.key, o.embed_text) }
 }
 mkdirSync(dirname(OUT), { recursive: true })
-let written = 0
-await new Promise((res, rej) => {
-  const ws = createWriteStream(OUT); ws.on('error', rej); ws.on('finish', res)
+let written = 0, unresolved = 0, posAsNeg = 0, anceUnresolved = 0
+const writtenBy = { ance: {}, inherited: {} }
+// Backpressure honoured — same bug, same reason as from-mine.mjs's writer:
+// 140k rows x ~10 documents is ~2.2 GB, and ignoring ws.write()'s false return
+// buffers the lot until one writev() fails at 2^32 bytes, having already
+// written duplicated garbage. Measured on this exact slice size tonight.
+{
+  const ws = createWriteStream(OUT)
+  const done = new Promise((res, rej) => { ws.on('error', rej); ws.on('finish', res) })
   for (const r of ok) {
-    const neg = r.neg.map((k) => text.get(k)).filter(Boolean)
-    if (!r.posText || neg.length < MIN_NEGS) continue
-    ws.write(JSON.stringify({ query: r.text, pos: [r.posText], neg }) + '\n'); written++
+    // Resolve ANCE negatives to text, and FALL BACK to the inherited negatives
+    // if too few of them resolve. Without this fallback a row whose mined
+    // negatives are not in the text sidecar is dropped silently, and the slice
+    // comes out smaller than the FAMILY_TAKE mix that was verified when it was
+    // built — 140,000 requested, fewer trained on, nothing saying so. Caught by
+    // the fixture smoke test, where a deliberately partial sidecar turned 210
+    // rows into 1 and the script still exited 0.
+    let neg = (r.ance ? r.neg : r.origNeg).map((k) => text.get(k)).filter(Boolean)
+    let usedAnce = r.ance
+    if (neg.length < MIN_NEGS && r.ance) {
+      const fb = r.origNeg.map((k) => text.get(k)).filter(Boolean)
+      if (fb.length >= MIN_NEGS) { neg = fb; usedAnce = false; anceUnresolved++ }
+    }
+    const posText = r.posText ?? (r.posSlug ? text.get(r.posSlug) : null)
+    if (!posText || neg.length < MIN_NEGS) { unresolved++; continue }
+    // REPAIR, don't discard. A negative whose TEXT equals the positive's is a
+    // different paper carrying identical embed_text — 31 such pairs exist in the
+    // 433,449-row corpus, measured. The slug-level gate cannot see it because the
+    // slugs genuinely differ. Dropping that one negative fixes the row; dropping
+    // the ROW costs a training pair and, worse, silently changes the FAMILY_TAKE
+    // mix that was verified upstream. It happened once in 140,000 on the first
+    // full run and aborted a 33-minute box at its last step.
+    if (neg.some((t) => t === posText)) {
+      posAsNeg++
+      neg = neg.filter((t) => t !== posText)
+      if (neg.length < MIN_NEGS) { unresolved++; continue }
+    }
+    if (!ws.write(JSON.stringify({ query: r.text, pos: [posText], neg }) + '\n')) await new Promise((d) => ws.once('drain', d))
+    written++
+    writtenBy[usedAnce ? 'ance' : 'inherited'][r.family ?? 'MIXED'] = (writtenBy[usedAnce ? 'ance' : 'inherited'][r.family ?? 'MIXED'] ?? 0) + 1
   }
   ws.end()
-})
+  await done
+}
 writeFileSync(join(dirname(OUT), 'manifest.json'), JSON.stringify({
   name: 'ance-remined', built_at: new Date().toISOString(), source_arm: ARM, source_table: spec.table,
   qvec: QVEC, qmeta: QMETA, topk: TOPK, skip_top: SKIP_TOP, negs_per_pair: NEGS, min_negs: MIN_NEGS,
   pairs: written, stats,
+  negatives_source: writtenBy,
+  rows_unwritable_for_missing_text: unresolved,
+  rows_fell_back_because_ance_negatives_had_no_text: anceUnresolved,
+  rows_repaired_positive_appeared_as_negative: posAsNeg,
   disjointness: { pass: leaks === 0, checked_against: join(EVAL_DIR, 'qrels.tsv'),
                   frozen_benchmark_papers: evalKeys.size, emitted_references_to_gold_papers: leaks },
 }, null, 2))
-console.log(`\nwrote ${written.toLocaleString()} re-negatived pairs -> ${OUT}`)
+console.log(`\nwrote ${written.toLocaleString()} pairs -> ${OUT}`)
+console.log(`  by negatives source: ANCE ${JSON.stringify(writtenBy.ance)} · inherited ${JSON.stringify(writtenBy.inherited)}`)
+console.log(`  fell back to inherited negatives because ANCE text was missing: ${anceUnresolved}`)
+console.log(`  unwritable for missing text: ${unresolved} (must be 0) · rows repaired by dropping a negative whose text equals the positive: ${posAsNeg}`)
+console.log(`  ACCOUNTING: written ${written.toLocaleString()} + unwritable ${unresolved} = ${(written + unresolved).toLocaleString()} of ${ok.length.toLocaleString()} mined rows`)

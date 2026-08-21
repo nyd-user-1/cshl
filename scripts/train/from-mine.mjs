@@ -31,7 +31,13 @@ import { createInterface } from 'node:readline'
 import { join, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 
-const IN = process.env.IN ?? 'data/mine/cshl-triplets.train.jsonl'
+// IN accepts a COMMA-SEPARATED LIST of mine files (LANE-QP3). The families are
+// mined into separate files by separate lanes — cshl-query-pairs.train.jsonl
+// carries MESH/AUTHORKW/EXTRACT, cshl-oakw-pairs.train.jsonl carries OAKW —
+// and FAMILY_TAKE is defined over families, not over files. Concatenating on
+// disk would mean a 650 MB temp file whose only property is being a copy;
+// reading the list in order is the same stream with nothing to go stale.
+const IN = (process.env.IN ?? 'data/mine/cshl-triplets.train.jsonl').split(',').map((x) => x.trim()).filter(Boolean)
 const TEXTS = process.env.TEXTS ?? 'data/mine/corpus-text.jsonl'
 const NAME = process.env.NAME ?? 'parity'
 const OUT = process.env.OUT ?? `data/train/${NAME}/train.jsonl`
@@ -118,8 +124,10 @@ console.log(`frozen benchmark distinct query strings: ${evalQueryTexts.size.toLo
 //    readFileSync().split() holds the whole file plus every substring at once.
 let dropped = 0, leaked = 0, rows = 0, textQueries = 0, slugQueries = 0, queryTextCollisions = 0
 const byFamily = new Map()
-{
-  const rl = createInterface({ input: createReadStream(IN), crlfDelay: Infinity })
+const unnamed = new Map()   // families excluded by FAMILY_TAKE: counted, not retained
+for (const inFile of IN) {
+  const before = rows
+  const rl = createInterface({ input: createReadStream(inFile), crlfDelay: Infinity })
   for await (const line of rl) {
     if (!line) continue
     rows++
@@ -140,12 +148,19 @@ const byFamily = new Map()
     if (!query || !pos || negs.length < 2) { dropped++; continue }
     if (qIsText) { textQueries++; if (evalQueryTexts.has(query.toLowerCase())) queryTextCollisions++ } else slugQueries++
     const fam = r.meta?.family ?? 'MIXED'
+    // A family FAMILY_TAKE does not name contributes nothing to the output — it
+    // is reported as "-> 0" and dropped. Counting it without RETAINING it keeps
+    // the log identical and the heap bounded: with OAKW's file in the input list
+    // this skips 244,487 OATOPIC rows that would otherwise be materialised in
+    // full and then thrown away, on a laptop where that margin is the run.
+    if (FAMILY_TAKE && !FAMILY_TAKE.has(fam)) { unnamed.set(fam, (unnamed.get(fam) ?? 0) + 1); continue }
     if (!byFamily.has(fam)) byFamily.set(fam, [])
     // k: the deterministic stratification key. A text query has no slug, so key
     // on the query text + its positive — stable across runs, which is what
     // "deterministic subsample" has to mean.
-    byFamily.get(fam).push({ k: qs ?? `${query}|${ps}`, s: [ps, ...negs], o: { query, pos: [pos], neg: negs.map((s) => text.get(s)) } })
+    byFamily.get(fam).push({ k: qs ?? `${query}|${ps}`, s: [ps, ...negs], ps, negs, o: { query, pos: [pos], neg: negs.map((s) => text.get(s)) } })
   }
+  console.log(`  ${inFile}: ${(rows - before).toLocaleString()} records read`)
 }
 const total = [...byFamily.values()].reduce((a, v) => a + v.length, 0)
 console.log(`read ${rows.toLocaleString()} · convertible ${total.toLocaleString()} · dropped ${dropped.toLocaleString()} · rejected for touching the frozen benchmark ${leaked.toLocaleString()}`)
@@ -166,7 +181,7 @@ if (FAMILY_TAKE) {
     out.push(...arr.slice(0, n))
     console.log(`  ${fam}: ${arr.length.toLocaleString()} -> ${n.toLocaleString()}`)
   }
-  for (const fam of byFamily.keys()) if (!FAMILY_TAKE.has(fam)) console.log(`  ${fam}: ${byFamily.get(fam).length.toLocaleString()} -> 0 (not named in FAMILY_TAKE)`)
+  for (const [fam, n] of unnamed) console.log(`  ${fam}: ${n.toLocaleString()} -> 0 (not named in FAMILY_TAKE, skipped at read)`)
 } else if (SUBSAMPLE && SUBSAMPLE < total) {
   for (const [fam, arr] of byFamily) {
     arr.sort((a, b) => h32(a.k) - h32(b.k))                    // deterministic
@@ -212,21 +227,54 @@ if (FAMILY_TAKE) {
 mkdirSync(dirname(OUT), { recursive: true })
 // Stream it: 40k pairs x 10 documents is ~800 MB, past V8's max string length.
 // join() on that array throws RangeError after all the work is already done.
-await new Promise((res, rej) => {
-  const ws = createWriteStream(OUT)
-  ws.on('error', rej); ws.on('finish', res)
-  for (const x of out) if (!ws.write(JSON.stringify(x.o) + '\n')) { /* backpressure ok at this size */ }
+//
+// AND HONOUR BACKPRESSURE (LANE-QP3). The line above used to be
+//   `if (!ws.write(...)) { /* backpressure ok at this size */ }`
+// — ignoring the false return and writing the next row anyway. At 40k pairs
+// that was true. At 140k pairs (~2.2 GB) it is not: Node queues every unflushed
+// chunk in memory and then hands the whole backlog to one writev(), which fails
+// on macOS at exactly 2^32 bytes. Measured, not theorised — the first attempt
+// produced a 4,294,967,296-byte train.jsonl containing 270,192 lines for 140,000
+// rows, i.e. silently duplicated garbage, and the process died with
+// `ERR_SYSTEM_ERROR: writev failed` AFTER every gate had already printed PASS.
+// Both halves of that are the house failure mode: a corrupt artifact, and a run
+// that reported success on the way to producing it.
+const writeStream = async (path, lines) => {
+  const ws = createWriteStream(path)
+  const done = new Promise((res, rej) => { ws.on('error', rej); ws.on('finish', res) })
+  for (const line of lines) {
+    if (!ws.write(line)) await new Promise((r) => ws.once('drain', r))
+  }
   ws.end()
-})
+  await done
+}
+await writeStream(OUT, (function* () { for (const x of out) yield JSON.stringify(x.o) + '\n' })())
+// SLUG SIDECAR (LANE-QP3). train.jsonl is text-only — {query, pos:[text], neg:[text]} —
+// which is the shape FlagEmbedding wants and a shape nothing can be joined on.
+// The ANCE re-mine has to strike a query's OWN positive out of its retrieved
+// negatives, and to do that it needs the positive's SLUG, not its prose. Without
+// this file mine-ance.mjs's train-jsonl path builds `gold: new Set()` — an EMPTY
+// gold set — so its own-positive gate silently rejects nothing and a query's
+// correct answer can be emitted as its own hard negative. Row i here is row i
+// there; the pairing is by position in the same file, written in the same pass.
+const SIDECAR = join(dirname(OUT), 'slice-slugs.jsonl')
+await writeStream(SIDECAR, (function* () {
+  for (let i = 0; i < out.length; i++) {
+    const x = out[i]
+    yield JSON.stringify({ i, family: x.fam, query: x.o.query, pos: x.ps, neg: x.negs }) + '\n'
+  }
+})())
+console.log(`wrote slug sidecar -> ${SIDECAR} (${out.length.toLocaleString()} rows, row i pairs with row i of ${OUT})`)
 writeFileSync(join(dirname(OUT), 'manifest.json'), JSON.stringify({
   name: NAME, built_at: new Date().toISOString(), input: IN, text_source: TEXTS,
   pairs: out.length, negs_per_pair: NEGS, subsample: SUBSAMPLE || null,
   family_take: FAMILY_TAKE ? Object.fromEntries(FAMILY_TAKE) : null,
   family_take_verified: FAMILY_TAKE ? true : null,
   query_side: { literal_text: textQueries, slug_into_corpus: slugQueries },
-  families_convertible: Object.fromEntries([...byFamily].map(([f, a]) => [f, a.length])),
+  families_convertible: Object.fromEntries([...[...byFamily].map(([f, a]) => [f, a.length]), ...unnamed]),
   families_emitted: Object.fromEntries(emitted),
   benchmark_query_string_overlap_emitted: emittedCollisions,
+  slug_sidecar: 'slice-slugs.jsonl',
   disjointness: { pass: emittedLeaks === 0, checked_against: join(EVAL_DIR, 'qrels.tsv'),
                   frozen_benchmark_papers: evalKeys.size, rejected_for_overlap: leaked,
                   emitted_references_to_gold_papers: emittedLeaks },

@@ -25,7 +25,12 @@ Predecessor: `docs/prompts/LANE-QPAIRS-RUN.md`, read end to end before anything 
 
 ## Status
 
-**PHASE 0 COMPLETE — reported below. PHASE 1 blocked on one budget decision (see 02:30Z).**
+**COMPLETE — 2026-08-20T06:49Z. See "THE VERDICT".**
+
+**MeSH R@10 0.4319 -> 0.5238. We beat `ncbi/MedCPT` on MeSH (0.4569) by +0.0669, p=1.01e-6,
+CI [+0.0403, +0.0927] — target MET.** AUTHORKW 0.7497 -> 0.7642 against a 0.8076 bar: still a
+significant loss alone (p=0.0046), statistical parity when fused with FTS (0.7800, p=0.0709) —
+target **NOT** met. Spend $7.57 of a $12.50 cap. No GPU running at close.
 
 ---
 
@@ -551,3 +556,474 @@ arms the same to three significant figures. It is not a hidden handicap on our s
 `ef` is not a free win worth invalidating the published numbers for, and the 0.4319-vs-0.4569
 gap is an encoder difference rather than an index artifact. $0.00, and one fewer thing the
 result can be argued away with.
+
+### 2026-08-20T05:57Z — TRAINING COMPLETE, clean, and this time the query upload worked
+
+```
+{'train_runtime': 8554.83, 'train_samples_per_second': 11.689, 'train_steps_per_second': 1.461,
+ 'train_loss': 0.21003, 'epoch': 1.0}
+[train.sh] wall-clock: 8620s EXIT=0 final_batch=8 final_effective_batch=8
+           gradient_checkpointing=off cross_device_negatives=off
+[train.sh] final checkpoint sync done
+[train.sh] wrote SBERT pooling config (CLS)
+[train.sh] embedded 2000 eval queries, dim 1024
+[train.sh] done. weights: s3://…/models/cshl-encoder-bge-m3/20260819-232838-train/final/
+```
+
+**12,500 steps at batch 8, one epoch over 100,000 pairs, EXIT=0, no OOM at any point.**
+`final_batch=8` is the batch we asked for — unlike last night, nothing was silently halved.
+`cross_device_negatives=off` is correct and deliberate at `NPROC=1`, and the script says so
+itself rather than leaving it to be inferred.
+
+**`AccessDenied` count in the entire box log: 0.** Last night's incident — `train.sh` §5b's
+query-vector upload denied and swallowed by `|| true`, discovered only after the box was gone
+— did not recur. The `write-eval-artifacts` inline policy held, because `launch.sh` only
+re-puts `read-dburl` by name and cannot clobber a policy it does not know about. That is a
+fix that was verified by being exercised, not by being remembered.
+
+**`embedded 2000 eval queries`, not 10,000.** `EVAL_VERSION=cshl-eval-2k` meant the box
+embedded the frozen benchmark's own 2,000 queries directly. Last night's qid-namespace trap
+(943 of the 2k's qids name *different queries* in v1) had nothing to bite on.
+
+Weights complete and byte-checked: `model.safetensors` **2,271,064,456 bytes**, identical in
+size to last night's — same 568M-parameter architecture, as it must be. Plus `1_Pooling/`,
+`modules.json` and `sentence_bert_config.json`, the CLS-pooling config whose absence would
+silently give mean pooling.
+
+Box `i-0efe2e00b91aedceb` self-terminated **06:00:38Z**. Lifetime 03:28:38 → 06:00:38 =
+**152 min = $5.68**, against the $5.60 projected at 03:34Z from the measured it/s. The watchdog
+at 06:24:31Z was never approached.
+
+### 2026-08-20T05:58Z — P1/P3 fired within 60s of the weights landing (lead addendum 2)
+
+**P1 — weights slimmed before four boxes could download them.** `final/` was **21.2 GiB**
+(three retained `checkpoint-*` dirs carrying 4.5 GB optimizer states each). `serve/` is
+**2.1 GiB, 10 objects**. Four boxes x 19 GiB not downloaded.
+
+**P3 — query vectors installed, and the guard that matters passed:**
+```
+2,000 rows -> 2,000 matched this benchmark   (zero missing: the qid trap did not fire)
+dim 1024 · norms [1.0000, 1.0000] · non-finite 0 · all-zero 0
+  distinct from qemb/bge-m3.jsonl   (b86fe21a81f6… vs 7eadd4928ce2…) OK
+  distinct from qemb/cshl.jsonl     (9be967585172… vs 7eadd4928ce2…) OK
+  distinct from qemb/cshl_qp.jsonl  (30c8a3e6490c… vs 7eadd4928ce2…) OK
+  distinct from qemb/medcpt.jsonl   (18ed37ddaffc… vs 7eadd4928ce2…) OK
+  distinct from qemb/specter2.jsonl (2e8911a7ccbb… vs 7eadd4928ce2…) OK
+md5 7eadd4928ce22fbc2c4ae27c8e761ca5
+```
+**`distinct from qemb/cshl_qp.jsonl` is the load-bearing line tonight.** cshl-QP and cshl-QP2
+are two fine-tunes of the same base model, on overlapping data, scored on the same queries —
+the two arms in this whole program most able to collide into "two arms, one model." They did
+not.
+
+### 2026-08-20T06:02Z — P2 fired: re-embed into the FOURTH table, N=4
+
+```
+box 0: i-00d51fd0f63ce6242   g6e.xlarge   subnet-0407bd1ff7e9d8c44
+box 1: i-02af1bf6e2a3cb916   g6e.xlarge   subnet-09e840612db030382  (3 AZs refused first)
+box 2: i-0b8320cd013cbb9db   g6e.xlarge   subnet-09e840612db030382  (3 AZs refused first)
+box 3: i-088e3a8e277a4b698   g6e.xlarge   subnet-09e840612db030382  (2 AZs refused first)
+EMB_TABLE=preprint_embeddings_cshl_qp2  DIM=1024  NORMALIZE=1  CAP=4000  PARTS=4
+```
+
+All four are `g6e.xlarge` (L40S), so the default Ada TEI image `89-1.8` is the correct one and
+no `TEI_IMAGE` override was needed. `preprint_embeddings_cshl_qp` is **not** touched — it may
+be serving production tonight.
+
+Query and document vectors now match in **both recipe and precision** on this arm: the corpus
+side goes through TEI at fp16 with `NORMALIZE=1`, and… the query side came from
+sentence-transformers at fp32 on the train box. Disclosed rather than glossed: that is the same
+mismatch the incumbent `cshl` arm has, and the opposite of `cshl_qp`, whose query vectors were
+recovered through TEI. It favours no one, but it is a difference between two arms' measurement
+and it should be on the record before the numbers are.
+
+---
+
+# THE VERDICT
+
+**MeSH: WON, decisively. AUTHORKW: NOT WON — a significant loss alone, statistical parity when
+fused with FTS. One of the two targets is met.**
+
+Scored on the frozen 2,000-query subsample `cshl-eval-2k` (MESH 1,241 · AUTHORKW 759,
+`sha256 0f18abd1…`), full-corpus retrieval against 433,449 papers, `hnsw.ef_search=100`, cosine
+for our arms, inner product over raw `[CLS]` for MedCPT.
+
+## Against the two targets, stated flatly
+
+| target | bar (MedCPT) | cshl-QP2 alone | RRF(cshl-QP2 + FTS) — **ours only** | verdict |
+|---|---:|---:|---:|:--|
+| **MeSH R@10** | 0.4569 | **0.5238** | **0.5326** | **WIN** |
+| **AUTHORKW R@10** | 0.8076 | 0.7642 | 0.7800 | **LOSS / parity** |
+
+## Query→document, the task the product serves
+
+| arm | MeSH R@10 | MeSH nDCG@10 | AUTHORKW R@10 | AUTHORKW nDCG@10 | ours only? |
+|---|---:|---:|---:|---:|:--:|
+| RRF(cshl-QP2 + MedCPT + FTS) | **0.5552** | **0.4173** | **0.8458** | **0.7270** | no |
+| **RRF(cshl-QP2 + FTS)** | **0.5326** | 0.3938 | **0.7800** | 0.6678 | **yes** |
+| RRF(cshl-QP2 + cshl-QP + MedCPT + FTS) | 0.5342 | 0.4033 | 0.8155 | 0.7151 | no |
+| **cshl-QP2 alone** | **0.5238** | 0.3881 | **0.7642** | 0.6502 | **yes** |
+| RRF(cshl-QP2 + cshl-QP + FTS) | 0.4915 | 0.3673 | 0.7694 | 0.6624 | yes |
+| RRF(cshl-QP2 + cshl-QP) | 0.4811 | 0.3608 | 0.7484 | 0.6417 | yes |
+| **`ncbi/MedCPT` — the bar** | **0.4569** | 0.3373 | **0.8076** | 0.6885 | no |
+| cshl-QP (last night) | 0.4319 | 0.3190 | 0.7497 | 0.6395 | yes |
+| cshl-CITE | 0.3320 | 0.2367 | 0.6693 | 0.5625 | yes |
+| Postgres FTS | 0.0806 | 0.0626 | 0.2398 | 0.2286 | yes |
+
+R@1: cshl-QP2 **0.2691** (MeSH) / **0.5349** (AUTHORKW), against MedCPT's 0.2345 / 0.5731.
+
+**On MeSH we beat a purpose-built biomedical retriever, alone, without fusing anything.**
+0.4319 → **0.5238**, +21.3% relative in one night, and 0.0669 *above* MedCPT rather than 0.0250
+below it. The gap did not close; it reversed.
+
+## The significance tests — paired, per family, same queries in the same order (asserted)
+
+**cshl-QP2 vs `ncbi/MedCPT`:**
+
+| family | n | QP2-only | MedCPT-only | ΔR@10 | exact p | bootstrap 95% CI | |
+|---|---:|---:|---:|---:|---:|---|:--|
+| **MESH** | 1,241 | 184 | 101 | **+0.0669** | **1.01e-6** | **[+0.0403, +0.0927]** | **WIN** |
+| AUTHORKW | 759 | 48 | 81 | **−0.0435** | **0.0046** | **[−0.0738, −0.0145]** | **LOSS** |
+
+On MeSH the confidence interval sits **entirely above zero**. On author keywords it sits
+**entirely below zero**. Neither is a coin-flip and neither needs a careful reading to survive.
+
+**RRF(cshl-QP2 + FTS) — our own arms only — vs `ncbi/MedCPT`:**
+
+| family | n | ours-only | MedCPT-only | ΔR@10 | exact p | bootstrap 95% CI | |
+|---|---:|---:|---:|---:|---:|---|:--|
+| MESH | 1,241 | 185 | 91 | **+0.0757** | **1.59e-8** | [+0.0500, +0.1015] | **WIN** |
+| AUTHORKW | 759 | 51 | 72 | −0.0277 | **0.0709** | **[−0.0567, +0.0013]** | **parity** |
+
+Adding FTS lifts author keywords from a significant loss (p=0.0046) to **statistical parity**
+(p=0.0709, CI crossing zero) — we can no longer distinguish the fusion from MedCPT there. It is
+still **not** a win, and 0.7800 does not clear 0.8076.
+
+**cshl-QP2 vs cshl-QP — what tonight's changes actually bought:**
+
+| family | n | QP2-only | QP-only | ΔR@10 | exact p | bootstrap 95% CI |
+|---|---:|---:|---:|---:|---:|---|
+| MESH | 1,241 | 157 | 43 | **+0.0919** | **1.90e-16** | [+0.0701, +0.1136] |
+| AUTHORKW | 759 | 42 | 31 | +0.0145 | **0.2416** | **[−0.0066, +0.0356]** |
+
+## The finding I did not expect, and it is the important one
+
+**The change aimed at AUTHORKW did almost nothing for AUTHORKW, and the incidental change to
+MESH did almost everything.**
+
+| family | training pairs, last night → tonight | multiplier | ΔR@10 | p |
+|---|---|---:|---:|---:|
+| AUTHORKW | 5,854 → **40,000** | **6.8x** | **+0.0145** | **0.24 — not significant** |
+| MESH | 9,668 → **55,000** | 5.7x | **+0.0919** | 1.9e-16 |
+
+Comparable multipliers; **six-fold different outcomes**. Nearly seven times the author-keyword
+supervision produced a change I cannot distinguish from noise, while a slightly smaller
+multiplier on MeSH produced the largest single jump this program has measured.
+
+That is not what a data-quantity story predicts, and it should change what gets tried next.
+The most likely reading: **author-keyword retrieval is not supervision-limited, it is
+representation- or objective-limited.** Author keywords are short, idiosyncratic, author-chosen
+label sets — a bi-encoder squeezing them into one 1024-d vector may simply be near its ceiling
+on that family, and MedCPT's remaining edge there may come from something more data will not
+buy. Every remaining lever that is *more of the same supervision* is now a poor bet on
+AUTHORKW, and that includes the second epoch. See the contingency ranking below.
+
+A second consequence, already visible at 02:26Z and confirmed again tonight: **fusing our own
+encoders with each other makes things worse, monotonically.** RRF(QP2 + QP) = 0.4811 against
+QP2 alone at 0.5238. cshl-QP is not a complementary view, it is a weaker view of the same
+thing, and RRF cannot tell the difference. **The production fusion should carry exactly one of
+our encoders — the newest — plus FTS.**
+
+## Document→document — the trade, unchanged
+
+| arm | R@1 | R@10 | R@50 | MRR |
+|---|---:|---:|---:|---:|
+| cshl-CITE | 0.0700 | **0.2120** | 0.3445 | 0.1167 |
+| cshl-QP (last night) | 0.0630 | 0.1980 | 0.3145 | 0.1061 |
+| **cshl-QP2** | 0.0670 | **0.1960** | 0.3115 | 0.1098 |
+| stock `BAAI/bge-m3` | 0.0620 | 0.1955 | 0.2900 | 0.1053 |
+| `ncbi/MedCPT` | 0.0580 | 0.1790 | 0.3020 | 0.0985 |
+
+| comparison | ΔR@10 | exact p |
+|---|---:|---:|
+| QP2 vs cshl-CITE | −0.0160 | 0.0159 |
+| QP2 vs cshl-QP | −0.0020 | **0.7926** |
+| QP2 vs stock bge-m3 | +0.0005 | **1.0000** |
+| QP2 vs MedCPT | +0.0170 | 0.0397 |
+
+**p = 1.0000 against the base model.** On document→document, cshl-QP2 is indistinguishable from
+the `BAAI/bge-m3` it was fine-tuned from — the citation training's doc→doc advantage was already
+spent by last night's run and tonight neither recovered nor further damaged it (p=0.79 vs
+cshl-QP). cshl-CITE remains the better doc→doc encoder and the right one for "more like this",
+reviewer matching and systematic-review expansion. All four tables stay populated, so both
+remain available.
+
+## Controls — the harness produced the old numbers before it produced a new one
+
+| arm | MeSH R@10 | published | AUTHORKW R@10 | published |
+|---|---:|---:|---:|---:|
+| cshl-CITE | 0.3320 | 0.3320 | 0.6693 | 0.6693 |
+| `ncbi/MedCPT` | 0.4569 | 0.4569 | 0.8076 | 0.8076 |
+| Postgres FTS | 0.0806 | 0.0806 | 0.2398 | 0.2398 |
+| cshl-QP | 0.4319 | 0.4319 | 0.7497 | 0.7497 |
+
+Every digit, in the same invocation that produced the new arm, **after** the registry edit — so
+the edit is inside the test. doc→doc controls likewise: bge-m3 0.1955, MedCPT 0.1790, CITE
+0.2120, cshl-QP 0.1980, all exact. All dense arms reported `Index Scan CONFIRMED`; none fell
+back to a sequential scan.
+
+## Coverage gate — re-derived at assertion time, nothing taken from a pass report
+
+**PASSED 2026-08-20T06:40Z.**
+```
+corpus 433,449 · embeddable 433,449 · excluded by the <20-char rule 0
+preprint_embeddings_cshl_qp2  433,449  uncovered 0  dim 1024  zero-vectors 0
+  vectors + uncovered = corpus : 433,449 + 0 = 433,449
+  norms outside [0.99, 1.01]   : 0
+  model tag                    : cshl-encoder-bge-m3-qpairs2  (433,449 rows)
+text_hash vs canonical recipe  : 0 mismatches of 433,449 (cap 4000)
+HNSW idx_pp_emb_cshl_qp2_hnsw  3,386 MB  vector_cosine_ops  indisvalid=t indisready=t
+
+untouched, as required — last write timestamps read at assertion time:
+  preprint_embeddings          433,449   2026-08-19 07:07:28Z
+  preprint_embeddings_medcpt   433,449   2026-08-19 07:07:19Z
+  preprint_embeddings_cshl     433,449   2026-08-19 14:06:41Z
+  preprint_embeddings_cshl_qp  433,449   2026-08-20 00:52:45Z   <- production-safe, not written
+  preprint_embeddings_cshl_qp2 433,449   2026-08-20 06:08:08Z   <- tonight's
+```
+
+The query-vector file digest-differs from every other arm's, checked before it was written:
+`cshl_qp2` md5 `7eadd4928ce2…` vs `cshl_qp` `30c8a3e6490c…`, `cshl` `9be967585172…`,
+`bge-m3` `b86fe21a81f6…`, `medcpt` `18ed37ddaffc…`, `specter2` `2e8911a7ccbb…`.
+
+## The index build lied about being finished, and it was caught
+
+`CREATE INDEX` issued through the Neon **HTTP** driver returned
+`UND_ERR_HEADERS_TIMEOUT` after 5 minutes. The natural reading is "the build is still running
+server-side, the client just gave up" — and the natural next action, re-issuing it, would have
+been wrong in the other direction. Checked instead: `pg_stat_progress_create_index` **empty**,
+`pg_stat_activity` **empty**, `pg_index` **empty**. The statement had been *cancelled* with the
+HTTP request; nothing was building. Rebuilt over a real TCP session (`psql`, `statement_timeout=0`)
+and watched to `indisvalid=t` through the progress view — 14.5 min, 433,449 tuples, with
+pgvector warning that the graph outgrew `maintenance_work_mem` at 28,596 tuples.
+
+Had I trusted the timeout as "probably still going", the scoring run would have gone ahead
+against a table with **no index** — and `score.mjs` would have said `WARNING no Index Scan` and
+still produced a complete, plausible, *lower* set of numbers.
+
+---
+
+## RIG BUG found tonight: the checkpoint syncer never deletes
+
+```
+s3://…/models/cshl-encoder-bge-m3/20260819-232838-train/checkpoints/  352 objects  200.2 GiB
+s3://…/models/cshl-encoder-bge-m3/20260819-192100-train/               31 objects   10.6 GiB
+```
+
+`train.sh`'s background syncer runs `aws s3 sync "$OUT" "$CKPT_S3/"` with **no `--delete`**.
+`--save_total_limit=3` prunes the *local* disk, so the box stays healthy — but every checkpoint
+it deletes locally is already in S3 and stays there forever. This run wrote 31 checkpoints at
+~6.5 GiB each: **200 GiB of optimizer state from a run that completed with EXIT=0**, for which
+the only useful artifact is the 2.1 GiB in `serve/`. At $0.023/GB-month that is **$4.60/month,
+accruing, from one night**. It scales with `SAVE_STEPS` — tonight's tighter 400-step checkpoint
+interval is exactly why this run left 19x last night's.
+
+**Not deleted by me** — 200 GiB of Brendan's storage is his call, and the run's own weights are
+independently safe in `final/` and `serve/`. One command when he wants it:
+```sh
+aws s3 rm --recursive s3://cshl-embed-rxiv/models/cshl-encoder-bge-m3/20260819-232838-train/checkpoints/
+aws s3 rm --recursive s3://cshl-embed-rxiv/models/cshl-encoder-bge-m3/20260819-192100-train/checkpoints/
+```
+The durable fix belongs in `train.sh`: either `--delete` on the syncer, or a post-success
+cleanup of `checkpoints/` once `final/` is verified complete. Not made mid-flight tonight.
+
+---
+
+## Spend ledger — FINAL, from measured instance lifetimes
+
+Rates from the AWS pricing API. Lifetimes from `describe-instances`, not from the scripts.
+
+| when | item | rate | minutes | $ |
+|---|---|---|---:|---:|
+| 02:26Z | PHASE 0 — 7 arms on the frozen 2k | — | — | 0.00 |
+| 02:50Z | pricing / quota / IAM reads · 11 capacity-refused launches | — | — | 0.00 |
+| 03:33Z | ANCE miner smoke test (200 queries, read-only) | — | — | 0.00 |
+| 04:09Z | ANN-recall probe (300 queries) | — | — | 0.00 |
+| 03:18:55–03:28:27Z | `i-0b7c04759e791d6dd` g5.12xlarge — **killed, waste** | $5.672/hr | 9.5 | **0.90** |
+| 03:28:48–06:00:38Z | `i-0efe2e00b91aedceb` g6e.2xlarge — THE RUN | $2.24208/hr | 151.8 | **5.67** |
+| 06:01:39–~06:09:20Z | `i-00d51fd0f63ce6242` g6e.xlarge (embed 0) | $1.861/hr | 7.7 | **0.24** |
+| 06:02:00–~06:09:20Z | `i-02af1bf6e2a3cb916` g6e.xlarge (embed 1) | $1.861/hr | 7.3 | **0.23** |
+| 06:02:21–~06:09:20Z | `i-0b8320cd013cbb9db` g6e.xlarge (embed 2) | $1.861/hr | 7.0 | **0.22** |
+| 06:02:36–~06:09:20Z | `i-088e3a8e277a4b698` g6e.xlarge (embed 3) | $1.861/hr | 6.7 | **0.21** |
+| — | S3 (1.5 GB slice, 21 GB final, 2.1 GB serve, 200 GB checkpoint syncs, requests) | — | — | ~0.10 |
+| | **TOTAL** | | | **≈ 7.57** |
+
+**Under the $12.50 cap, with ≈$4.93 unspent.** Eleven capacity-refused launches cost nothing
+and left no orphans. **Zero GPU instances of this lane are running at close** — verified by
+`describe-instances`, and the one GPU box that was alive during this lane's window
+(`i-094b84dd57595f795`, `g6e.2xlarge`, tagged `cshl-reranker-…`) belongs to the **cshl-RR**
+lane, is not my spend and is not mine to terminate.
+
+The N=4 re-embed was the right call: **~7 minutes** end to end against the ~16 min per box the
+N=2 A10G sweep took last night, for **$0.90**.
+
+**Waste, itemised — mine, not folded into the total**
+
+| item | $ | what happened |
+|---|---:|---|
+| the 4-GPU attempt | **0.90** | 9.5 min of a g5.12xlarge. `BATCH=4` OOMed on a 22 GB A10G, the guard halved to 2, and the effective batch collapsed to 8 — the same 7 in-batch negatives one GPU gives, at 1.56 s/step for a 5h22m ETA and a $30 bill. Killed on the measurement. I should have priced the A10G's memory against last night's measured 33.9 GB before putting it in the menu; the OOM guard cannot save you from a card that was never big enough. |
+| 200 GiB of orphaned checkpoints | ~0.01 tonight | See the rig bug above. Trivial now, $4.60/month if nobody deletes it. |
+
+---
+
+# CONTINGENCY — AUTHORKW is the only remaining gap. Ranked levers, no GPU fired.
+
+Per the brief, **no further GPU has been fired.** The gap to close is **AUTHORKW +0.0277**
+(from RRF(cshl-QP2+FTS)'s 0.7800 to above MedCPT's 0.8076).
+
+**The single most important input to this ranking is the R@50 headroom**, because it bounds
+what a re-ranking lever can possibly achieve:
+
+| arm | AUTHORKW R@10 | AUTHORKW **R@50** |
+|---|---:|---:|
+| RRF(cshl-QP2 + FTS) | 0.7800 | **0.8775** |
+| cshl-QP2 | 0.7642 | 0.8669 |
+| `ncbi/MedCPT` | 0.8076 | 0.8920 |
+
+**87.75% of author-keyword golds are already inside our top-50** — comfortably above MedCPT's
+top-10 rate of 80.76%. The information needed to win is already being retrieved; it is sitting
+at ranks 11–50. That makes ordering, not recall, the binding constraint, and it changes the
+ranking decisively.
+
+### 1. Reranker (cshl-RR) over RRF(cshl-QP2 + FTS), pool 50 — **do this first**
+- **Measured cost: $0.00** if the cshl-RR lane's TEI endpoint is already serving; **~$0.62**
+  (one g6e.xlarge, ~20 min) if one must be stood up. Scoring is ~2,000 cross-encoder calls.
+- **No code needed** — `score.mjs` already parses `rerank:<base>@<url>` as a composite arm:
+  `ARMS="cshl_qp2,fts,rrf:cshl_qp2+fts,rerank:rrf_cshl_qp2+fts@http://<ip>:8081" RERANK_POOL=50`
+- **Why first:** it needs to move 2.8 points out of the 9.75 points already sitting in ranks
+  11–50. It is the only lever whose ceiling I have *measured* rather than guessed, it is 10x
+  cheaper than anything else here, and it is the one lever tonight's surprising result does not
+  argue against — a cross-encoder reads the query and document together, which is exactly the
+  thing a single 1024-d bi-encoder vector cannot do for short idiosyncratic keyword sets.
+- Risk to state: a reranker that is worse than the fusion's own ordering can *lower* R@10. It
+  costs one scoring run to find out.
+
+### 2. ANCE hard-negative re-mining with cshl-QP2, AUTHORKW-weighted
+- **Measured cost: ~$5.99 AWS** — $0.31 to embed the training queries on one g6e.xlarge serving
+  the QP2 checkpoint (~10 min), $0.00 for the mine itself (Neon only), $5.68 to retrain on the
+  same box config as tonight. **Plus 3–5 h of wall-clock** for 100k x top-100 retrievals, which
+  is the real cost.
+- **Already drafted, smoke-tested and fenced** (`scripts/train/mine-ance.mjs`, 03:33Z).
+- **Why second, and honestly weakened by tonight's result:** it changes negative *quality*
+  rather than supervision *quantity*, so tonight's "6.8x the AUTHORKW data bought +0.0145,
+  p=0.24" does not directly condemn it. But it is the same family of intervention, it costs 10x
+  the reranker, and its `SKIP_TOP` heuristic is untested at scale.
+
+### 3. Second epoch on the 100k slice
+- **Measured cost: $5.68** (12,500 more steps, 152 box-minutes at tonight's exact throughput);
+  ~$10.7 if run as `EPOCHS=2` from scratch rather than continued from tonight's weights.
+- **Why last, and why I would not spend it:** it is strictly more passes over the same data,
+  and tonight measured that **5.7x more data moved AUTHORKW by an amount indistinguishable from
+  zero**. A second epoch over data that already failed to move the number is the least
+  supported bet on the table. It would likely add a little to MeSH — where we are already
+  winning by 0.0669 and do not need it.
+
+### Not recommended, and why — so these are not re-proposed later
+- **A bigger batch / cross-device negatives on a 4-GPU box.** The flag is wired and verified,
+  but tonight showed g6e.12xlarge has no capacity and the 24 GB alternatives make it
+  self-defeating. Revisit only if L40S multi-GPU capacity returns.
+- **Fusing more of our own encoders.** Measured twice tonight: adding cshl-QP or cshl-CITE to a
+  cshl-QP2 fusion makes it monotonically worse.
+- **Raising `hnsw.ef_search`.** Measured at 04:09Z: costs both arms 3.1% of top-10 equally. Not
+  a free win, and it would break comparability with every published digit.
+
+---
+
+### 2026-08-20T06:55Z — ADDENDUM: my #1 contingency lever was already fired by the cshl-RR lane,
+on this model, while I was writing the verdict
+
+Found on the branch after committing, not by being told: `35f05b4 lane-rerank: QP2+cshl-RR —
+the system loss becomes a TIE (-0.0060, p=0.55)`, scored `2026-08-20T06:46:04Z` — four minutes
+before I finished the contingency ranking that put a reranker at #1. **These are their numbers,
+not mine; I did not produce them and have not re-derived them.** Recording them here because
+the contingency section above is stale without them.
+
+| arm (their file `cshl_qp2+cshl_rr.json`) | MeSH R@10 | AUTHORKW R@10 |
+|---|---:|---:|
+| cshl-QP2 raw (mine, matches my run exactly) | 0.5238 | 0.7642 |
+| **cshl-QP2 + cshl-RR reranked top-50** | **0.5488** | **0.8024** |
+| `ncbi/MedCPT` encoder — the brief's bar | 0.4569 | 0.8076 |
+
+The reranker added **+0.0382 to AUTHORKW**, against the +0.0434 that was needed. **It closes
+88% of the remaining author-keyword gap and lands 0.0052 short of the bar.** My estimate that
+the R@50 headroom made re-ranking the highest-value lever was right; the size of the move was
+almost exactly what the headroom predicted.
+
+**The comparison to make next, which nobody has run:** the reranker was applied to
+**cshl-QP2 alone** (pool R@50 = 0.8669). The better pool is **RRF(cshl-QP2 + FTS)**, whose
+AUTHORKW R@50 is **0.8775** — a full point more gold in the candidate set to reorder. Same
+cross-encoder, same pool size, strictly more to find. That is the cheapest remaining shot at
+0.8076 and it belongs to the cshl-RR lane, whose endpoint and model it needs:
+```sh
+ARMS="cshl_qp2,fts,rrf:cshl_qp2+fts,rerank:rrf_cshl_qp2+fts@http://<cshl-RR-ip>:8081" \
+  RERANK_POOL=50 EVAL_VERSION=cshl-eval-2k node scripts/eval/score.mjs
+```
+
+**One caveat that has to be stated, and the cshl-RR lane already states it correctly in their
+own file** (`"note": "SYSTEM arm: encoder retrieval + cross-encoder rerank of its top-50. Not
+an encoder-vs-encoder row."`): 0.8024 is *our system* against *MedCPT's bare encoder*. That is
+not the same kind of object. The honest system-vs-system comparison is theirs (`a7f4e24`: we
+lose to MedCPT's full stack by −0.0350, p=0.0002; `35f05b4`: with cshl-QP2 that becomes
+−0.0060, p=0.55, a tie). **My verdict above stands as stated because the brief's targets are
+MedCPT's encoder numbers and my arm is an encoder** — but nobody should quote 0.8024 against
+0.8076 as if it settled a like-for-like question.
+
+### 2026-08-20T06:55Z — the 0.5238 coincidence, checked rather than admired
+
+`0fd5a1b lane-rerank: cshl-RR trained and scored — MeSH R@10 0.4319 -> 0.5238 (+21%)` was
+committed **hours before my encoder existed**, and my cshl-QP2 scored **MeSH R@10 0.5238**.
+Identical to four decimal places. Given that this program's clearest published failure is *two
+arms scored from one model*, an aggregate that matches that precisely is a thing to test, not
+to enjoy:
+
+```
+MESH n = 1,241
+  cshl_qp2         650 hits -> 0.5238
+  cshl_qp+cshl_rr  650 hits -> 0.5238
+  per-query DISAGREEMENTS: 198   (qp2-only 99 | qp+rr-only 99)
+  keys in same order: true · hits10 vectors byte-identical: FALSE
+```
+
+**A genuine coincidence.** The two systems disagree on **198 of 1,241 queries** — 16% — and
+the disagreement happens to be perfectly symmetric at 99 each way, which is the only reason the
+totals tie. Different arms, same aggregate.
+
+It is also a real finding rather than a curiosity: **the new encoder alone equals the old
+encoder plus a cross-encoder reranker on MeSH.** cshl-QP2 delivers, for one 152-minute training
+run and no extra serving cost, what cshl-QP needed a second model and a rerank hop at query
+time to reach. And the two are demonstrably finding *different* documents, which is exactly the
+condition under which stacking them helps — as the 0.5488 above shows it does.
+
+Lastly, the honest note about the aggregate: two arms at R@10 0.5238 that disagree on 16% of
+queries is the clearest possible argument for the paired per-query testing this lane added
+tonight. Two identical headline numbers, two different systems.
+
+### 2026-08-20T06:55Z — working-tree hazard, disclosed
+
+This lane is not alone in the working tree. Three lanes (`lane-win`, `lane-rerank`,
+`lane-proof`) committed to it tonight, and the checked-out branch **changed under me** from
+`lane/rxiv-load` to `lane/proof-page` mid-run. Two consequences, both mine to disclose:
+
+- **My commit `1d9c5d5` swept in two files that are not mine** — `scripts/enrich-openalex-cshl.mjs`
+  and `scripts/mine/oakw.mjs` — because I used `git add -A scripts/`. Nothing was deleted or
+  overwritten; they were untracked and are now committed, possibly mid-edit. Not rewritten by
+  me: `lane/proof-page` is shared and rewriting its history to tidy my own mistake would be a
+  worse error than the mistake.
+- **The same thing happened to me in reverse**: `35f05b4` (lane-rerank) contains 80 lines of
+  *this* file, my uncommitted `LANE-WIN.md` text, swept into their commit the same way.
+- **My commits are on `lane/proof-page`, not `lane/rxiv-load`.** `7364a1c` and `d4c2359` reached
+  `lane/rxiv-load` and `main`; `1d9c5d5` — the one carrying THE RESULT — has not. Brendan or the
+  ship lane should cherry-pick it where it belongs; I am not moving branches under three other
+  lanes at 07:00Z.
+
+`git add -A` in a shared tree is the hazard. `git add <explicit paths>` is the fix.

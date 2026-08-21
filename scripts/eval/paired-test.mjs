@@ -9,12 +9,26 @@
 // ({arm, hits10:[0|1,…], keys:[…]}) and asserts the two arms were scored over
 // the same keys in the same order before comparing anything.
 //
-// Usage: A=cshl_qp B=medcpt DIR=data/eval/cshl-eval-docdoc/results \
-//          node scripts/eval/paired-test.mjs
+// Usage: A=cshl_qp B=medcpt EVAL_VERSION=cshl-eval-2k node scripts/eval/paired-test.mjs
+//        A=cshl_qp B=medcpt DIR=data/eval/cshl-eval-docdoc/results node scripts/eval/paired-test.mjs
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const DIR = process.env.DIR ?? 'data/eval/cshl-eval-docdoc/results'
+// WHICH BENCHMARK — stated, never defaulted silently (LANE-QP3).
+//
+// This used to default to the doc->doc results directory. Omitting DIR while
+// meaning the query->doc benchmark does not fail: BOTH directories hold
+// `<arm>.perquery.json` for the same arms with the same 2,000 keys in the same
+// order, so every guard in this file passes and it prints a complete, confident,
+// significant result — for the wrong benchmark. Measured: `A=cshl_qp2 B=medcpt`
+// with no DIR reports "ΔR@10 +0.0170, exact McNemar p = 0.0397" (doc->doc) when
+// the query->doc answer is +0.0669 on MESH. Nothing anywhere says which one you
+// got. So: EVAL_VERSION resolves DIR by name, and the resolved directory is
+// echoed on the first line of output so a pasted result carries its own
+// provenance.
+const DIR = process.env.DIR
+  ?? (process.env.EVAL_VERSION ? `data/eval/${process.env.EVAL_VERSION}/results` : null)
+  ?? (() => { throw new Error('set DIR=<results dir> or EVAL_VERSION=<benchmark> — refusing to guess which benchmark you meant (doc->doc and query->doc both resolve and both look right)') })()
 const A = process.env.A ?? (() => { throw new Error('set A') })()
 const B = process.env.B ?? (() => { throw new Error('set B') })()
 const RESAMPLES = Number(process.env.RESAMPLES ?? 5000)
@@ -26,6 +40,7 @@ const SEED = Number(process.env.SEED ?? 20260819)
 // n, so a blended win can hide a per-family loss. score.mjs writes the family
 // vector into perquery.json precisely so this can be sliced without re-scoring.
 const FAMILY = process.env.FAMILY ?? ''
+console.log(`benchmark: ${DIR}${FAMILY ? `  family: ${FAMILY}` : ''}`)
 const load = (arm) => JSON.parse(readFileSync(join(DIR, `${arm}.perquery.json`), 'utf8'))
 let a = load(A), b = load(B)
 if (FAMILY) {
