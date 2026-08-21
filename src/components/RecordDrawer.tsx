@@ -67,13 +67,13 @@ function RelatedPreprints({ recordKey, onOpen }: { recordKey: string; onOpen?: (
       ) : (
         <ul className="mt-2 space-y-2">
           {rows.map((r) => (
-            <li key={String(r.key_number)}>
+            <li key={String(r.key_number)} className="group">
               <button
                 type="button"
                 onClick={() => onOpen?.(String(r.key_number))}
-                className="w-full text-left text-xs leading-snug text-foreground/85 hover:text-foreground hover:underline"
+                className="w-full text-left text-xs leading-snug text-foreground/85 group-hover:text-foreground"
               >
-                {String(r.title)}
+                <span className="link-wipe">{String(r.title)}</span>
               </button>
               <span className="text-[10px] text-muted-foreground">
                 {String(r.server ?? "")}{r.pub_year ? ` · ${r.pub_year}` : ""}
