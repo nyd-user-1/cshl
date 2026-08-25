@@ -15,6 +15,7 @@ import { SearchBox } from "@/components/SearchInput";
 import { RecordPanel } from "@/components/RecordPanel";
 import { RecordDialog } from "@/components/RecordDialog";
 import { PanelChat } from "@/components/PanelChat";
+import { Tooltip as Hint, TOOLTIP_SURFACE } from "@/components/ui/tooltip";
 import { useAppPanel } from "@/hooks/useAppPanel";
 import { usePrefetchRecord } from "@/hooks/useS2Enrichment";
 import type { CorpusRecord } from "@/types/record";
@@ -131,8 +132,15 @@ function countCitations(records: CorpusRecord[]): CountEntry[] {
     .slice(0, 12);
 }
 
-/** The widgets' orange ramp (anchored on the existing #FF9933). */
-const RAMP = ["#FF9933", "#E0801F", "#B8641A", "#8B7332", "#6B5A28", "#4A4020", "#333333"];
+/** CSHL blue — sampled from `public/cshl-logo.png`, where the seal fills 64,323
+ *  pixels of exactly this value. It replaces the inherited NSR orange across
+ *  every widget on this page. */
+const BRAND = "#004982";
+/** Axis tick labels: the brand hue lightened until it clears text contrast on
+ *  the white card, at the luminance of the gold it replaces. */
+const AXIS_INK = "#4E7695";
+/** The widgets' series ramp, anchored on BRAND and stepping lighter. */
+const RAMP = ["#004982", "#1B5E9B", "#3573B4", "#5189C6", "#6FA0D6", "#93B9E4", "#B8D2F0"];
 const decadeOf = (y: number) => `${Math.floor(y / 10) * 10}s`;
 
 /** rows: one per decade, columns: one per series key (stacked area input) */
@@ -321,7 +329,7 @@ function YearBarChart({
     year: e.value,
     count: e.count,
     fill: activeYears.size === 0 || activeYears.has(e.value)
-      ? "#FF9933"
+      ? BRAND
       : "#333333",
   }));
 
@@ -336,7 +344,7 @@ function YearBarChart({
               dataKey="year"
               tickLine={false}
               axisLine={false}
-              tick={{ fontSize: 10, fill: "#8B7332" }}
+              tick={{ fontSize: 10, fill: AXIS_INK }}
               tickMargin={4}
             />
             <YAxis hide />
@@ -388,8 +396,8 @@ function NuclideMap({
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#222" />
-            <XAxis type="number" dataKey="n" name="N" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#8B7332" }} tickMargin={4} domain={["dataMin - 2", "dataMax + 2"]} />
-            <YAxis type="number" dataKey="z" name="Z" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#8B7332" }} width={28} domain={["dataMin - 2", "dataMax + 2"]} />
+            <XAxis type="number" dataKey="n" name="N" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: AXIS_INK }} tickMargin={4} domain={["dataMin - 2", "dataMax + 2"]} />
+            <YAxis type="number" dataKey="z" name="Z" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: AXIS_INK }} width={28} domain={["dataMin - 2", "dataMax + 2"]} />
             <ZAxis type="number" dataKey="count" range={[24, 220]} />
             <Tooltip
               cursor={{ strokeDasharray: "3 3", stroke: "#444" }}
@@ -406,7 +414,7 @@ function NuclideMap({
             />
             <Scatter data={points} onClick={(d) => onToggle((d as unknown as { code: string }).code)} className="cursor-pointer">
               {points.map((p) => (
-                <Cell key={p.code} fill={!anyActive || activeNuclides.has(p.code) ? "#FF9933" : "#333333"} />
+                <Cell key={p.code} fill={!anyActive || activeNuclides.has(p.code) ? BRAND : "#333333"} />
               ))}
             </Scatter>
           </ScatterChart>
@@ -433,8 +441,9 @@ function ChartShell({ icon, title, sub, onClose, children }: {
   );
 }
 
-const AXIS = { fontSize: 10, fill: "#8B7332" } as const;
-const TIP_CLS = "rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground shadow";
+const AXIS = { fontSize: 10, fill: AXIS_INK } as const;
+/** Chart tooltips and the hover tooltip share one surface. */
+const TIP_CLS = TOOLTIP_SURFACE;
 
 /** Line: cumulative papers over publication year. */
 function CumulativeChart({ entries, onClose }: { entries: CountEntry[]; onClose: () => void }) {
@@ -450,7 +459,7 @@ function CumulativeChart({ entries, onClose }: { entries: CountEntry[]; onClose:
         <XAxis dataKey="year" tickLine={false} axisLine={false} tick={AXIS} tickMargin={4} minTickGap={24} />
         <YAxis tickLine={false} axisLine={false} tick={AXIS} width={28} />
         <Tooltip content={({ payload }) => payload?.[0] ? <div className={TIP_CLS}>{String(payload[0].payload.year)} · {String(payload[0].value)} papers</div> : null} />
-        <Line type="monotone" dataKey="total" stroke="#FF9933" strokeWidth={2} dot={false} activeDot={{ r: 3, fill: "#FF9933" }} />
+        <Line type="monotone" dataKey="total" stroke={BRAND} strokeWidth={2} dot={false} activeDot={{ r: 3, fill: BRAND }} />
       </LineChart>
     </ChartShell>
   );
@@ -467,7 +476,7 @@ function RelevanceChart({ records, onClose }: { records: CorpusRecord[]; onClose
         <XAxis dataKey="rank" tickLine={false} axisLine={false} tick={AXIS} tickMargin={4} minTickGap={24} />
         <YAxis tickLine={false} axisLine={false} tick={AXIS} width={28} domain={[0, 100]} />
         <Tooltip content={({ payload }) => payload?.[0] ? <div className={TIP_CLS}>#{String(payload[0].payload.rank)} {String(payload[0].payload.key)} · {String(payload[0].value)}%</div> : null} />
-        <Line type="monotone" dataKey="score" stroke="#FF9933" strokeWidth={2} dot={false} activeDot={{ r: 3, fill: "#FF9933" }} />
+        <Line type="monotone" dataKey="score" stroke={BRAND} strokeWidth={2} dot={false} activeDot={{ r: 3, fill: BRAND }} />
       </LineChart>
     </ChartShell>
   );
@@ -537,7 +546,7 @@ function CitationScatter({ records, onOpen, onClose }: { records: CorpusRecord[]
           const p = payload?.[0]?.payload as (typeof pts)[number] | undefined;
           return p ? <div className={TIP_CLS}><span className="font-medium">{p.key}</span> · {p.year} · {p.cites} cites<div className="text-muted-foreground max-w-[240px] truncate">{p.title}</div></div> : null;
         }} />
-        <Scatter data={pts} fill="#FF9933" onClick={(d) => onOpen((d as unknown as { key: string }).key)} className="cursor-pointer" />
+        <Scatter data={pts} fill={BRAND} onClick={(d) => onOpen((d as unknown as { key: string }).key)} className="cursor-pointer" />
       </ScatterChart>
     </ChartShell>
   );
@@ -582,8 +591,12 @@ function ResultRow({
       onMouseEnter={onHover}
     >
       <div className="flex items-start gap-2">
-        <span className="text-sm font-medium text-foreground leading-snug hover:underline flex-1 min-w-0">
-          {record.key_number}
+        {/* The title is the heading (2026-08-25). The key number led this row and
+            told a reader nothing they could act on; it still travels with the row
+            as the DOI below, so nothing is lost by promoting the title into its
+            place. One line — the abstract underneath carries the rest. */}
+        <span className="text-sm font-medium text-foreground leading-snug hover:underline flex-1 min-w-0 truncate">
+          {record.title}
         </span>
         {/* Match-percentage badge removed 2026-08-20. In hybrid the list interleaves two
             arms whose scores are not on one scale — a dense row carries a cosine (0.6-0.7)
@@ -592,9 +605,11 @@ function ResultRow({
             is the signal; a single incomparable number beside it is worse than none. Rows
             now carry `arm` ("dense" | "fts" | "both") if this is ever labelled instead. */}
       </div>
-      <p className="text-sm text-foreground mt-0.5 leading-snug line-clamp-2">
-        {record.title}
-      </p>
+      {record.abstract && (
+        <p className="text-sm text-muted-foreground mt-0.5 leading-snug line-clamp-2">
+          {record.abstract}
+        </p>
+      )}
       {meta.length > 0 && (
         <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed truncate">
           {meta.join(" · ")}
@@ -607,32 +622,37 @@ function ResultRow({
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground/70 hover:text-foreground transition-colors truncate min-w-0"
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground/70 hover:text-foreground transition-colors min-w-0"
           >
+            {/* `truncate` moved onto the text span so the trailing icon cannot be
+                clipped, and the underline is the house wipe (background-size
+                transition) rather than text-decoration. */}
+            <span className="link-wipe truncate">{record.doi}</span>
             <ExternalLink className="h-4 w-4 shrink-0" />
-            <span className="truncate">{record.doi}</span>
           </a>
         ) : <span />}
         {/* bottom-right actions: → (↗ on hover) opens the record; ✦ opens chat about it in the side panel */}
         <div className="flex items-center gap-0.5 shrink-0">
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onDetail(); }}
-            className={`${iconBtn} group/arrow`}
-            aria-label="Open record"
-            title="Open record"
-          >
-            <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover/arrow:-rotate-45" />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onChat(); }}
-            className={`${iconBtn} group/spark hover:text-yellow-500`}
-            aria-label="Chat about this record"
-            title="Chat about this record"
-          >
-            <Sparkles className="h-4 w-4 transition-transform duration-200 group-hover/spark:-rotate-12" />
-          </button>
+          <Hint label="Open Record">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onDetail(); }}
+              className={`${iconBtn} group/arrow`}
+              aria-label="Open Record"
+            >
+              <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover/arrow:-rotate-45" />
+            </button>
+          </Hint>
+          <Hint label="Ask Chat">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onChat(); }}
+              className={`${iconBtn} group/spark hover:text-yellow-500`}
+              aria-label="Ask Chat"
+            >
+              <Sparkles className="h-4 w-4 transition-transform duration-200 group-hover/spark:-rotate-12" />
+            </button>
+          </Hint>
         </div>
       </div>
     </div>
