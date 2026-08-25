@@ -6,7 +6,7 @@ import { SHELL_CLS, WidgetHeader } from "@/components/WidgetCard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAppPanel } from "@/hooks/useAppPanel";
 import { useRecentPapers } from "@/hooks/useRecentPapers";
-import { paperEntity, setDragEntity, setDragGhost } from "@/lib/drag-entity";
+import { paperEntity, setDragEntity } from "@/lib/drag-entity";
 import type { CorpusRecord } from "@/types/record";
 
 const Note = ({ children }: { children: React.ReactNode }) => (
@@ -22,10 +22,9 @@ const Note = ({ children }: { children: React.ReactNode }) => (
  * prefix (`10.64898`) is identical on almost every row and named the publisher,
  * not the paper.
  *
- * A card is the drag unit. It carries its whole record in the payload
- * (`paperEntity`), so dropping one on the chat input attaches it as context with
- * no second fetch, and it drags as a compact chip rather than as a translucent
- * copy of its own chrome.
+ * The card is the drag unit and drags as itself. It carries its whole record in
+ * the payload (`paperEntity`), so dropping one on the chat input attaches it as
+ * context with no second fetch.
  */
 export function PapersList() {
   const { data, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useRecentPapers();
@@ -85,10 +84,10 @@ export function PapersList() {
           key={record.id}
           className={SHELL_CLS}
           draggable
-          onDragStart={(e) => {
-            setDragEntity(e.dataTransfer, paperEntity(record));
-            setDragGhost(e.dataTransfer, record.title);
-          }}
+          // No setDragImage: the browser's default is a copy of this card, and
+          // the card is what should follow the cursor — the same thing the
+          // /search widgets do when you pick one up to reorder it.
+          onDragStart={(e) => setDragEntity(e.dataTransfer, paperEntity(record))}
         >
           <WidgetHeader
             gripFirst

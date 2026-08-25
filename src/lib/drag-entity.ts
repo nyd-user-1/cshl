@@ -27,31 +27,6 @@ export function setDragEntity(dt: DataTransfer, g: DragEntity) {
   dt.effectAllowed = "copy";
 }
 
-/**
- * Replace the browser's default drag image — a translucent copy of whatever
- * element you grabbed, card chrome and all — with a compact chip naming the
- * thing being dragged. What travels should read as the paper, not as the box it
- * happened to be sitting in.
- *
- * The node has to be in the document when `setDragImage` reads it, so it is
- * parked off-screen and removed on the next tick.
- */
-export function setDragGhost(dt: DataTransfer, label: string) {
-  if (typeof document === "undefined") return;
-  const el = document.createElement("div");
-  el.textContent = label.length > 60 ? label.slice(0, 60) + "…" : label;
-  el.style.cssText = [
-    "position:fixed", "top:-1000px", "left:-1000px", "z-index:-1",
-    "max-width:280px", "white-space:nowrap", "overflow:hidden", "text-overflow:ellipsis",
-    "padding:6px 10px", "border-radius:8px",
-    "font:500 12px/1.2 ui-sans-serif,system-ui,sans-serif",
-    "background:#111", "color:#fff", "box-shadow:0 4px 12px rgba(0,0,0,.25)",
-  ].join(";");
-  document.body.appendChild(el);
-  dt.setDragImage(el, 12, 12);
-  setTimeout(() => el.remove(), 0);
-}
-
 export function readDragEntity(dt: DataTransfer | null): DragEntity | null {
   if (!dt) return null;
   try {

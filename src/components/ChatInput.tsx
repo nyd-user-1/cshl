@@ -114,16 +114,18 @@ export function ChatInput({ onSubmit, onStop, isLoading, initialValue, searchTog
 
   return (
     <div className="max-w-[720px] mx-auto w-full">
-      {/* The attached-record chip, above the box — ChatDock's banner, same parts. */}
+      {/* The attached record, in the house ribbon: tucked behind the top of the
+          input container by -mb-2 + rounded-t-2xl + border-b-0, exactly as the
+          SEARCH MODE banner and ChatDock's context banner are. */}
       {attached && (
-        <div className="mb-1.5 flex items-center gap-1.5 rounded-xl border bg-muted/60 px-3 py-1.5 text-[11px] text-muted-foreground">
+        <div className="-mb-2 flex min-w-0 items-center gap-1.5 rounded-t-2xl border border-b-0 border-border bg-muted/60 px-4 pb-4 pt-2 text-[11px] text-muted-foreground">
           <Paperclip className="h-3 w-3 shrink-0" />
           <span className="shrink-0 uppercase tracking-wide">{attached.type}</span>
-          <span className="truncate font-mono text-foreground">{attached.label}</span>
+          <span className="shrink-0 font-mono text-foreground">{attached.label}</span>
           {attached.title && <span className="truncate">— {attached.title}</span>}
           <button
             onClick={() => onAttach?.(null)}
-            className="ml-auto shrink-0 hover:text-foreground"
+            className="ml-auto shrink-0 rounded hover:text-foreground"
             aria-label="Clear context"
             title="clear context"
           >
@@ -132,7 +134,7 @@ export function ChatInput({ onSubmit, onStop, isLoading, initialValue, searchTog
         </div>
       )}
       <div
-        className={`rounded-2xl bg-secondary p-3 shadow-lg transition-colors ${
+        className={`relative rounded-2xl bg-secondary p-3 shadow-lg transition-colors ${
           dragOver ? "border-2 border-dashed border-blue-400" : "border border-border"
         }`}
         onDragOver={droppable ? (e) => { if (e.dataTransfer.types.includes(ENTITY_MIME)) { e.preventDefault(); e.stopPropagation(); setDragOver(true); } } : undefined}
