@@ -12,14 +12,19 @@ export const SHELL_CLS = "rounded-lg border border-border overflow-hidden min-w-
  * sub-label, and the ✕ that dismisses the card. `icon` is optional because a
  * paper card leads with its DOI rather than a glyph.
  */
-export function WidgetHeader({ icon, title, sub, right, onClose }: {
+export function WidgetHeader({ icon, title, sub, right, onClose, gripFirst }: {
   icon?: React.ReactNode; title: string; sub?: string; right?: React.ReactNode; onClose: () => void;
+  /** Grip at the far left, ahead of the name — the Papers panel, where the whole
+   *  card is the drag unit and the handle should be the first thing you meet. */
+  gripFirst?: boolean;
 }) {
+  const grip = <GripVertical className="h-3 w-3 shrink-0 text-muted-foreground/60" aria-label="drag" />;
   return (
     <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 border-b border-border shrink-0 cursor-grab active:cursor-grabbing select-none">
+      {gripFirst && grip}
       {icon}
-      <span className="text-xs font-semibold text-foreground">{title}</span>
-      <GripVertical className="h-3 w-3 text-muted-foreground/60" aria-label="drag to reorder" />
+      <span className="text-xs font-semibold text-foreground truncate">{title}</span>
+      {!gripFirst && grip}
       {sub && <span className="text-[10px] text-muted-foreground truncate">{sub}</span>}
       <span className="flex-1" />
       {right}

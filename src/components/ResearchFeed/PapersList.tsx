@@ -1,22 +1,13 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RecordRow } from "@/components/RecordRow";
 import { RecordPanel } from "@/components/RecordPanel";
 import { PanelChat } from "@/components/PanelChat";
 import { SHELL_CLS, WidgetHeader } from "@/components/WidgetCard";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useAppPanel } from "@/hooks/useAppPanel";
 import { useRecentPapers } from "@/hooks/useRecentPapers";
-import { paperEntity, setDragEntity } from "@/lib/drag-entity";
+import { paperEntity, setDragEntity, setDragGhost } from "@/lib/drag-entity";
 import type { CorpusRecord } from "@/types/record";
-
-/** `10.64898/2026.08.18.745514` → the registrant prefix and the key, separately:
- *  the header reads as the DOI, split the way the widget header wants it. */
-function doiParts(r: CorpusRecord): { prefix: string; suffix: string } {
-  const doi = r.doi ?? "";
-  const slash = doi.indexOf("/");
-  return slash > 0
-    ? { prefix: doi.slice(0, slash), suffix: doi.slice(slash + 1) }
-    : { prefix: "DOI", suffix: r.key_number };
-}
 
 const Note = ({ children }: { children: React.ReactNode }) => (
   <p className="px-4 py-8 text-center text-xs text-muted-foreground">{children}</p>
@@ -24,22 +15,64 @@ const Note = ({ children }: { children: React.ReactNode }) => (
 
 /**
  * The newest preprints, each in the card the /search widgets use — the same
- * `SHELL_CLS` box and `WidgetHeader` strip as Journal and Status, stacked with
- * a gutter either side and a gap between them.
+ * `SHELL_CLS` box and `WidgetHeader` strip as Journal and Status, stacked with a
+ * gutter either side and a gap between them.
  *
- * A card is the drag unit: it carries its whole record in the payload
- * (`paperEntity`), so dropping one on the chat input attaches it as context
- * without a second fetch. The grip in the header says so; the ✕ dismisses.
+ * The header carries the key number and nothing else: the DOI's registrant
+ * prefix (`10.64898`) is identical on almost every row and named the publisher,
+ * not the paper.
+ *
+ * A card is the drag unit. It carries its whole record in the payload
+ * (`paperEntity`), so dropping one on the chat input attaches it as context with
+ * no second fetch, and it drags as a compact chip rather than as a translucent
+ * copy of its own chrome.
  */
 export function PapersList() {
-  const { data: records, isError } = useRecentPapers();
+  const { data, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useRecentPapers();
   const [dismissed, setDismissed] = useState<Set<number>>(new Set());
   const { openPanel } = useAppPanel();
+  const sentinel = useRef<HTMLDivElement | null>(null);
+
+  // Pull the next page as the bottom of the list comes into view. `rootMargin`
+  // starts the fetch before the reader arrives, so the scroll never stalls.
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || !hasNextPage) return;
+    const io = new IntersectionObserver(
+      (entries) => { if (entries[0]?.isIntersecting) void fetchNextPage(); },
+      { rootMargin: "400px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasNextPage, fetchNextPage]);
 
   if (isError) return <Note>Could not load recent papers.</Note>;
-  if (!records) return <Note>Loading…</Note>;
+  // Cards in outline while the first page lands. A cold Neon plus a cold
+  // function measured 5.9s against production (265ms once the edge has it, and
+  // a deploy purges that cache) — long enough that a bare "Loading…" reads as
+  // broken. AppLayout's prefetch means an open normally never sees this.
+  if (!data) {
+    return (
+      <div className="flex flex-col gap-3 px-3 pb-3">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className={SHELL_CLS}>
+            <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">
+              <Skeleton className="h-3 w-3" />
+              <Skeleton className="h-3 w-32" />
+            </div>
+            <div className="space-y-2 px-3 py-3">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-3 w-full" />
+              <Skeleton className="h-3 w-4/5" />
+              <Skeleton className="h-3 w-2/3" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
 
-  const shown = records.filter((r) => !dismissed.has(r.id));
+  const shown = data.pages.flat().filter((r) => !dismissed.has(r.id));
   if (!shown.length) return <Note>No papers on record.</Note>;
 
   const detail = (record: CorpusRecord) => () =>
@@ -47,43 +80,48 @@ export function PapersList() {
 
   return (
     <div className="flex flex-col gap-3 px-3 pb-3">
-      {shown.map((record) => {
-        const { prefix, suffix } = doiParts(record);
-        return (
-          <div
-            key={record.id}
-            className={SHELL_CLS}
-            draggable
-            onDragStart={(e) => setDragEntity(e.dataTransfer, paperEntity(record))}
-          >
-            <WidgetHeader
-              title={prefix}
-              sub={suffix}
-              onClose={() => setDismissed((d) => new Set(d).add(record.id))}
-            />
-            <RecordRow
-              variant="card"
-              record={record}
-              first={false}
-              onClick={detail(record)}
-              onDetail={detail(record)}
-              onChat={() =>
-                openPanel({
-                  title: (
-                    <span className="inline-flex items-center gap-2">
-                      Chat
-                      <span className="inline-flex items-center rounded border bg-muted/40 px-1 font-mono text-[0.85em] font-semibold text-foreground">
-                        {record.key_number}
-                      </span>
+      {shown.map((record) => (
+        <div
+          key={record.id}
+          className={SHELL_CLS}
+          draggable
+          onDragStart={(e) => {
+            setDragEntity(e.dataTransfer, paperEntity(record));
+            setDragGhost(e.dataTransfer, record.title);
+          }}
+        >
+          <WidgetHeader
+            gripFirst
+            title={record.key_number}
+            onClose={() => setDismissed((d) => new Set(d).add(record.id))}
+          />
+          <RecordRow
+            variant="card"
+            record={record}
+            first={false}
+            onClick={detail(record)}
+            onDetail={detail(record)}
+            onChat={() =>
+              openPanel({
+                title: (
+                  <span className="inline-flex items-center gap-2">
+                    Chat
+                    <span className="inline-flex items-center rounded border bg-muted/40 px-1 font-mono text-[0.85em] font-semibold text-foreground">
+                      {record.key_number}
                     </span>
-                  ),
-                  content: <PanelChat key={record.key_number} record={record} />,
-                })
-              }
-            />
-          </div>
-        );
-      })}
+                  </span>
+                ),
+                content: <PanelChat key={record.key_number} record={record} />,
+              })
+            }
+          />
+        </div>
+      ))}
+
+      <div ref={sentinel} className="h-px" />
+      {isFetchingNextPage && (
+        <p className="pb-2 text-center text-[10px] uppercase tracking-widest text-muted-foreground">Loading…</p>
+      )}
     </div>
   );
 }

@@ -1,29 +1,35 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import type { CorpusRecord } from "@/types/record";
 
-const PAGE_SIZE = 30;
+/** Small first page so the panel paints immediately; the rest arrives on scroll. */
+export const PAPERS_PAGE = 12;
+
+async function fetchPage(page: number): Promise<CorpusRecord[]> {
+  const res = await fetch(`/api/records?page=${page}&pageSize=${PAPERS_PAGE}`);
+  if (!res.ok) throw new Error(`records ${res.status}`);
+  const data = await res.json();
+  return (data.records ?? []) as CorpusRecord[];
+}
 
 /**
- * The newest preprints, prefetched.
+ * The newest preprints, a page at a time.
  *
- * `/api/records` already returns exactly this — it orders by `pub_year DESC,
- * posted_date DESC, key_number DESC` and is edge-cached for an hour — so the
- * panel needs no endpoint of its own.
+ * `/api/records` already returns exactly this — ordered `pub_year DESC,
+ * posted_date DESC, key_number DESC`, edge-cached for an hour — so the panel
+ * needs no endpoint of its own.
  *
- * AppLayout calls this on mount, which is the whole point: the fetch happens
- * while the reader is doing something else, so opening the Papers panel renders
- * from cache instead of showing a spinner. `staleTime` keeps it from refetching
- * every time the panel is toggled; the corpus gains rows once a day.
+ * AppLayout calls this on mount: the first twelve are fetched while the reader
+ * is doing something else, so opening the panel is a render, not a request.
+ * `staleTime` keeps toggling the panel from refetching; the corpus gains rows
+ * about once a day.
  */
 export function useRecentPapers() {
-  return useQuery({
-    queryKey: ["recent-papers", PAGE_SIZE],
-    queryFn: async (): Promise<CorpusRecord[]> => {
-      const res = await fetch(`/api/records?page=1&pageSize=${PAGE_SIZE}`);
-      if (!res.ok) throw new Error(`records ${res.status}`);
-      const data = await res.json();
-      return (data.records ?? []) as CorpusRecord[];
-    },
+  return useInfiniteQuery({
+    queryKey: ["recent-papers", PAPERS_PAGE],
+    queryFn: ({ pageParam }) => fetchPage(pageParam),
+    initialPageParam: 1,
+    // A short page means the last one is the end of the corpus, not a gap.
+    getNextPageParam: (last, all) => (last.length < PAPERS_PAGE ? undefined : all.length + 1),
     staleTime: 30 * 60_000,
     gcTime: 60 * 60_000,
     refetchOnWindowFocus: false,
