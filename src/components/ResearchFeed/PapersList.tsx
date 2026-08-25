@@ -84,10 +84,18 @@ export function PapersList() {
           key={record.id}
           className={SHELL_CLS}
           draggable
-          // No setDragImage: the browser's default is a copy of this card, and
-          // the card is what should follow the cursor — the same thing the
-          // /search widgets do when you pick one up to reorder it.
-          onDragStart={(e) => setDragEntity(e.dataTransfer, paperEntity(record))}
+          onDragStart={(e) => {
+            setDragEntity(e.dataTransfer, paperEntity(record));
+            // Pin the drag image to this card. Left to itself Chrome does not
+            // hand you the element — it composites its auto-generated snapshot
+            // onto a padded backing plate with a drop shadow, which is the box
+            // that appeared to be wrapped around the widget. Naming the element
+            // makes the preview exactly the card's own bounds, and passing the
+            // grab point keeps the card under the cursor where it was picked up
+            // instead of snapping to a corner.
+            const r = e.currentTarget.getBoundingClientRect();
+            e.dataTransfer.setDragImage(e.currentTarget, e.clientX - r.left, e.clientY - r.top);
+          }}
         >
           <WidgetHeader
             gripFirst
