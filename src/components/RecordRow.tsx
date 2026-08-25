@@ -1,5 +1,6 @@
 import { ArrowRight, ExternalLink, Sparkles } from "lucide-react";
 import { Tooltip as Hint } from "@/components/ui/tooltip";
+import { highlightText } from "@/lib/highlight";
 import type { CorpusRecord } from "@/types/record";
 
 /**
@@ -19,6 +20,7 @@ export function RecordRow({
   onChat,
   onHover,
   variant = "row",
+  query,
 }: {
   record: CorpusRecord;
   first: boolean;
@@ -33,6 +35,8 @@ export function RecordRow({
    * borders and DOI line and lets the actions hold the bottom on their own.
    */
   variant?: "row" | "card";
+  /** The needle that produced this row — marked in the title and the abstract. */
+  query?: string;
 }) {
   const meta: string[] = [];
   if (record.pub_year) meta.push(String(record.pub_year));
@@ -64,7 +68,7 @@ export function RecordRow({
             as the DOI below, so nothing is lost by promoting the title into its
             place. One line — the abstract underneath carries the rest. */}
         <span className="text-sm font-medium text-foreground leading-snug hover:underline flex-1 min-w-0 truncate">
-          {record.title}
+          {highlightText(record.title, query)}
         </span>
         {/* Match-percentage badge removed 2026-08-20. In hybrid the list interleaves two
             arms whose scores are not on one scale — a dense row carries a cosine (0.6-0.7)
@@ -75,7 +79,7 @@ export function RecordRow({
       </div>
       {record.abstract && (
         <p className="text-sm text-muted-foreground mt-0.5 leading-snug line-clamp-2">
-          {record.abstract}
+          {highlightText(record.abstract, query)}
         </p>
       )}
       {meta.length > 0 && (

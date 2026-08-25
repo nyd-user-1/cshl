@@ -94,7 +94,7 @@ export function PapersList() {
   return (
     <div className="flex flex-col">
       {/* Pinned under the panel header, so the cards scroll beneath it. */}
-      <div className="sticky top-0 z-10 bg-background px-3 pb-3">
+      <div className="sticky top-0 z-10 bg-background px-3 pb-3 pt-2">
         <SearchInput
           value={query}
           onChange={setQuery}
@@ -137,6 +137,7 @@ export function PapersList() {
                 variant="card"
                 record={record}
                 first={false}
+                query={searching ? debounced : undefined}
                 onClick={detail(record)}
                 onDetail={detail(record)}
                 onChat={() =>

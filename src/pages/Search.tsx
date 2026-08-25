@@ -745,6 +745,7 @@ export default function Search() {
                     key={record.id}
                     record={record}
                     first={i === 0}
+                    query={urlQuery}
                     onClick={() => showRecord(i)}
                     onDetail={() => setDetailRecord(record)}
                     onHover={() => prefetchRecord(record.id)}

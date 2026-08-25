@@ -1,8 +1,9 @@
-import { memo, type ReactNode } from "react";
+import { memo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { ArrowUp, Copy, Check, FileText } from "lucide-react";
 import type { CorpusRecord } from "@/types/record";
+import { highlightText } from "@/lib/highlight";
 import type { SearchMode } from "@/hooks/useRecordSearch";
 import { useFeedEmitter } from "@/hooks/useFeedEmitter";
 import { ARCHIVE_LABEL } from "@/hooks/useArchive";
@@ -13,22 +14,6 @@ interface RecordCardProps {
   searchQuery?: string;
   searchMode?: SearchMode;
   onClick?: () => void;
-}
-
-function highlightText(text: string, query: string): ReactNode {
-  if (!query) return text;
-  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const regex = new RegExp(`(${escaped})`, "gi");
-  const parts = text.split(regex);
-  return parts.map((part, i) =>
-    regex.test(part) ? (
-      <mark key={i} className="bg-brand/20 text-foreground rounded-sm px-0.5">
-        {part}
-      </mark>
-    ) : (
-      part
-    )
-  );
 }
 
 export const RecordCard = memo(function RecordCard({ record, searchQuery, searchMode, onClick }: RecordCardProps) {
