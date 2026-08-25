@@ -39,8 +39,13 @@ const cacheKeyFor = (query: string, mode: SearchMode, server?: string) =>
 
 async function searchNsr(query: string, mode: SearchMode, server?: string, signal?: AbortSignal): Promise<SearchResult> {
   const t0 = performance.now();
-  const params = new URLSearchParams({ q: query, mode: mode === "keyword" ? "keyword" : "semantic", limit: "100" });
-  if (mode === "semantic") params.set("arm", "dense");
+  // The mode goes through as it is. This used to map every non-keyword mode to
+  // `semantic` and add `arm=dense` for semantic — but the API resolves
+  // `wantsFts = requested !== "semantic"`, so `hybrid` never ran the lexical arm
+  // and never fused, and it does not read `arm` at all. Hybrid and Semantic were
+  // therefore the same request, and the dropdown's default was dense-only.
+  // Measured after the fix: hybrid returns 43 dense / 46 fts / 11 both.
+  const params = new URLSearchParams({ q: query, mode, limit: "100" });
   if (server) params.set("server", server);
   const res = await fetch(`/api/search?${params}`, { signal });
   if (!res.ok) {
