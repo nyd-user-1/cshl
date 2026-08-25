@@ -1,9 +1,10 @@
 # Handoff — 2026-08-25: the Papers panel, the search-result card, and a real hybrid
 
-Eleven commits, `d81c087` → `457e7d4`, all on `origin/main`. **Nothing is
-deployed.** This repo ships by hand (`vercel deploy --prod`), and production is
-still serving whatever was last deployed — see §5 before you judge anything by
-what the live site does.
+Twelve commits, `d81c087` → `f6a36d8`, all on `origin/main` **and all live**.
+This repo has Vercel's GitHub integration: every push to `main` triggers a
+Production deployment. Verified — `gh api repos/nyd-user-1/cshl/deployments`
+shows `vercel[bot]` building each of today's commits within two minutes of the
+push, and the live bundles carry today's strings.
 
 ---
 
@@ -122,11 +123,17 @@ recharts exports its own `Tooltip` into that module.
   `scripts/publish-nsr/cards/` and eight untracked cards plus
   `docs/BAKEOFF-AWS-2026-08-20.md`. **None of it is mine**; every commit above
   was made by explicit pathspec so it stayed out. Decide what to do with it.
-- **Deploy.** `vercel deploy --prod`. Then know this: **a deploy purges the edge
-  cache**, and `/api/records` cold is **5.9 s** against 265 ms warm (Neon
-  scale-to-zero plus a cold function). The first Papers open after a deploy is
-  slow and it is not the panel's fault — it now shows skeleton cards rather than
-  the word "Loading" so it does not read as broken.
+- **Deploys are automatic — push to `main` and it ships.** No CLI step. What to
+  know instead: **a deploy purges the edge cache**, and `/api/records` cold is
+  **5.9 s** against 265 ms warm (Neon scale-to-zero plus a cold function), so the
+  first Papers open after any push is slow. It is not the panel's fault — it
+  shows skeleton cards rather than the word "Loading" so it does not read as
+  broken.
+  ⚠ `HANDOFF-2026-08-19.md` §"Open items" says production is deployed by hand
+  with `vercel deploy --prod`. That was true of that day, when 60 commits sat
+  unpushed and nothing could auto-build. It is not true now, and reading it as
+  current is how this memo shipped with the same wrong claim in its first
+  version.
 - **Verify the two things I could not:** that the drag image is now tight to the
   card (if Chrome still draws its plate over an explicitly-set element image,
   the fallback is a clone sized to the card), and that the top-bar tooltips open
