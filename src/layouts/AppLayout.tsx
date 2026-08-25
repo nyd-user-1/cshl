@@ -56,7 +56,7 @@ export function AppLayout() {
           <div id="header-search" className="flex-1 mx-2" />
 
           <div className="flex items-center gap-0.5">
-            <Hint label="Recent papers">
+            <Hint label="Recent papers" side="bottom">
               <button
                 onClick={() => toggle("papers")}
                 aria-label="Recent papers"
@@ -66,7 +66,7 @@ export function AppLayout() {
                 <FileText className="h-5 w-5" />
               </button>
             </Hint>
-            <Hint label="Live feed">
+            <Hint label="Live feed" side="bottom">
               <button
                 onClick={() => toggle("activity")}
                 aria-label="Live feed"
