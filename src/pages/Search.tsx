@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  Loader2, Calendar, Atom, Zap, BookOpen, X, Users, Tag, Layers, FileText, Quote, Grid3x3,
-  TrendingUp, Activity, PieChart as PieIcon, ScatterChart as ScatterIcon, GripVertical,
+  Loader2, Calendar, Atom, Zap, BookOpen, Users, Tag, Layers, FileText, Quote, Grid3x3,
+  TrendingUp, Activity, PieChart as PieIcon, ScatterChart as ScatterIcon,
 } from "lucide-react";
 import {
   Bar, BarChart, CartesianGrid, XAxis, YAxis, ZAxis, Cell, ResponsiveContainer, Scatter, ScatterChart, Tooltip,
@@ -16,6 +16,7 @@ import { RecordDialog } from "@/components/RecordDialog";
 import { PanelChat } from "@/components/PanelChat";
 import { TOOLTIP_SURFACE } from "@/components/ui/tooltip";
 import { RecordRow } from "@/components/RecordRow";
+import { SHELL_CLS, WidgetHeader } from "@/components/WidgetCard";
 import { useAppPanel } from "@/hooks/useAppPanel";
 import { usePrefetchRecord } from "@/hooks/useS2Enrichment";
 import type { CorpusRecord } from "@/types/record";
@@ -227,29 +228,6 @@ function hasActiveFilters(f: Filters): boolean {
 /* ------------------------------------------------------------------ */
 
 const WIDGET_H = 280;
-const SHELL_CLS = "rounded-lg border border-border overflow-hidden min-w-0 flex flex-col";
-
-function WidgetHeader({ icon, title, sub, right, onClose }: {
-  icon: React.ReactNode; title: string; sub?: string; right?: React.ReactNode; onClose: () => void;
-}) {
-  return (
-    <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 border-b border-border shrink-0 cursor-grab active:cursor-grabbing select-none">
-      {icon}
-      <span className="text-xs font-semibold text-foreground">{title}</span>
-      <GripVertical className="h-3 w-3 text-muted-foreground/60" aria-label="drag to reorder" />
-      {sub && <span className="text-[10px] text-muted-foreground">{sub}</span>}
-      <span className="flex-1" />
-      {right}
-      <button
-        onClick={onClose}
-        onMouseDown={(e) => e.stopPropagation()}
-        className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
-      >
-        <X className="h-3 w-3" />
-      </button>
-    </div>
-  );
-}
 
 /* ------------------------------------------------------------------ */
 /*  Interactive StatWidget (table with clickable rows)                  */

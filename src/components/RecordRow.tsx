@@ -1,6 +1,5 @@
-import { ArrowRight, ExternalLink, GripVertical, Sparkles } from "lucide-react";
+import { ArrowRight, ExternalLink, Sparkles } from "lucide-react";
 import { Tooltip as Hint } from "@/components/ui/tooltip";
-import { paperEntity, setDragEntity } from "@/lib/drag-entity";
 import type { CorpusRecord } from "@/types/record";
 
 /**
@@ -19,7 +18,7 @@ export function RecordRow({
   onDetail,
   onChat,
   onHover,
-  draggable,
+  variant = "row",
 }: {
   record: CorpusRecord;
   first: boolean;
@@ -27,8 +26,13 @@ export function RecordRow({
   onDetail: () => void;
   onChat: () => void;
   onHover?: () => void;
-  /** Drag the row out as a chat context — the Papers panel sets this. */
-  draggable?: boolean;
+  /**
+   * `row` is the search results: hairline-separated, DOI link along the bottom.
+   * `card` is the Papers panel, where this sits inside a WidgetCard whose header
+   * already carries the DOI and the drag grip — so the row drops its own
+   * borders and DOI line and lets the actions hold the bottom on their own.
+   */
+  variant?: "row" | "card";
 }) {
   const meta: string[] = [];
   if (record.pub_year) meta.push(String(record.pub_year));
@@ -42,23 +46,23 @@ export function RecordRow({
   if (record.reference) meta.push(record.reference);
 
   const iconBtn = "h-7 w-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-foreground/10 transition-colors";
+  const card = variant === "card";
 
   return (
     <div
-      className={`group px-3 py-3 border-b border-border hover:bg-muted/60 transition-colors ${first ? "border-t" : ""} ${draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
+      className={`group px-3 py-3 transition-colors ${
+        card
+          ? "cursor-pointer"
+          : `border-b border-border hover:bg-muted/60 cursor-pointer ${first ? "border-t" : ""}`
+      }`}
       onClick={onClick}
       onMouseEnter={onHover}
-      draggable={draggable}
-      onDragStart={draggable ? (e) => { e.stopPropagation(); setDragEntity(e.dataTransfer, paperEntity(record)); } : undefined}
     >
       <div className="flex items-start gap-2">
         {/* The title is the heading (2026-08-25). The key number led this row and
             told a reader nothing they could act on; it still travels with the row
             as the DOI below, so nothing is lost by promoting the title into its
             place. One line — the abstract underneath carries the rest. */}
-        {draggable && (
-          <GripVertical className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground/50" aria-hidden />
-        )}
         <span className="text-sm font-medium text-foreground leading-snug hover:underline flex-1 min-w-0 truncate">
           {record.title}
         </span>
@@ -79,8 +83,8 @@ export function RecordRow({
           {meta.join(" · ")}
         </p>
       )}
-      <div className="mt-2 flex items-center justify-between gap-2">
-        {record.doi ? (
+      <div className={`mt-2 flex items-center gap-2 ${card ? "justify-start" : "justify-between"}`}>
+        {card ? null : record.doi ? (
           <a
             href={`https://doi.org/${record.doi}`}
             target="_blank"

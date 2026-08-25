@@ -30,9 +30,11 @@ export function ResearchFeed({ isOpen, mode = "activity", onClose: _onClose }: R
 
         <div className="flex-1 overflow-y-auto">
           {papers ? (
-            // Mounted only while open, so closing the panel drops the rows and
-            // reopening re-reads the (edge-cached) endpoint.
-            isOpen && <PapersList />
+            // Mounts instantly: AppLayout warms the same react-query key on app
+            // mount, so this reads from cache and never shows a spinner. The
+            // rows are not kept in the DOM while the feed is showing — the
+            // prefetch, not a hidden render, is what makes opening feel free.
+            <PapersList />
           ) : events.length === 0 ? (
             <p className="px-4 py-8 text-xs text-muted-foreground text-center">
               Activity will appear here as you explore
