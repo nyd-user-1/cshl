@@ -735,10 +735,14 @@ export default function Search() {
   }, []);
 
   /* ---------- Widget order (draggable) ---------- */
+  // The two line charts read as a set with the year bars — same shape of
+  // question, same time axis — so they sit directly under it by default and
+  // the facet tables follow. Still draggable; this is only the initial order.
   const DEFAULT_ORDER = useMemo(() => [
-    "yearChart", "nuclideMap", "yearTable", "journals", "nuclides", "reactions",
+    "yearChart", "cumulative", "relevance",
+    "nuclideMap", "yearTable", "journals", "nuclides", "reactions",
     "subjects", "authors", "topics", "types", "cited",
-    "cumulative", "topicsArea", "typesArea", "relevance", "topicPie", "citationScatter",
+    "topicsArea", "typesArea", "topicPie", "citationScatter",
   ], []);
   const [widgetOrder, setWidgetOrder] = useState<string[]>(DEFAULT_ORDER);
   const dragId = useRef<string | null>(null);
