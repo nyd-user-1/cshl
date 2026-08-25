@@ -1,13 +1,20 @@
 import { useRef, useState } from "react";
 import { Outlet } from "react-router-dom";
-import { List, Activity, Info, X } from "lucide-react";
+import { List, Activity, FileText, Info, X } from "lucide-react";
 import { Sidebar } from "@/components/Sidebar";
-import { ResearchFeed } from "@/components/ResearchFeed";
+import { ResearchFeed, type FeedMode } from "@/components/ResearchFeed";
+import { Tooltip as Hint } from "@/components/ui/tooltip";
 import { AppPanelProvider } from "@/hooks/useAppPanel";
 
 export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [feedOpen, setFeedOpen] = useState(false);
+  // One panel, two contents: the live feed and the newest papers. Holding the
+  // mode rather than a boolean means the two buttons share the panel instead of
+  // fighting over it — clicking the other one swaps the content, clicking the
+  // same one closes it.
+  const [panel, setPanel] = useState<FeedMode | null>(null);
+  const feedOpen = panel !== null;
+  const toggle = (m: FeedMode) => setPanel((p) => (p === m ? null : m));
   const [disclaimerOpen, setDisclaimerOpen] = useState(false);
   const panelRoot = useRef<HTMLDivElement | null>(null);
 
@@ -20,7 +27,7 @@ export function AppLayout() {
       {(sidebarOpen || feedOpen) && (
         <div
           className="fixed inset-0 bg-black/50 z-40 md:hidden"
-          onClick={() => { setSidebarOpen(false); setFeedOpen(false); }}
+          onClick={() => { setSidebarOpen(false); setPanel(null); }}
         />
       )}
 
@@ -43,12 +50,28 @@ export function AppLayout() {
           {/* Search bar portal target — filled by page components */}
           <div id="header-search" className="flex-1 mx-2" />
 
-          <button
-            onClick={() => setFeedOpen((o) => !o)}
-            className="inline-flex items-center justify-center h-10 w-10 rounded-md text-foreground hover:bg-muted transition-colors"
-          >
-            <Activity className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-0.5">
+            <Hint label="Recent papers">
+              <button
+                onClick={() => toggle("papers")}
+                aria-label="Recent papers"
+                aria-pressed={panel === "papers"}
+                className={`inline-flex items-center justify-center h-10 w-10 rounded-md transition-colors hover:bg-muted ${panel === "papers" ? "bg-muted text-foreground" : "text-foreground"}`}
+              >
+                <FileText className="h-5 w-5" />
+              </button>
+            </Hint>
+            <Hint label="Live feed">
+              <button
+                onClick={() => toggle("activity")}
+                aria-label="Live feed"
+                aria-pressed={panel === "activity"}
+                className={`inline-flex items-center justify-center h-10 w-10 rounded-md transition-colors hover:bg-muted ${panel === "activity" ? "bg-muted text-foreground" : "text-foreground"}`}
+              >
+                <Activity className="h-5 w-5" />
+              </button>
+            </Hint>
+          </div>
         </div>
 
         {/* Page content */}
@@ -60,7 +83,7 @@ export function AppLayout() {
       {/* App-shell push panel portal target — see components/AppPanel + hooks/useAppPanel */}
       <div id="app-panel-root" ref={panelRoot} className="flex shrink-0 h-full" />
 
-      <ResearchFeed isOpen={feedOpen} onClose={() => setFeedOpen(false)} />
+      <ResearchFeed isOpen={feedOpen} mode={panel ?? "activity"} onClose={() => setPanel(null)} />
 
       {/* Pinned info button */}
       <button

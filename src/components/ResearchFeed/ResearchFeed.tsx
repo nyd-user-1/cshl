@@ -1,14 +1,21 @@
 import { useResearchFeed } from "@/hooks/useResearchFeed";
 import { FeedHeader } from "./FeedHeader";
 import { FeedItem } from "./FeedItem";
+import { PapersList } from "./PapersList";
+
+/** What the panel is showing. Same shell, same width, same open/close. */
+export type FeedMode = "activity" | "papers";
 
 interface ResearchFeedProps {
   isOpen: boolean;
+  /** `activity` is the live feed; `papers` is the newest preprints, draggable. */
+  mode?: FeedMode;
   onClose?: () => void;
 }
 
-export function ResearchFeed({ isOpen, onClose: _onClose }: ResearchFeedProps) {
+export function ResearchFeed({ isOpen, mode = "activity", onClose: _onClose }: ResearchFeedProps) {
   const { events } = useResearchFeed();
+  const papers = mode === "papers";
 
   return (
     <aside
@@ -19,17 +26,19 @@ export function ResearchFeed({ isOpen, onClose: _onClose }: ResearchFeedProps) {
       }`}
     >
       <div className="w-[300px] h-full flex flex-col bg-background">
-        <FeedHeader />
+        <FeedHeader label={papers ? "Papers" : "Live Feed"} />
 
         <div className="flex-1 overflow-y-auto">
-          {events.length === 0 ? (
+          {papers ? (
+            // Mounted only while open, so closing the panel drops the rows and
+            // reopening re-reads the (edge-cached) endpoint.
+            isOpen && <PapersList />
+          ) : events.length === 0 ? (
             <p className="px-4 py-8 text-xs text-muted-foreground text-center">
               Activity will appear here as you explore
             </p>
           ) : (
-            events.map((event) => (
-              <FeedItem key={event.id} event={event} />
-            ))
+            events.map((event) => <FeedItem key={event.id} event={event} />)
           )}
         </div>
       </div>

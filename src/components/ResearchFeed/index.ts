@@ -1,1 +1,1 @@
-export { ResearchFeed } from "./ResearchFeed";
+export { ResearchFeed, type FeedMode } from "./ResearchFeed";

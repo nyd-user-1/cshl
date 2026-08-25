@@ -1,9 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  Loader2, Calendar, Atom, Zap, ExternalLink, BookOpen, X, Users, Tag, Layers, FileText, Quote, Grid3x3,
+  Loader2, Calendar, Atom, Zap, BookOpen, X, Users, Tag, Layers, FileText, Quote, Grid3x3,
   TrendingUp, Activity, PieChart as PieIcon, ScatterChart as ScatterIcon, GripVertical,
-  ArrowRight, Sparkles,
 } from "lucide-react";
 import {
   Bar, BarChart, CartesianGrid, XAxis, YAxis, ZAxis, Cell, ResponsiveContainer, Scatter, ScatterChart, Tooltip,
@@ -15,7 +14,8 @@ import { SearchBox } from "@/components/SearchInput";
 import { RecordPanel } from "@/components/RecordPanel";
 import { RecordDialog } from "@/components/RecordDialog";
 import { PanelChat } from "@/components/PanelChat";
-import { Tooltip as Hint, TOOLTIP_SURFACE } from "@/components/ui/tooltip";
+import { TOOLTIP_SURFACE } from "@/components/ui/tooltip";
+import { RecordRow } from "@/components/RecordRow";
 import { useAppPanel } from "@/hooks/useAppPanel";
 import { usePrefetchRecord } from "@/hooks/useS2Enrichment";
 import type { CorpusRecord } from "@/types/record";
@@ -551,114 +551,6 @@ function CitationScatter({ records, onOpen, onClose }: { records: CorpusRecord[]
     </ChartShell>
   );
 }
-
-/* ------------------------------------------------------------------ */
-/*  Result row                                                          */
-/* ------------------------------------------------------------------ */
-
-function ResultRow({
-  record,
-  first,
-  onClick,
-  onDetail,
-  onChat,
-  onHover,
-}: {
-  record: CorpusRecord;
-  first: boolean;
-  onClick: () => void;
-  onDetail: () => void;
-  onChat: () => void;
-  onHover?: () => void;
-}) {
-  const meta: string[] = [];
-  if (record.pub_year) meta.push(String(record.pub_year));
-  if (record.authors) {
-    const truncated =
-      record.authors.length > 80
-        ? record.authors.slice(0, 80) + "…"
-        : record.authors;
-    meta.push(truncated);
-  }
-  if (record.reference) meta.push(record.reference);
-
-  const iconBtn = "h-7 w-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-foreground/10 transition-colors";
-
-  return (
-    <div
-      className={`group px-3 py-3 border-b border-border cursor-pointer hover:bg-muted/60 transition-colors ${first ? "border-t" : ""}`}
-      onClick={onClick}
-      onMouseEnter={onHover}
-    >
-      <div className="flex items-start gap-2">
-        {/* The title is the heading (2026-08-25). The key number led this row and
-            told a reader nothing they could act on; it still travels with the row
-            as the DOI below, so nothing is lost by promoting the title into its
-            place. One line — the abstract underneath carries the rest. */}
-        <span className="text-sm font-medium text-foreground leading-snug hover:underline flex-1 min-w-0 truncate">
-          {record.title}
-        </span>
-        {/* Match-percentage badge removed 2026-08-20. In hybrid the list interleaves two
-            arms whose scores are not on one scale — a dense row carries a cosine (0.6-0.7)
-            and a lexical row a ts_rank (0.05-0.3) — so rendering both as "Match X%" put a
-            number next to a result that meant something different one row up. The ranking
-            is the signal; a single incomparable number beside it is worse than none. Rows
-            now carry `arm` ("dense" | "fts" | "both") if this is ever labelled instead. */}
-      </div>
-      {record.abstract && (
-        <p className="text-sm text-muted-foreground mt-0.5 leading-snug line-clamp-2">
-          {record.abstract}
-        </p>
-      )}
-      {meta.length > 0 && (
-        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed truncate">
-          {meta.join(" · ")}
-        </p>
-      )}
-      <div className="mt-2 flex items-center justify-between gap-2">
-        {record.doi ? (
-          <a
-            href={`https://doi.org/${record.doi}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground/70 hover:text-foreground transition-colors min-w-0"
-          >
-            {/* `truncate` moved onto the text span so the trailing icon cannot be
-                clipped, and the underline is the house wipe (background-size
-                transition) rather than text-decoration. */}
-            <span className="link-wipe truncate">{record.doi}</span>
-            <ExternalLink className="h-4 w-4 shrink-0" />
-          </a>
-        ) : <span />}
-        {/* bottom-right actions: → (↗ on hover) opens the record; ✦ opens chat about it in the side panel */}
-        <div className="flex items-center gap-0.5 shrink-0">
-          <Hint label="Open Record">
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onDetail(); }}
-              className={`${iconBtn} group/arrow`}
-              aria-label="Open Record"
-            >
-              <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover/arrow:-rotate-45" />
-            </button>
-          </Hint>
-          <Hint label="Ask Chat">
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onChat(); }}
-              className={`${iconBtn} group/spark hover:text-yellow-500`}
-              aria-label="Ask Chat"
-            >
-              <Sparkles className="h-4 w-4 transition-transform duration-200 group-hover/spark:-rotate-12" />
-            </button>
-          </Hint>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ------------------------------------------------------------------ */
 /*  Search page                                                         */
 /* ------------------------------------------------------------------ */
@@ -871,7 +763,7 @@ export default function Search() {
             {!isLoading && filteredRecords.length > 0 && (
               <div key={urlQuery} className="pr-1 animate-in fade-in slide-in-from-bottom-2 duration-500">
                 {filteredRecords.map((record, i) => (
-                  <ResultRow
+                  <RecordRow
                     key={record.id}
                     record={record}
                     first={i === 0}

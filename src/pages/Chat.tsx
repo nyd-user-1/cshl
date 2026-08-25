@@ -7,6 +7,7 @@ import { Search, X } from "lucide-react";
 import { useChat, type ChatRoom } from "@/hooks/useChat";
 import { ARCHIVE_LABEL } from "@/hooks/useArchive";
 import { subjectTitle } from "@/lib/subjects";
+import type { DragEntity } from "@/lib/drag-entity";
 
 // ChatMessage drags in react-markdown + KaTeX (~200 KB gz). A fresh landing
 // renders zero messages, so that weight loads only once a conversation exists.
@@ -38,6 +39,37 @@ function AgentRibbon({ room, onExit }: { room: ChatRoom; onExit: () => void }) {
   );
 }
 
+/**
+ * The chat's system context for a record-grounded question — the wording the
+ * `?prompt=&context=` path has always sent. One definition now, because a paper
+ * dropped on the input has to arrive with exactly the same framing as a paper
+ * clicked through from a card.
+ */
+function buildSystemContext(context?: string | null, url?: string | null): string {
+  let s =
+    "You are RxivGPT, an AI research assistant for the biomedical and life-science " +
+    "preprint literature. You help researchers explore bioRxiv and medRxiv preprints " +
+    "from Cold Spring Harbor Laboratory. Preprints have not been peer reviewed — say so " +
+    "when it bears on how a finding should be read, and note when a preprint has since " +
+    "been published in a journal.";
+  if (context) {
+    s += "\n\nThe user is asking about a specific preprint. Here is the record data:\n" + context;
+  }
+  if (url) {
+    s += "\n\nThe paper is available at: " + url + "\nReference this DOI link in your response.";
+  }
+  // Task 1c: structure creates slots, and slots get filled. The old wording here
+  // asked for "a thorough analysis of … significance" — an invitation to scaffold
+  // sections and fabricate into them. Plain prose, grounded.
+  s +=
+    "\n\nOrganize the answer so it can be read: markdown headings for its two or " +
+    "three real divisions, lists where items are parallel, bold for the term that " +
+    "carries a sentence. Never open a section you cannot fill from the supplied " +
+    "record or its retrieved full text. Report what they actually say, and when " +
+    "they do not answer something, say so rather than completing plausibly.";
+  return s;
+}
+
 export default function Chat() {
   const [searchParams] = useSearchParams();
   const { sessionId: routeSessionId, category: routeCategory } = useParams();
@@ -58,6 +90,11 @@ export default function Chat() {
 
   const { messages, isLoading, sendMessage, stopGeneration, clearMessages, loadSession, sessionId } =
     useChat(room);
+  // A paper dragged from the Papers panel onto the input. It stays attached —
+  // and rides every message as context — until the chip's ✕ clears it.
+  const [attached, setAttached] = useState<DragEntity | null>(null);
+  const submit = (text: string, modelId: string) =>
+    sendMessage(text, attached?.context ? buildSystemContext(attached.context) : undefined, undefined, modelId);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollPaneRef = useRef<HTMLDivElement>(null);
   const [autoSubmitted, setAutoSubmitted] = useState(false);
@@ -158,35 +195,7 @@ export default function Chat() {
     if (prompt) {
       setAutoSubmitted(true);
 
-      let systemContext =
-        "You are RxivGPT, an AI research assistant for the biomedical and life-science " +
-        "preprint literature. You help researchers explore bioRxiv and medRxiv preprints " +
-        "from Cold Spring Harbor Laboratory. Preprints have not been peer reviewed — say so " +
-        "when it bears on how a finding should be read, and note when a preprint has since " +
-        "been published in a journal.";
-
-      if (context) {
-        systemContext +=
-          "\n\nThe user is asking about a specific preprint. " +
-          "Here is the record data:\n" +
-          context;
-      }
-
-      if (url) {
-        systemContext +=
-          "\n\nThe paper is available at: " + url +
-          "\nReference this DOI link in your response.";
-      }
-
-      // Task 1c: structure creates slots, and slots get filled. The old wording
-      // here asked for "a thorough analysis of … significance" — an invitation
-      // to scaffold sections and fabricate into them. Plain prose, grounded.
-      systemContext +=
-        "\n\nOrganize the answer so it can be read: markdown headings for its two or " +
-        "three real divisions, lists where items are parallel, bold for the term that " +
-        "carries a sentence. Never open a section you cannot fill from the supplied " +
-        "record or its retrieved full text. Report what they actually say, and when " +
-        "they do not answer something, say so rather than completing plausibly.";
+      let systemContext = buildSystemContext(context, url);
 
       // Point the PDF viewer at /api/pdf, which resolves the canonical URL and the
       // Google-viewer wrapper. Prefer an explicit ?key= from the caller; fall back to the
@@ -242,10 +251,12 @@ export default function Chat() {
           <div className="px-2 md:px-4 py-3 md:py-4 shrink-0 bg-background">
             {room && <AgentRibbon room={room} onExit={() => navigate(`/${room.server}/agents`)} />}
             <ChatInput
-              onSubmit={(text, modelId) => sendMessage(text, undefined, undefined, modelId)}
+              onSubmit={submit}
               onStop={stopGeneration}
               isLoading={isLoading}
               searchToggle
+              attached={attached}
+              onAttach={setAttached}
               placeholder={room ? `Chat with the ${ARCHIVE_LABEL[room.server]} ${subjectTitle(room.category)} preprints…` : undefined}
             />
           </div>
@@ -259,9 +270,11 @@ export default function Chat() {
             </div>
           )}
           <ChatInput
-            onSubmit={(text, modelId) => sendMessage(text, undefined, undefined, modelId)}
+            onSubmit={submit}
             isLoading={isLoading}
             searchToggle
+            attached={attached}
+            onAttach={setAttached}
             placeholder={room ? `Chat with the ${ARCHIVE_LABEL[room.server]} ${subjectTitle(room.category)} preprints…` : undefined}
           />
         </div>

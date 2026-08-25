@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { ArrowUp, Square, ChevronDown, Search } from "lucide-react";
+import { ArrowUp, Square, ChevronDown, Search, Paperclip, X } from "lucide-react";
+import { ENTITY_MIME, readDragEntity, type DragEntity } from "@/lib/drag-entity";
 import { PlusMenu } from "@/components/PlusMenu";
 import { useNavigate } from "react-router-dom";import { MODEL_OPTIONS, DEFAULT_MODEL_ID, modelById } from "@/lib/models";
 
@@ -26,12 +27,21 @@ interface ChatInputProps {
   searchToggle?: boolean;
   /** Subject-scoped chats name their room here ("Ask a neurology question…"). */
   placeholder?: string;
+  /**
+   * A record dropped on the input, carried as the conversation's context until
+   * cleared — the ChatDock contract, on the /chat page. Omit both props and the
+   * input is not a drop target at all, which is how ChatDock itself uses it.
+   */
+  attached?: DragEntity | null;
+  onAttach?: (g: DragEntity | null) => void;
 }
 
-export function ChatInput({ onSubmit, onStop, isLoading, initialValue, searchToggle, placeholder }: ChatInputProps) {
+export function ChatInput({ onSubmit, onStop, isLoading, initialValue, searchToggle, placeholder, attached, onAttach }: ChatInputProps) {
   const navigate = useNavigate();
   const [value, setValue] = useState(initialValue ?? "");
+  const [dragOver, setDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const droppable = typeof onAttach === "function";
 
   // Model selector state
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -87,9 +97,53 @@ export function ChatInput({ onSubmit, onStop, isLoading, initialValue, searchTog
     textareaRef.current?.focus();
   };
 
+  /** A dropped paper attaches as context, and seeds the prompt when the box is
+   *  empty so the drop is immediately actionable rather than merely recorded. */
+  const handleDrop = (e: React.DragEvent) => {
+    const g = readDragEntity(e.dataTransfer);
+    if (!g || !onAttach) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    onAttach(g);
+    if (!value.trim() && g.title) {
+      setValue(`Tell me about "${g.title}"`);
+      textareaRef.current?.focus();
+    }
+  };
+
   return (
     <div className="max-w-[720px] mx-auto w-full">
-      <div className="rounded-2xl bg-secondary border border-border p-3 shadow-lg">
+      {/* The attached-record chip, above the box — ChatDock's banner, same parts. */}
+      {attached && (
+        <div className="mb-1.5 flex items-center gap-1.5 rounded-xl border bg-muted/60 px-3 py-1.5 text-[11px] text-muted-foreground">
+          <Paperclip className="h-3 w-3 shrink-0" />
+          <span className="shrink-0 uppercase tracking-wide">{attached.type}</span>
+          <span className="truncate font-mono text-foreground">{attached.label}</span>
+          {attached.title && <span className="truncate">— {attached.title}</span>}
+          <button
+            onClick={() => onAttach?.(null)}
+            className="ml-auto shrink-0 hover:text-foreground"
+            aria-label="Clear context"
+            title="clear context"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
+      <div
+        className={`rounded-2xl bg-secondary p-3 shadow-lg transition-colors ${
+          dragOver ? "border-2 border-dashed border-blue-400" : "border border-border"
+        }`}
+        onDragOver={droppable ? (e) => { if (e.dataTransfer.types.includes(ENTITY_MIME)) { e.preventDefault(); e.stopPropagation(); setDragOver(true); } } : undefined}
+        onDragLeave={droppable ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false); } : undefined}
+        onDrop={droppable ? handleDrop : undefined}
+      >
+        {dragOver && (
+          <p className="mb-2 rounded-md border border-dashed border-blue-400 bg-blue-400/10 p-2 text-center text-xs text-blue-500">
+            Drop to attach as context
+          </p>
+        )}
         {/* Textarea */}
         <textarea
           ref={textareaRef}
