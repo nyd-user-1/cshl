@@ -1,0 +1,19 @@
+version: 1
+# cshl on Amplify Hosting (2026-09-29): the Vite front end as a static site.
+# The Vercel functions under api/ do not run here; the chat and the database
+# are wired in a later step.
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - npm ci --no-audit --no-fund
+    build:
+      commands:
+        - npm run build
+  artifacts:
+    baseDirectory: dist
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*
