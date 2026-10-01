@@ -1139,6 +1139,8 @@ function GraphPageInner() {
     }
     const files = [...(e.dataTransfer?.files ?? [])];
     if (!files.length) return;
+    // File upload is off on this deployment (2026-10-01).
+    if (!UPLOADS_ENABLED) { toast.info("Not enabled"); return; }
     snapshot();
     for (const [i, f] of files.entries()) {
       try {
