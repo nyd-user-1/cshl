@@ -9,7 +9,7 @@
 //   POST {kind:"issue", title, body, severity, assignee, entity_ref, author}
 //   POST {kind:"issue_status", id, status, assignee?}
 
-import { neon } from "@neondatabase/serverless";
+import { neon } from "./_lib/aurora.js";
 
 export const config = { maxDuration: 15 };
 

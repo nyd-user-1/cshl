@@ -2,7 +2,7 @@
 //   GET  → newest 50 events
 //   POST {event_type, category?, entity_type?, entity_value?, display_text, metadata?} → insert_feed_event()
 // The Supabase realtime channel is replaced by the client polling this GET.
-import { neon } from "@neondatabase/serverless";
+import { neon } from "./_lib/aurora.js";
 
 export const config = { maxDuration: 15 };
 
